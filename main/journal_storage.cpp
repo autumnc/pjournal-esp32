@@ -1,0 +1,215 @@
+#include "journal_storage.h"
+#include <cstring>
+#include <ctime>
+#include <algorithm>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <esp_vfs_fat.h>
+#include <sdmmc_cmd.h>
+#include <driver/sdmmc_host.h>
+#include <esp_log.h>
+
+static const char *TAG = "Journal";
+
+// SDMMC pin configuration for ESP32-S3-RLCD-4.2
+#define SDMMC_CLK GPIO_NUM_38
+#define SDMMC_CMD GPIO_NUM_21
+#define SDMMC_D0  GPIO_NUM_39
+
+JournalStorage g_journal;
+
+bool JournalStorage::begin() {
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {};
+    mount_config.format_if_mount_failed = false;
+    mount_config.max_files = 16;
+    mount_config.allocation_unit_size = 16 * 1024;
+
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.width = 1;
+    slot_config.clk   = SDMMC_CLK;
+    slot_config.cmd   = SDMMC_CMD;
+    slot_config.d0    = SDMMC_D0;
+    slot_config.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
+    sdmmc_card_t *card = nullptr;
+    esp_err_t ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SD card mount failed: %d", ret);
+        mounted_ = false;
+        return false;
+    }
+
+    if (card) {
+        sdmmc_card_print_info(stdout, card);
+        mounted_ = true;
+    }
+
+    ensureDir();
+    ESP_LOGI(TAG, "SD card ready at %s", basePath().c_str());
+    return true;
+}
+
+void JournalStorage::deinit() {
+    if (mounted_) {
+        esp_vfs_fat_sdcard_unmount("/sdcard", nullptr);
+        mounted_ = false;
+    }
+}
+
+std::string JournalStorage::basePath() {
+    return "/sdcard/pjournal";
+}
+
+void JournalStorage::ensureDir() {
+    mkdir("/sdcard/pjournal", 0777);
+}
+
+bool JournalStorage::saveEntry(const std::string &text) {
+    if (!mounted_) return false;
+    ensureDir();
+    time_t now;
+    time(&now);
+    struct tm *tm = localtime(&now);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%d_%H%M%S", tm);
+    std::string fname = std::string(ts) + ".txt";
+
+    FILE *f = fopen((basePath() + "/" + fname).c_str(), "w");
+    if (!f) return false;
+    fwrite(text.data(), 1, text.size(), f);
+    fclose(f);
+    ESP_LOGI(TAG, "Saved: %s", fname.c_str());
+    return true;
+}
+
+bool JournalStorage::saveEntryRaw(const std::string &filename, const std::string &content) {
+    if (!mounted_) return false;
+    ensureDir();
+    FILE *f = fopen((basePath() + "/" + filename).c_str(), "w");
+    if (!f) return false;
+    fwrite(content.data(), 1, content.size(), f);
+    fclose(f);
+    return true;
+}
+
+std::vector<JournalEntry> JournalStorage::listEntries() {
+    std::vector<JournalEntry> entries;
+    if (!mounted_) return entries;
+
+    DIR *dir = opendir(basePath().c_str());
+    if (!dir) return entries;
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
+        if (fn[0] == '.') continue;
+
+        JournalEntry e;
+        e.filename = fn;
+        e.date = fn.substr(0, 10);
+
+        // Read and extract preview
+        std::string content = readEntry(fn);
+        if (!content.empty()) {
+            e.full_text = content;
+            size_t pos = content.find('\n');
+            if (pos != std::string::npos) {
+                std::string first = content.substr(0, pos);
+                if (first.find("提示词:") == 0)
+                    e.title = "提示写作";
+                else if (first.find("自由写作") != std::string::npos)
+                    e.title = "自由写作";
+                size_t body_start = content.find("\n\n");
+                if (body_start != std::string::npos) {
+                    std::string body = content.substr(body_start + 2);
+                    std::string preview_text;
+                    size_t start = 0;
+                    while (start < body.size()) {
+                        size_t nl = body.find('\n', start);
+                        std::string line = body.substr(start, nl - start);
+                        if (!line.empty() && line.find("日期:") != 0 && line.find("字数:") != 0) {
+                            preview_text = line;
+                            break;
+                        }
+                        if (nl == std::string::npos) break;
+                        start = nl + 1;
+                    }
+                    e.preview = preview_text.substr(0, 40);
+                }
+            }
+        }
+        entries.push_back(e);
+    }
+    closedir(dir);
+
+    // Sort by filename descending (newest first)
+    std::sort(entries.begin(), entries.end(),
+        [](const JournalEntry &a, const JournalEntry &b) {
+            return a.filename > b.filename;
+        });
+    return entries;
+}
+
+std::string JournalStorage::readEntry(const std::string &filename) {
+    if (!mounted_) return "";
+    FILE *f = fopen((basePath() + "/" + filename).c_str(), "r");
+    if (!f) return "";
+    std::string result;
+    char buf[256];
+    int n;
+    while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+        buf[n] = 0;
+        result += buf;
+    }
+    fclose(f);
+    return result;
+}
+
+bool JournalStorage::deleteEntry(const std::string &filename) {
+    if (!mounted_) return false;
+    return remove((basePath() + "/" + filename).c_str()) == 0;
+}
+
+bool JournalStorage::hasEntry(const std::string &date) {
+    auto entries = listEntries();
+    for (auto &e : entries)
+        if (e.date == date) return true;
+    return false;
+}
+
+int JournalStorage::countToday() {
+    time_t now; time(&now);
+    struct tm *tm = localtime(&now);
+    char today[16];
+    strftime(today, sizeof(today), "%Y-%m-%d", tm);
+    int count = 0;
+    auto entries = listEntries();
+    for (auto &e : entries)
+        if (e.date == today) count++;
+    return count;
+}
+
+int JournalStorage::getStreak() {
+    int streak = 0;
+    time_t now; time(&now);
+
+    for (int i = 0; i < 365; i++) {
+        time_t t = now - i * 86400;
+        struct tm *tm2 = localtime(&t);
+        char date[16];
+        strftime(date, sizeof(date), "%Y-%m-%d", tm2);
+        if (hasEntry(date))
+            streak++;
+        else
+            break;
+    }
+    return streak;
+}
+
+int JournalStorage::totalEntries() {
+    return listEntries().size();
+}

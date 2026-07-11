@@ -1,0 +1,38 @@
+idf_component_register(SRCS
+    "main.cpp"
+    "pjournal_app.cpp"
+    "font_renderer.cpp"
+    "bt_keyboard.cpp"
+    "journal_storage.cpp"
+    "settings_manager.cpp"
+    "wifi_manager.cpp"
+    "webdav_client.cpp"
+    "flomo_client.cpp"
+    "deepseek_client.cpp"
+    "ime/IME.cpp"
+    INCLUDE_DIRS "."
+    EMBED_FILES
+        "ime/ime_table_pinyin.bin"
+        "ime/liangfen.bin"
+        "terminus28.fnt"
+    PRIV_REQUIRES
+        spi_flash
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp-tls
+        esp_http_client
+        esp_event
+        bt
+        esp_hid
+        lwip
+        mbedtls
+        fatfs
+        sdmmc
+        driver
+        u8g2
+        u8g2_st7305
+        esp_adc
+)
+
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="1.0.0")
