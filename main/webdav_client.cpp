@@ -168,12 +168,17 @@ static std::string httpRequest(const std::string &url, const std::string &method
         ESP_LOGI(TAG, "HTTP %s %s status=%d content_length=%d",
                  method.c_str(), url.c_str(), status, content_length);
 
-        // 读取响应体
+        // 读取响应体 (上限 2MB 防止内存耗尽)
+        const size_t MAX_RESPONSE_SIZE = 2 * 1024 * 1024;
         if (status == 200 || status == 207 || content_length > 0) {  // PROPFIND 返回 207
             char buf[512];
             int len;
             int total_read = 0;
             while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
+                if (response.size() + len > MAX_RESPONSE_SIZE) {
+                    ESP_LOGW(TAG, "Response body exceeds 2MB limit, truncating");
+                    break;
+                }
                 buf[len] = 0;
                 response += buf;
                 total_read += len;

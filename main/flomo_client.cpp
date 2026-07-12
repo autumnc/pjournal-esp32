@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdio>
 #include <ctime>
+#include <vector>
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
@@ -193,6 +194,16 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
 
     char body[2048];
     std::string escapedContent = jsonEscape(content);
+    int needed = snprintf(nullptr, 0,
+        "{\"timestamp\":\"%s\",\"api_key\":\"%s\",\"app_version\":\"%s\","
+        "\"platform\":\"%s\",\"webp\":\"1\",\"content\":\"%s\","
+        "\"source\":\"web\",\"tz\":\"8:0\",\"sign\":\"%s\"}",
+        ts, FLOMO_API_KEY, FLOMO_APP_VERSION, FLOMO_PLATFORM,
+        escapedContent.c_str(), sign.c_str());
+    if (needed >= (int)sizeof(body)) {
+        ESP_LOGE(TAG, "Content too long for Flomo (need %d bytes, have %d)", needed, (int)sizeof(body));
+        return false;
+    }
     snprintf(body, sizeof(body),
         "{\"timestamp\":\"%s\",\"api_key\":\"%s\",\"app_version\":\"%s\","
         "\"platform\":\"%s\",\"webp\":\"1\",\"content\":\"%s\","
@@ -265,30 +276,63 @@ FlomoResult FlomoClient::send(const std::string &text) {
         return {false, "请先在设置中配置Flomo账号"};
     }
 
-    // Format content with HTML tag and hashtag
-    std::string content = "<p>" + text + "\n\n#日记</p>";
+    // Split text into chunks of <= 5000 chars (Flomo limit)
+    const size_t MAX_CHUNK = 5000;
+    std::vector<std::string> chunks;
+    if (text.length() <= MAX_CHUNK) {
+        chunks.push_back(text);
+    } else {
+        for (size_t i = 0; i < text.length(); i += MAX_CHUNK) {
+            chunks.push_back(text.substr(i, MAX_CHUNK));
+        }
+    }
+
+    int success = 0;
+    int failed = 0;
 
     // Try cached token first
     std::string token = getCachedToken();
     if (!token.empty()) {
-        if (createMemo(token, content)) {
-            return {true, "已发送到Flomo ✓"};
+        for (auto &chunk : chunks) {
+            std::string content = "<p>" + chunk + "\n\n#日记</p>";
+            if (createMemo(token, content)) {
+                success++;
+            } else {
+                // Cached token failed, try re-login
+                token = "";
+                break;
+            }
+        }
+        if (success == (int)chunks.size()) {
+            return {true, chunks.size() == 1 ? "已发送到Flomo ✓" : ("已发送" + std::to_string(success) + "条到Flomo ✓")};
         }
     }
 
-    // Re-login
-    token = login();
-    if (!token.empty()) {
-        setCachedToken(token);
-        if (createMemo(token, content)) {
-            return {true, "已发送到Flomo ✓"};
+    // Re-login if needed
+    if (token.empty()) {
+        token = login();
+        if (!token.empty()) {
+            setCachedToken(token);
+            for (auto &chunk : chunks) {
+                std::string content = "<p>" + chunk + "\n\n#日记</p>";
+                if (createMemo(token, content)) {
+                    success++;
+                } else {
+                    failed++;
+                }
+            }
+        } else {
+            setCachedToken("");
+            return {false, "Flomo登录失败，请检查账号密码"};
         }
-        return {false, "发送到Flomo失败"};
     }
 
-    // Clear invalid token
-    setCachedToken("");
-    return {false, "Flomo登录失败，请检查账号密码"};
+    if (failed == 0 && success > 0) {
+        return {true, chunks.size() == 1 ? "已发送到Flomo ✓" : ("已发送" + std::to_string(success) + "条到Flomo ✓")};
+    } else if (success > 0) {
+        return {false, "部分发送成功（" + std::to_string(success) + "/" + std::to_string(chunks.size()) + "）"};
+    }
+    return {false, "发送到Flomo失败"};
 }
 
 std::string FlomoClient::getCachedToken() {

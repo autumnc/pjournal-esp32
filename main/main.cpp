@@ -139,9 +139,11 @@ extern "C" void app_main() {
                     vTaskDelay(pdMS_TO_TICKS(100));
                 }
 
-                if (wifiOk) {
+                    if (wifiOk) {
                     vTaskDelay(pdMS_TO_TICKS(500)); // settle for DHCP/DNS
-                    esp_sntp_stop();
+                    if (esp_sntp_getoperatingmode() != SNTP_OPMODE_POLL) {
+                        esp_sntp_stop();
+                    }
                     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
                     esp_sntp_setservername(0, ntp.c_str());
                     esp_sntp_init();

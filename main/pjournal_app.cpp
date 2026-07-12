@@ -1019,10 +1019,20 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 g_settingsState.editBuffer.erase(--g_settingsState.editCursor, 1);
             }
         } else if (key == KEY_LEFT) {
-            if (g_settingsState.editCursor > 0) g_settingsState.editCursor--;
+            if (g_settingsState.editCursor > 0) {
+                // UTF-8 aware: move back over continuation bytes
+                g_settingsState.editCursor--;
+                while (g_settingsState.editCursor > 0 &&
+                       ((unsigned char)g_settingsState.editBuffer[g_settingsState.editCursor] & 0xC0) == 0x80)
+                    g_settingsState.editCursor--;
+            }
         } else if (key == KEY_RIGHT) {
-            if (g_settingsState.editCursor < (int)g_settingsState.editBuffer.length())
+            if (g_settingsState.editCursor < (int)g_settingsState.editBuffer.length()) {
                 g_settingsState.editCursor++;
+                while (g_settingsState.editCursor < (int)g_settingsState.editBuffer.length() &&
+                       ((unsigned char)g_settingsState.editBuffer[g_settingsState.editCursor] & 0xC0) == 0x80)
+                    g_settingsState.editCursor++;
+            }
         } else if (key >= 0x20 && key <= 0x7E) {
             g_settingsState.editBuffer.insert(g_settingsState.editCursor, 1, (char)key);
             g_settingsState.editCursor++;
@@ -1106,7 +1116,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     ui_clear(); ui_show_message_centered("请先设置NTP服务器");
                     vTaskDelay(pdMS_TO_TICKS(2000));
                 } else {
-                    esp_sntp_stop();
+                    if (esp_sntp_getoperatingmode() != SNTP_OPMODE_POLL) {
+                        esp_sntp_stop();
+                    }
                     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
                     esp_sntp_setservername(0, ntp.c_str());
                     esp_sntp_init();

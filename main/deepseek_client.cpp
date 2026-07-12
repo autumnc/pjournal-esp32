@@ -27,7 +27,8 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
         "\"max_tokens\":100,\"temperature\":0.7}",
         userContext.c_str());
     if (n >= (int)sizeof(body)) {
-        ESP_LOGW(TAG, "Request body truncated (%d >= %d)", n, (int)sizeof(body));
+        ESP_LOGE(TAG, "Request body truncated (%d >= %d), userContext too long", n, (int)sizeof(body));
+        return {false, "背景信息过长"};
     }
 
     esp_http_client_config_t cfg = {};
