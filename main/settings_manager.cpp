@@ -1,6 +1,7 @@
 #include "settings_manager.h"
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <sys/stat.h>
 #include <esp_log.h>
 
@@ -9,6 +10,8 @@ static const char *BASE_DIR = "/sdcard/settings";
 
 SettingsManager g_settings;
 
+static std::map<std::string, std::string> s_cache;
+
 bool SettingsManager::begin() {
     mkdir(BASE_DIR, 0777);
     ESP_LOGI(TAG, "Settings directory: %s", BASE_DIR);
@@ -16,6 +19,8 @@ bool SettingsManager::begin() {
 }
 
 std::string SettingsManager::get(const std::string &key) {
+    auto it = s_cache.find(key);
+    if (it != s_cache.end()) return it->second;
     std::string path = std::string(BASE_DIR) + "/" + key;
     FILE *f = fopen(path.c_str(), "r");
     if (!f) return "";
@@ -27,6 +32,7 @@ std::string SettingsManager::get(const std::string &key) {
         val += buf;
     }
     fclose(f);
+    s_cache[key] = val;
     return val;
 }
 
@@ -40,6 +46,7 @@ void SettingsManager::set(const std::string &key, const std::string &val) {
     }
     fwrite(val.data(), 1, val.size(), f);
     fclose(f);
+    s_cache[key] = val;
 }
 
 std::string SettingsManager::getString(const std::string &key, const std::string &def) {
@@ -52,6 +59,7 @@ void SettingsManager::setString(const std::string &key, const std::string &val) 
 }
 
 void SettingsManager::erase(const std::string &key) {
+    s_cache.erase(key);
     std::string path = std::string(BASE_DIR) + "/" + key;
     remove(path.c_str());
 }

@@ -108,70 +108,47 @@ extern "C" void app_main() {
         tzset();
     }
 
-    // Auto sync time via NTP if time was never synced before
-    // (ESP32-S3 has no battery-backed RTC — "1970 problem" on each cold boot)
+    // Auto sync time via NTP on every boot
+    // (ESP32-S3 has no battery-backed RTC — always sync in case time is stale)
     {
         std::string ssid = g_settings.wifiSsid();
         if (ssid.empty()) {
-            ESP_LOGI(TAG, "WiFi not configured, skipping NTP sync check");
+            ESP_LOGI(TAG, "WiFi not configured, skipping NTP sync");
         } else {
-            // Check persistent sync marker on SD card
-            bool alreadySynced = false;
-            FILE *f = fopen("/sdcard/pjournal/.time_synced", "r");
-            if (f) { alreadySynced = true; fclose(f); }
+            ESP_LOGI(TAG, "Syncing time via NTP...");
+            std::string ntp = g_settings.ntpServer();
+            if (ntp.empty()) ntp = "pool.ntp.org";
 
-            if (!alreadySynced) {
-                ESP_LOGI(TAG, "Time not yet synced, attempting NTP sync...");
-                std::string ntp = g_settings.ntpServer();
-                if (ntp.empty()) ntp = "pool.ntp.org";
+            ui_draw_text_centered(165, "正在同步时间...");
+            ui_commit();
 
-                ui_draw_text_centered(165, "正在同步时间...");
-                ui_commit();
+            std::string pass = g_settings.wifiPassword();
+            g_wifi.begin();
+            if (g_wifi.connect(ssid.c_str(), pass.c_str())) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_sntp_stop();
+                esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+                esp_sntp_setservername(0, ntp.c_str());
+                esp_sntp_init();
 
-                std::string pass = g_settings.wifiPassword();
-                g_wifi.begin();
-                g_wifi.connect(ssid.c_str(), pass.c_str());
-
-                // Wait up to 10s for WiFi
-                bool wifiOk = false;
+                time_t now;
                 for (int i = 0; i < 100; i++) {
-                    if (g_wifi.isConnected()) { wifiOk = true; break; }
-                    vTaskDelay(pdMS_TO_TICKS(100));
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    time(&now);
+                    if (now > 100000) break;
                 }
-
-                    if (wifiOk) {
-                    vTaskDelay(pdMS_TO_TICKS(500)); // settle for DHCP/DNS
-                    if (esp_sntp_getoperatingmode() != SNTP_OPMODE_POLL) {
-                        esp_sntp_stop();
-                    }
-                    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-                    esp_sntp_setservername(0, ntp.c_str());
-                    esp_sntp_init();
-
-                    time_t now;
-                    for (int i = 0; i < 100; i++) {
-                        vTaskDelay(pdMS_TO_TICKS(200));
-                        time(&now);
-                        if (now > 100000) break;
-                    }
-                    if (now > 100000) {
-                        struct tm *tm = localtime(&now);
-                        char ts[32];
-                        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
-                        ESP_LOGI(TAG, "Time synced: %s", ts);
-                        // Write sync marker so next boot skips sync
-                        FILE *mf = fopen("/sdcard/pjournal/.time_synced", "w");
-                        if (mf) { fprintf(mf, "%ld", (long)now); fclose(mf); }
-                    } else {
-                        ESP_LOGW(TAG, "NTP sync timeout (%s)", ntp.c_str());
-                    }
+                if (now > 100000) {
+                    struct tm *tm = localtime(&now);
+                    char ts[32];
+                    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+                    ESP_LOGI(TAG, "Time synced: %s", ts);
                 } else {
-                    ESP_LOGW(TAG, "WiFi connection failed for NTP sync");
+                    ESP_LOGW(TAG, "NTP sync timeout (%s)", ntp.c_str());
                 }
-                g_wifi.disconnect();
             } else {
-                ESP_LOGI(TAG, "Time was previously synced, skipping NTP sync");
+                ESP_LOGW(TAG, "WiFi connection failed for NTP sync");
             }
+            g_wifi.disconnect();
         }
     }
 

@@ -67,14 +67,37 @@ void battery_init() {
 
 int battery_pct() {
     if (!s_battery_inited) return -1;
+    static int64_t last_read_us = 0;
+    static int cached = -1;
+    int64_t now = esp_timer_get_time();
+    if (last_read_us != 0 && (now - last_read_us) < 5000000)
+        return cached;
+    last_read_us = now;
     int raw;
-    if (adc_oneshot_read(s_adc_handle, ADC_CHANNEL_3, &raw) != ESP_OK) return -1;
+    if (adc_oneshot_read(s_adc_handle, ADC_CHANNEL_3, &raw) != ESP_OK) return cached;
     int mv;
-    if (adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) != ESP_OK) return -1;
-    float v = mv * 0.001f * 3.0f; // voltage divider 3:1
-    if (v < 3.0f) return 0;
-    if (v > 4.12f) return 100;
-    return (int)((v - 3.0f) / 1.12f * 100.0f);
+    if (adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) != ESP_OK) return cached;
+    float v = mv * 0.001f * 3.0f;
+    // Li-ion discharge curve lookup (voltage → %)
+    static const float lut[][2] = {
+        {4.12f, 100}, {4.08f, 92}, {4.02f, 82},
+        {3.96f, 70},  {3.90f, 58}, {3.84f, 47},
+        {3.78f, 37},  {3.72f, 28}, {3.66f, 20},
+        {3.60f, 14},  {3.54f, 9},  {3.48f, 6},
+        {3.40f, 3},   {3.30f, 1},  {3.00f, 0},
+    };
+    if (v >= lut[0][0]) { cached = (int)lut[0][1]; }
+    else if (v <= lut[14][0]) { cached = 0; }
+    else {
+        for (int i = 0; i < 14; i++) {
+            if (v >= lut[i+1][0] && v < lut[i][0]) {
+                float t = (v - lut[i+1][0]) / (lut[i][0] - lut[i+1][0]);
+                cached = (int)(lut[i+1][1] + t * (lut[i][1] - lut[i+1][1]) + 0.5f);
+                break;
+            }
+        }
+    }
+    return cached;
 }
 
 // ── Word wrap helpers ────────────────────────────────────
@@ -173,7 +196,18 @@ static std::string extractBody(const std::string &content);
 static struct { std::vector<std::string> lines; int cx = 0, cy = 0; int scroll = 0;
     int targetCx = -1;
     std::string promptText; bool promptMode = false; bool imeActive = false;
-    bool confirmSave = false; } g_editor;
+    bool confirmSave = false; bool vrowsDirty = true;
+    std::vector<VRow> cachedVrows; } g_editor;
+
+// Cached vrows accessor for editor
+static const std::vector<VRow>& getVrows() {
+    if (g_editor.vrowsDirty) {
+        g_editor.cachedVrows = buildVrows(g_editor.lines);
+        g_editor.vrowsDirty = false;
+    }
+    return g_editor.cachedVrows;
+}
+
 static struct { int selection = 0; int scroll = 0; } g_browser;
 static struct { int selection = 0; int scroll = 0; bool scanning = true;
     bool connecting = false; int64_t conn_start_ms = 0;
@@ -340,7 +374,7 @@ static void drawEditor() {
     // (IME status indicator removed from edit area - shown in status bar)
 
     // Build visual rows
-    auto vrows = buildVrows(g_editor.lines);
+    const auto& vrows = getVrows();
 
     // Content area: content fills above IME area and status bar
     bool composing = g_ime.composing();
@@ -577,12 +611,13 @@ void screen_editor_init(const ScreenContext &ctx) {
     g_editor.cx = g_editor.cy = g_editor.scroll = 0;
     g_editor.targetCx = -1;
     g_editor.confirmSave = false;
+    g_editor.vrowsDirty = true;
     g_editor.promptText = ctx.promptText;
     g_editor.promptMode = ctx.promptMode;
 }
 
 AppState screen_editor_handle(int key, ScreenContext &ctx) {
-    auto vrows = buildVrows(g_editor.lines);
+    const auto& vrows = getVrows();
 
     // Confirm save dialog mode: only Enter=save, ESC=discard
     if (g_editor.confirmSave) {
@@ -606,6 +641,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
                 g_editor.lines[g_editor.cy].insert(g_editor.cx, imeOut);
                 g_editor.cx += (int)imeOut.length();
                 g_editor.targetCx = -1;
+                g_editor.vrowsDirty = true;
             }
             ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
         }
@@ -618,6 +654,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 4, ' ');
         g_editor.cx += 4;
         g_editor.targetCx = -1;
+        g_editor.vrowsDirty = true;
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == 0x10) { // Ctrl+P - AI generate prompt via Deepseek
@@ -677,6 +714,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.cx = 0; g_editor.cy++;
         g_editor.lines.insert(g_editor.lines.begin() + g_editor.cy, rest);
         g_editor.targetCx = -1;
+        g_editor.vrowsDirty = true;
     } else if (key == 0x7F || key == 0x08) { // Backspace (UTF-8 aware)
         if (g_editor.cx > 0) {
             int prev = g_editor.cx - 1;
@@ -691,10 +729,12 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cy--;
         }
         g_editor.targetCx = -1;
+        g_editor.vrowsDirty = true;
     } else if (key >= 0x20 && key <= 0x7E) { // ASCII printable
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 1, (char)key);
         g_editor.cx++;
         g_editor.targetCx = -1;
+        g_editor.vrowsDirty = true;
     } else if (key == KEY_LEFT) {
         if (g_editor.cx > 0) {
             g_editor.cx--;
@@ -709,7 +749,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.targetCx = -1;
     } else if (key == KEY_UP) {
         // Find current visual row
-        vrows = buildVrows(g_editor.lines);
+        // vrows from outer scope is still valid (no content change)
         int curVR = -1;
         for (int vi = 0; vi < (int)vrows.size(); vi++) {
             if (vrows[vi].lineIdx == g_editor.cy && vrows[vi].start <= g_editor.cx && g_editor.cx <= vrows[vi].end) {
@@ -725,7 +765,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cx = cellsToByte(g_editor.lines[prev.lineIdx], prev.start, prev.end, g_editor.targetCx);
         }
     } else if (key == KEY_DOWN) {
-        vrows = buildVrows(g_editor.lines);
+        // vrows from outer scope is still valid (no content change)
         int curVR = -1;
         for (int vi = 0; vi < (int)vrows.size(); vi++) {
             if (vrows[vi].lineIdx == g_editor.cy && vrows[vi].start <= g_editor.cx && g_editor.cx <= vrows[vi].end) {
@@ -1116,9 +1156,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     ui_clear(); ui_show_message_centered("请先设置NTP服务器");
                     vTaskDelay(pdMS_TO_TICKS(2000));
                 } else {
-                    if (esp_sntp_getoperatingmode() != SNTP_OPMODE_POLL) {
-                        esp_sntp_stop();
-                    }
+                    esp_sntp_stop();
                     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
                     esp_sntp_setservername(0, ntp.c_str());
                     esp_sntp_init();

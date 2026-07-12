@@ -144,6 +144,7 @@ int FontRenderer::textWidth(const char *text) {
 extern "C" {
     extern void u8g2_SetDrawColor(void *u8g2, int color);
     extern void u8g2_DrawPixel(void *u8g2, int x, int y);
+    extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
     extern void *u8g2_st7305_get_u8g2(void *dev);
 }
 // We need a global u8g2 pointer. Set by main.

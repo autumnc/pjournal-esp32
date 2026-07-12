@@ -307,7 +307,19 @@ int JournalStorage::getStreak() {
 int JournalStorage::totalEntries() {
     if (!mounted_) return 0;
     if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
-    int n = (int)listEntries().size();
+    int count = 0;
+    DIR *dir = opendir(basePath().c_str());
+    if (dir) {
+        struct dirent *de;
+        while ((de = readdir(dir)) != NULL) {
+            if (de->d_type != DT_REG) continue;
+            std::string fn = de->d_name;
+            if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
+            if (fn[0] == '.') continue;
+            count++;
+        }
+        closedir(dir);
+    }
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
-    return n;
+    return count;
 }
