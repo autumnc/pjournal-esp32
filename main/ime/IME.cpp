@@ -169,8 +169,11 @@ void IME::loadUserDict() {
         }
     }
     if (hadDuplicates) {
+        // 只在真正合并了计数时才需要保存
         _userDirty = true;
         saveUserDict();
+    } else {
+        _userDirty = false;  // 无重复，无需保存
     }
     if (_userWords.size() > 0)
         ESP_LOGI(IME_TAG, "loaded %zu user words", _userWords.size());

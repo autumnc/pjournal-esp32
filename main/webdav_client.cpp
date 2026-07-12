@@ -153,19 +153,39 @@ static std::string httpRequest(const std::string &url, const std::string &method
 
     std::string response;
     int status = 0;
-    esp_err_t err = esp_http_client_perform(client);
+    esp_err_t err = esp_http_client_open(client, 0);  // 先打开连接
     if (err == ESP_OK) {
+        // 对于有请求体的方法，发送请求体
+        if (!body.empty() && method != "GET" && method != "HEAD") {
+            int written = esp_http_client_write(client, body.c_str(), (int)body.size());
+            ESP_LOGI(TAG, "Written %d bytes to request body", written);
+        }
+
+        // 获取响应状态码
+        // 注意：fetch_headers 返回的是 content_length，不是 status_code
+        int content_length = esp_http_client_fetch_headers(client);
         status = esp_http_client_get_status_code(client);
-        // Read response body
-        char buf[512];
-        int len;
-        while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
-            buf[len] = 0;
-            response += buf;
+        ESP_LOGI(TAG, "HTTP %s %s status=%d content_length=%d",
+                 method.c_str(), url.c_str(), status, content_length);
+
+        // 读取响应体
+        if (status == 200 || status == 207 || content_length > 0) {  // PROPFIND 返回 207
+            char buf[512];
+            int len;
+            int total_read = 0;
+            while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
+                buf[len] = 0;
+                response += buf;
+                total_read += len;
+                // 如果 content_length 为 -1（chunked），继续读取
+                // 如果有明确长度，检查是否读完
+                if (content_length > 0 && total_read >= content_length) break;
+            }
+            ESP_LOGI(TAG, "Total bytes read: %d", total_read);
         }
     } else {
-        ESP_LOGW(TAG, "HTTP %s %s failed: %d", method.c_str(), url.c_str(), err);
-        status = -1;
+        ESP_LOGW(TAG, "HTTP %s %s open failed: %d", method.c_str(), url.c_str(), err);
+        status = -err;  // 使用负的错误码表示网络错误
     }
 
     esp_http_client_cleanup(client);
@@ -177,8 +197,10 @@ bool WebDavClient::ensureDirectory(const std::string &path) {
     if (!isConfigured()) return false;
     std::string url = buildUrl(path);
     std::string auth = authHeader();
+    ESP_LOGI(TAG, "MKCOL request for: %s", url.c_str());
     int status = 0;
     httpRequest(url, "MKCOL", auth, "", "", "", &status);
+    ESP_LOGI(TAG, "MKCOL status: %d", status);
     // 201=Created, 405=Already exists, 200/301/302=OK
     return (status == 201 || status == 200 || status == 405 || status == 301 || status == 302);
 }
@@ -219,9 +241,20 @@ std::vector<std::pair<std::string, std::string>> WebDavClient::listFiles(const s
     auto body = httpRequest(url, "PROPFIND", auth, propfindBody,
                             "application/xml; charset=utf-8", "1", &status);
 
-    if (status != 207 && status != 200) return result;
+    ESP_LOGI(TAG, "PROPFIND status: %d, response length: %d", status, (int)body.length());
+    if (status != 207 && status != 200) {
+        ESP_LOGW(TAG, "PROPFIND failed with status %d", status);
+        return result;
+    }
+
+    // Debug: log first 500 chars of response
+    if (!body.empty()) {
+        std::string preview = body.substr(0, std::min((size_t)500, body.length()));
+        ESP_LOGI(TAG, "PROPFIND response preview:\n%s", preview.c_str());
+    }
 
     auto entries = parsePropfindResponse(body);
+    ESP_LOGI(TAG, "Parsed %d entries from PROPFIND", (int)entries.size());
     for (auto &e : entries) {
         if (e.isCollection) continue;
         // Extract filename from href
@@ -338,31 +371,49 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
         return {false, "请先在设置中配置 WebDAV"};
     }
 
-    // Ensure remote journal directory exists
+    // Try to ensure remote journal directory exists, but don't fail if it doesn't work
+    // (some WebDAV servers like Jianguoyun don't support MKCOL)
     std::string remoteDir = "journal/";
     if (!ensureDirectory(remoteDir)) {
-        if (!ensureDirectory("")) {
-            return {false, "无法创建远程目录"};
-        }
+        ESP_LOGW(TAG, "Failed to create remote journal/ directory, will try to list files anyway");
+        // Don't return error, continue with sync
     }
 
     // Collect local files with mtimes
     auto localPairs = g_journal.listFileMtimes();
+    ESP_LOGI(TAG, "Local files found: %d", (int)localPairs.size());
     std::map<std::string, time_t> localFiles;
     for (auto &p : localPairs) {
         localFiles[p.first] = p.second;
+        ESP_LOGI(TAG, "  Local: %s (mtime=%lld)", p.first.c_str(), (long long)p.second);
     }
 
     // Collect remote files with mtimes
+    ESP_LOGI(TAG, "Fetching remote file list from: %s", remoteDir.c_str());
     auto remoteList = listFiles(remoteDir);
+    ESP_LOGI(TAG, "Remote files found: %d", (int)remoteList.size());
     std::map<std::string, time_t> remoteFiles;
     for (auto &rf : remoteList) {
         if (!isJournalFile(rf.first)) continue;
         remoteFiles[rf.first] = parseWebdavDate(rf.second);
+        ESP_LOGI(TAG, "  Remote: %s (mtime=%lld)", rf.first.c_str(), (long long)remoteFiles[rf.first]);
     }
 
     // Load previous sync state
     auto prevState = loadSyncState();
+    ESP_LOGI(TAG, "Previous sync state entries: %d", (int)prevState.size());
+
+    // If no remote files found, try listing root directory
+    if (remoteFiles.empty() && remoteDir != "") {
+        ESP_LOGI(TAG, "No files in journal/, trying root directory...");
+        auto rootList = listFiles("");
+        ESP_LOGI(TAG, "Root directory files: %d", (int)rootList.size());
+        for (auto &rf : rootList) {
+            if (!isJournalFile(rf.first)) continue;
+            remoteFiles[rf.first] = parseWebdavDate(rf.second);
+            ESP_LOGI(TAG, "  Root: %s (mtime=%lld)", rf.first.c_str(), (long long)remoteFiles[rf.first]);
+        }
+    }
 
     int uploaded = 0, downloaded = 0, skipped = 0;
     int deletedLocal = 0, deletedRemote = 0, failed = 0;
@@ -379,6 +430,9 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
         bool localExists = localFiles.find(fname) != localFiles.end();
         bool remoteExists = remoteFiles.find(fname) != remoteFiles.end();
         bool inPrev = prevState.find(fname) != prevState.end();
+
+        ESP_LOGI(TAG, "Processing %s: local=%d remote=%d inPrev=%d",
+                 fname.c_str(), localExists, remoteExists, inPrev);
 
         time_t localMtime = localExists ? localFiles[fname] : 0;
         time_t remoteMtime = remoteExists ? remoteFiles[fname] : 0;
@@ -403,8 +457,10 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
                 }
             } else {
                 // Remote new -> download
+                ESP_LOGI(TAG, "Downloading remote file: %s", fname.c_str());
                 std::string content = download(remoteDir + fname);
                 if (!content.empty()) {
+                    ESP_LOGI(TAG, "Downloaded %d bytes for %s", (int)content.size(), fname.c_str());
                     if (g_journal.saveEntryRaw(fname, content)) {
                         downloaded++;
                         newState[fname] = remoteMtime;
@@ -414,10 +470,13 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
                         ut.actime = remoteMtime;
                         ut.modtime = remoteMtime;
                         utime(localPath.c_str(), &ut);
+                        ESP_LOGI(TAG, "Successfully saved: %s", fname.c_str());
                     } else {
+                        ESP_LOGE(TAG, "Failed to save: %s", fname.c_str());
                         failed++;
                     }
                 } else {
+                    ESP_LOGE(TAG, "Download failed or empty content: %s", fname.c_str());
                     failed++;
                 }
             }
@@ -448,9 +507,9 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
             time_t lm = localMtime ? localMtime : 0;
             time_t rm = remoteMtime ? remoteMtime : 0;
             long diff = (long)(lm - rm);
-
             if (diff < 0) diff = -diff;
-            if (diff <= 2) {
+            // 使用60秒阈值避免同一文件被双向同步
+            if (diff <= 60) {
                 skipped++;
                 newState[fname] = lm ? lm : rm;
             } else if (lm > rm) {

@@ -30,7 +30,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
 bool WifiManager::begin() {
     if (_inited) return true;
     esp_netif_init();
-    esp_event_loop_create_default();
+    // 事件循环可能已创建，忽略已存在错误
+    esp_err_t ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "Event loop create failed: %d", ret);
+    }
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();

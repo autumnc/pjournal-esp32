@@ -66,6 +66,7 @@ static esp_hidh_dev_t *s_dev = nullptr;
 
 static bool s_connected = false;
 static bool s_scanning = false;
+static bool s_connecting = false;  // 新增：标记正在连接中
 static uint8_t s_last_keys[MAX_KEYS] = {0};
 static esp_ble_addr_type_t s_paired_addr_type = BLE_ADDR_TYPE_RANDOM;
 
@@ -142,29 +143,33 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
     auto *param = (esp_hidh_event_data_t *)event_data;
     switch (event) {
     case ESP_HIDH_OPEN_EVENT:
+        s_connecting = false;  // 连接完成
         if (param->open.status == ESP_OK) {
             s_dev = param->open.dev;
             s_connected = true;
             if (s_self) {
                 s_self->setConnected(true);
-                // Save device for auto-reconnect on next boot
-                const uint8_t *bda = esp_hidh_dev_bda_get(param->open.dev);
-                if (bda) {
-                    const char *dev_name = esp_hidh_dev_name_get(param->open.dev);
-                    s_self->savePairedDevice(bda, s_paired_addr_type,
-                                             dev_name ? dev_name : "?");
-                    ESP_LOGI(TAG, "Saved paired device for auto-reconnect");
-                }
             }
             ESP_LOGI(TAG, "Keyboard connected: %s",
                      esp_hidh_dev_name_get(param->open.dev) ?: "?");
         } else {
-            ESP_LOGE(TAG, "Keyboard connect failed: %d", param->open.status);
+            ESP_LOGE(TAG, "Keyboard HID open failed: %d", param->open.status);
+        }
+        // Save device info whenever we have a valid device handle,
+        // so BLE-paired devices are persisted for auto-reconnect
+        if (param->open.dev) {
+            const uint8_t *bda = esp_hidh_dev_bda_get(param->open.dev);
+            if (bda && s_self) {
+                const char *dev_name = esp_hidh_dev_name_get(param->open.dev);
+                s_self->savePairedDevice(bda, s_paired_addr_type,
+                                         dev_name ? dev_name : "?");
+            }
         }
         break;
     case ESP_HIDH_CLOSE_EVENT:
         s_dev = nullptr;
         s_connected = false;
+        s_connecting = false;  // 连接断开
         memset(s_last_keys, 0, MAX_KEYS);
         if (s_self) s_self->setConnected(false);
         ESP_LOGI(TAG, "Keyboard disconnected (rsn=0x%x)", param->close.reason);
@@ -420,7 +425,11 @@ esp_err_t BtKeyboard::init() {
 }
 
 void BtKeyboard::deinit() {
-    if (s_dev) { esp_hidh_dev_close(s_dev); esp_hidh_dev_free(s_dev); s_dev = nullptr; }
+    s_connecting = false;
+    if (s_dev) {
+        esp_hidh_dev_close(s_dev);
+        s_dev = nullptr;
+    }
     esp_hidh_deinit();
     esp_bluedroid_disable();
     esp_bluedroid_deinit();
@@ -466,15 +475,19 @@ bool BtKeyboard::isScanning() {
     return s_scanning;
 }
 
+bool BtKeyboard::isConnecting() const {
+    return s_connecting;
+}
+
 esp_err_t BtKeyboard::connectDevice(int idx) {
     if (idx < 0 || idx >= s_found_count) return ESP_ERR_INVALID_ARG;
     if (s_dev) {
         esp_hidh_dev_close(s_dev);
-        esp_hidh_dev_free(s_dev);
         s_dev = nullptr;
     }
     s_connected = false;
     connected_ = false;
+    s_connecting = true;  // 标记正在连接
 
     // Stop scan before connecting to avoid HCI command disallowed error
     if (s_scanning) {
@@ -487,14 +500,19 @@ esp_err_t BtKeyboard::connectDevice(int idx) {
     auto &d = s_found_devices[idx];
     ESP_LOGI(TAG, "Connecting to %s...", d.name);
     s_paired_addr_type = d.addr_type;
+
+    // Save device info immediately so it's persisted even if HID channel
+    // encounters issues after BLE pairing succeeds
+    savePairedDevice(d.bda, d.addr_type, d.name);
+
     esp_hidh_dev_open(d.bda, ESP_HID_TRANSPORT_BLE, d.addr_type);
     return ESP_OK;
 }
 
 void BtKeyboard::disconnect() {
+    s_connecting = false;  // 取消连接中状态
     if (s_dev) {
         esp_hidh_dev_close(s_dev);
-        esp_hidh_dev_free(s_dev);
         s_dev = nullptr;
     }
     s_connected = false;
@@ -557,14 +575,29 @@ void BtKeyboard::clearPairedDevice() {
     ESP_LOGI(TAG, "Cleared saved paired device file");
 }
 
+bool BtKeyboard::isConnected() const {
+    return s_connected;
+}
+
+void BtKeyboard::setConnected(bool c) {
+    s_connected = c;
+    connected_ = c;
+}
+
 esp_err_t BtKeyboard::connectBDA(const uint8_t *bda, esp_ble_addr_type_t addr_type) {
+    // 如果已连接或正在连接，不要重复发起连接
+    if (s_connected || s_connecting) {
+        ESP_LOGI(TAG, "Already connected or connecting, skip connect request");
+        return ESP_OK;
+    }
+
     if (s_dev) {
         esp_hidh_dev_close(s_dev);
-        esp_hidh_dev_free(s_dev);
         s_dev = nullptr;
     }
     s_connected = false;
     connected_ = false;
+    s_connecting = true;  // 标记正在连接
 
     // Stop scan if running
     if (s_scanning) {

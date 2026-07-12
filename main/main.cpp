@@ -68,7 +68,14 @@ extern "C" void app_main() {
     gpio_set_pull_mode(PIN_BOOT, GPIO_PULLUP_ONLY);
 
     // Initialize SD card (needed before settings on SD)
-    g_journal.begin();
+    if (!g_journal.begin()) {
+        ESP_LOGE(TAG, "SD card initialization failed! System halted.");
+        ui_clear();
+        ui_draw_text_centered(100, "SD卡初始化失败");
+        ui_draw_text_centered(135, "请检查SD卡");
+        ui_commit();
+        while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
     ESP_LOGI(TAG, "Journal entries: %d", g_journal.totalEntries());
 
     // Initialize settings (stored on SD card)
@@ -89,27 +96,15 @@ extern "C" void app_main() {
     ui_draw_text_centered(135, ver);
     ui_commit();
 
-    // Initialize WiFi with stored credentials
-    {
-        std::string ssid = g_settings.wifiSsid();
-        std::string pass = g_settings.wifiPassword();
-        if (!ssid.empty()) {
-            ESP_LOGI(TAG, "Connecting to WiFi: %s", ssid.c_str());
-            g_wifi.begin();
-            g_wifi.connect(ssid.c_str(), pass.c_str());
+    // Initialize WiFi manager (但不自动连接)
+    // WiFi 将在需要时按需连接（WebDAV同步、Flomo发送、Deepseek提示生成等）
 
-            // Initialize NTP time
-            std::string ntp = g_settings.ntpServer();
-            std::string tz = g_settings.timezone();
-            if (tz.empty()) tz = "CST-8";
-            if (!ntp.empty()) {
-                esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-                esp_sntp_setservername(0, ntp.c_str());
-                esp_sntp_init();
-            }
-            setenv("TZ", tz.c_str(), 1);
-            tzset();
-        }
+    // Set timezone from settings (for local time display)
+    {
+        std::string tz = g_settings.timezone();
+        if (tz.empty()) tz = "CST-8";
+        setenv("TZ", tz.c_str(), 1);
+        tzset();
     }
 
     // Initialize IME
@@ -156,33 +151,49 @@ extern "C" void app_main() {
         }
 
         // ── BT auto-reconnect retry ──────────────────────────────────────
-        // Retry connecting to saved device every 5s if not connected
+        // 只在未连接且未正在连接时重试，间隔10秒
+        // 一旦连接成功，停止重试
         {
             static int64_t last_bt_retry_us = 0;
             static int64_t last_bt_reload_us = 0;
             static bool bt_retry_loaded = false;
             static uint8_t bt_retry_bda[6];
             static esp_ble_addr_type_t bt_retry_addr_type;
+            static bool bt_was_connected = false;
 
-            // Periodically re-check for paired device file (in case user paired
-            // after initial boot but before reboot)
-            if (!bt_retry_loaded) {
-                int64_t now_us = esp_timer_get_time();
-                if (last_bt_reload_us == 0 || (now_us - last_bt_reload_us) > 30000000) {
-                    last_bt_reload_us = now_us;
-                    bt_retry_loaded = g_bt.loadPairedDevice(bt_retry_bda, bt_retry_addr_type);
-                    if (bt_retry_loaded) {
-                        ESP_LOGI(TAG, "BT paired device file found, will auto-reconnect");
-                    }
+            if (g_bt.isConnected()) {
+                if (!bt_was_connected) {
+                    ESP_LOGI(TAG, "Bluetooth connected, stopping retry logic");
                 }
-            }
+                bt_was_connected = true;
+                last_bt_retry_us = 0;
+            } else {
+                if (bt_was_connected) {
+                    ESP_LOGW(TAG, "Bluetooth disconnected");
+                    bt_was_connected = false;
+                }
 
-            if (bt_retry_loaded && !g_bt.isConnected()) {
-                int64_t now_us = esp_timer_get_time();
-                if (last_bt_retry_us == 0 || (now_us - last_bt_retry_us) > 5000000) {
-                    last_bt_retry_us = now_us;
-                    ESP_LOGI(TAG, "BT auto-reconnect retry...");
-                    g_bt.connectBDA(bt_retry_bda, bt_retry_addr_type);
+                if (!bt_was_connected) {
+                    // Periodically re-check for paired device file
+                    if (!bt_retry_loaded) {
+                        int64_t now_us = esp_timer_get_time();
+                        if (last_bt_reload_us == 0 || (now_us - last_bt_reload_us) > 30000000) {
+                            last_bt_reload_us = now_us;
+                            bt_retry_loaded = g_bt.loadPairedDevice(bt_retry_bda, bt_retry_addr_type);
+                            if (bt_retry_loaded) {
+                                ESP_LOGI(TAG, "BT paired device file found, will auto-reconnect");
+                            }
+                        }
+                    }
+
+                    if (bt_retry_loaded && !g_bt.isConnecting()) {
+                        int64_t now_us = esp_timer_get_time();
+                        if (last_bt_retry_us == 0 || (now_us - last_bt_retry_us) > 10000000) {
+                            last_bt_retry_us = now_us;
+                            ESP_LOGI(TAG, "BT auto-reconnect retry...");
+                            g_bt.connectBDA(bt_retry_bda, bt_retry_addr_type);
+                        }
+                    }
                 }
             }
         }

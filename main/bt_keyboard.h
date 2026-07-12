@@ -46,9 +46,10 @@ public:
     void flushKeys();
 
     // Status
-    bool isConnected() const { return connected_; }
+    bool isConnected() const;
     bool isScanning();
-    void setConnected(bool c) { connected_ = c; }
+    bool isConnecting() const;  // 新增：检查是否正在连接
+    void setConnected(bool c);
 
 private:
     bool connected_ = false;

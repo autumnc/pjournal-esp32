@@ -485,24 +485,27 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = 28;
     ui_draw_text_centered(y, "个人日记", false, true); y += FONT_H;
 
-    // Week tracker
+    // Week tracker — pixel-perfect column alignment
     time_t now_t; time(&now_t); struct tm *tm = localtime(&now_t);
     int daysSinceMon = (tm->tm_wday == 0) ? 6 : tm->tm_wday - 1;
     time_t monday = now_t - daysSinceMon * 86400;
     const char *dnames[7] = {"一","二","三","四","五","六","日"};
-    char hdr[64] = "", marks[64] = "";
+    const int colWidth = SCREEN_W / 7;
+    const int colStartX = (SCREEN_W - colWidth * 7) / 2;
     for (int i = 0; i < 7; i++) {
         time_t d = monday + i * 86400; struct tm *dtm = localtime(&d);
         char ds[16]; strftime(ds, sizeof(ds), "%Y-%m-%d", dtm);
         bool isToday = (i == daysSinceMon);
         bool has = g_journal.hasEntry(ds);
-        if (isToday) strcat(hdr, "["); else strcat(hdr, " ");
-        strcat(hdr, dnames[i]);
-        if (isToday) strcat(hdr, "]"); else strcat(hdr, " ");
-        if (has) strcat(marks, " ✓ "); else if (d <= now_t) strcat(marks, " · "); else strcat(marks, "   ");
+        char dayStr[8];
+        if (isToday) snprintf(dayStr, sizeof(dayStr), "[%s]", dnames[i]);
+        else snprintf(dayStr, sizeof(dayStr), " %s ", dnames[i]);
+        int cx = colStartX + i * colWidth + (colWidth - g_font.textWidth(dayStr)) / 2;
+        g_font.drawText(cx, y, dayStr, false);
+        const char *mark = has ? "✓" : (d <= now_t ? "·" : " ");
+        int mx = colStartX + i * colWidth + (colWidth - g_font.textWidth(mark)) / 2;
+        g_font.drawText(mx, y + FONT_H, mark, false);
     }
-    ui_draw_text_centered(y, hdr);
-    g_font.drawText((SCREEN_W - g_font.textWidth(marks))/2, y + FONT_H, marks, false);
     y += FONT_H * 2;
 
     char buf[48]; snprintf(buf, sizeof(buf), "连续:%d天 总计:%d篇", g_journal.getStreak(), g_journal.totalEntries());
@@ -522,7 +525,7 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     if (bpct >= 0) {
         char pctStr[16]; snprintf(pctStr, sizeof(pctStr), "%d%%", bpct);
         int pw = g_font.textWidth(pctStr);
-        g_font.drawText(SCREEN_W - pw - 4, STATUS_Y + FONT_H, pctStr, false);
+        g_font.drawText(SCREEN_W - pw - 4, STATUS_Y + 22, pctStr, false);
     }
     ui_commit();
 
@@ -803,7 +806,7 @@ void screen_viewer_init(const std::string &filename) {
     else g_viewer.dateStr = filename;
     std::string content = g_journal.readEntry(filename);
     if (content.empty()) return;
-    g_viewer.lines.push_back(g_viewer.dateStr);
+    // Split content into lines (for word-wrap builder)
     size_t pos = 0;
     while (pos < content.length()) {
         size_t nl = content.find('\n', pos);
@@ -817,28 +820,51 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     if (key == 'q' || key == 'Q' || key == 0x1B) { ctx.nextState = APP_BROWSER; return APP_BROWSER; }
     if (key == 'j' || key == KEY_DOWN) g_viewer.scroll++;
     if (key == 'k' || key == KEY_UP) { if (g_viewer.scroll > 0) g_viewer.scroll--; }
-    int visible = (SCREEN_H - 28 + FONT_H - 1) / FONT_H;
-    int maxScroll = (int)g_viewer.lines.size() - visible;
+
+    // Build word-wrapped visual rows from content lines
+    auto vrows = buildVrows(g_viewer.lines);
+
+    // Layout constants
+    const int headerY = 28;
+    const int sepY = headerY + FONT_H - 22;
+    const int contentY = sepY + 26;
+    const int contentMaxY = STATUS_Y;
+    int visible = (contentMaxY - contentY + FONT_H - 1) / FONT_H;
+    if (visible < 1) visible = 1;
+    int maxScroll = (int)vrows.size() - visible;
     if (maxScroll < 0) maxScroll = 0;
     if (g_viewer.scroll > maxScroll) g_viewer.scroll = maxScroll;
 
-    ui_clear(); int y = 28;
-    for (int i = g_viewer.scroll; i < (int)g_viewer.lines.size() && i - g_viewer.scroll < visible; i++) {
-        if (g_viewer.lines[i].empty()) { y += FONT_H; continue; }
-        bool inv = (i == g_viewer.scroll && i == 0);
-        ui_draw_text(4, y, g_viewer.lines[i].c_str(), inv);
-        y += FONT_H;
+    ui_clear();
+
+    // Header: filename/date (inverted = black bg, white text)
+    std::string header = g_viewer.dateStr;
+    if (header.empty()) header = g_viewer.filename;
+    ui_draw_text(4, headerY, header.c_str(), true);
+
+    // Separator line below header
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
+
+    // Word-wrapped content (black text on white bg)
+    for (int i = 0; i < visible && (g_viewer.scroll + i) < (int)vrows.size(); i++) {
+        auto &vr = vrows[g_viewer.scroll + i];
+        std::string text = g_viewer.lines[vr.lineIdx].substr(vr.start, vr.end - vr.start);
+        ui_draw_text(4, contentY + i * FONT_H, text.c_str(), false);
     }
-    // Draw scroll percentage at top right if scrolled
-    if (g_viewer.scroll > 0) {
-        int maxScroll = (int)g_viewer.lines.size() - visible;
-        if (maxScroll > 0) {
-            int pct = (g_viewer.scroll * 100) / maxScroll;
-            char pctStr[16];
-            snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
-            ui_draw_text(SCREEN_W - g_font.textWidth(pctStr) - 4, 28, pctStr);
+
+    // Scroll indicator at top-right (if enough room)
+    if (g_viewer.scroll > 0 && maxScroll > 0) {
+        int pct = (g_viewer.scroll * 100) / maxScroll;
+        char pctStr[16];
+        snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
+        int headerW = g_font.textWidth(header.c_str());
+        int pctW = g_font.textWidth(pctStr);
+        if (headerW + pctW + 12 < SCREEN_W) {
+            ui_draw_text(SCREEN_W - pctW - 4, headerY, pctStr);
         }
     }
+
     ui_commit();
     return APP_VIEWER;
 }
@@ -1077,6 +1103,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                         ui_clear(); ui_show_message_centered("WiFi连接失败");
                         vTaskDelay(pdMS_TO_TICKS(2000)); return APP_SETTINGS;
                     }
+                    vTaskDelay(pdMS_TO_TICKS(500)); // settle for DHCP/DNS
                 }
                 std::string ntp = g_settings.ntpServer();
                 std::string tz = g_settings.timezone();
@@ -1092,7 +1119,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     setenv("TZ", tz.c_str(), 1);
                     tzset();
                     time_t now = 0;
-                    for (int i = 0; i < 50; i++) {
+                    for (int i = 0; i < 100; i++) {
                         vTaskDelay(pdMS_TO_TICKS(200));
                         time(&now);
                         if (now > 100000) break;
