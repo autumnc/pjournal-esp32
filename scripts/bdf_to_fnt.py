@@ -178,33 +178,26 @@ def convert_bdf_to_fnt(bdf_path, output_path):
             bitmap_data.extend(b'\x00' * (expected_size - len(raw)))
 
     # Build CJK block table
-    # Group contiguous CJK codepoints
-    cjk_entries = []
-    i = 0
-    while i < len(cjk_glyphs):
-        cp_start = cjk_glyphs[i][0]
-        cp = cp_start
-        meta_idx = cjk_start + i
-        while i < len(cjk_glyphs) and cjk_glyphs[i][0] == cp:
-            cp += 1
-            i += 1
-            if i < len(cjk_glyphs) and cjk_glyphs[i][0] > cp:
-                break
-        cp_end = cjk_glyphs[i - 1][0]
-        cjk_entries.append((cp_start, cp_end, meta_idx))
-        if i < len(cjk_glyphs):
-            # Skip ahead to handle gaps properly
-            pass
-
-    # Simpler approach: build full block list by scanning
     cjk_blocks = []
     idx = cjk_start
     for cp, g in cjk_glyphs:
-        cj_meta_idx = idx
         if not cjk_blocks or cjk_blocks[-1][1] + 1 != cp:
-            cjk_blocks.append([cp, cp, cj_meta_idx])
+            cjk_blocks.append([cp, cp, idx])
         else:
             cjk_blocks[-1][1] = cp
+        idx += 1
+
+    # Build "other" block table (non-ASCII, non-CJK glyphs)
+    other_start = len(all_glyphs) - len(cjk_glyphs) - len([o for o in ascii_offsets if o != 0xFFFF])
+    # Actually other_start is just cjk_start + len(cjk_glyphs) = start of other_glyphs in all_glyphs
+    other_meta_start = cjk_start + len(cjk_glyphs)
+    other_blocks = []
+    idx = other_meta_start
+    for cp, g in other_glyphs:
+        if not other_blocks or other_blocks[-1][1] + 1 != cp:
+            other_blocks.append([cp, cp, idx])
+        else:
+            other_blocks[-1][1] = cp
         idx += 1
 
     # Write output
@@ -228,11 +221,15 @@ def convert_bdf_to_fnt(bdf_path, output_path):
     meta_offset = cjk_offset + cjk_table_size
     meta_size = glyph_count * 12
     data_offset = meta_offset + meta_size
+    other_block_count = len(other_blocks)
+    other_table_size = 2 + other_block_count * 12
+    other_offset = data_offset + len(bitmap_data)
 
     buf.extend(struct.pack('<I', ascii_offset))
     buf.extend(struct.pack('<I', cjk_offset))
     buf.extend(struct.pack('<I', meta_offset))
     buf.extend(struct.pack('<I', data_offset))
+    buf.extend(struct.pack('<I', other_offset))
 
     # ASCII direct table
     for off in ascii_offsets:
@@ -255,6 +252,11 @@ def convert_bdf_to_fnt(bdf_path, output_path):
 
     # Bitmap data
     buf.extend(bitmap_data)
+
+    # Other block table (non-ASCII, non-CJK glyph lookup)
+    buf.extend(struct.pack('<H', other_block_count))
+    for start_cp, end_cp, first_meta in other_blocks:
+        buf.extend(struct.pack('<III', start_cp, end_cp, first_meta))
 
     with open(output_path, 'wb') as f:
         f.write(buf)

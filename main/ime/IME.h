@@ -129,4 +129,5 @@ private:
     void lookup();
     void buildPage();
     bool commit(int idx, std::string &out);
+    bool handleFullwidthPunct(int key, std::string &out);
 };

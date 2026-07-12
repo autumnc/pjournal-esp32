@@ -459,7 +459,7 @@ void IME::lookup() {
         if (_all.size() >= 100) { buildPage(); return; }
     }
 
-    // Phase 2: exact single char match (dictionary)
+    // Phase 2: single char prefix match (dictionary)
     bool hasVowel = false;
     for (int i = 0; i < qlen; i++) {
         if (strchr("aeiouv", q[i])) { hasVowel = true; break; }
@@ -520,7 +520,7 @@ void IME::lookup() {
         if (_all.size() >= 100) { buildPage(); return; }
     }
 
-    // Phase 4: exact phrase match (dictionary)
+    // Phase 4: phrase prefix match (word dictionary)
     if (hasVowel && _wordCount > 0 && _wordData) {
         size_t wlo = 0, whi = _wordDataSize;
         if (qlen >= 2) {
@@ -539,7 +539,7 @@ void IME::lookup() {
             wpos += 1 + cl;
             if (wpos >= whi) break;
             uint8_t n = _wordData[wpos++];
-            if ((int)cl == qlen && strncmp(wc, q, qlen) == 0) {
+            if ((int)cl >= qlen && strncmp(wc, q, qlen) == 0) {
                 for (uint8_t j = 0; j < n && wpos < whi; j++) {
                     uint8_t wl = _wordData[wpos++];
                     if (wl == 0 || wpos + wl > whi) break;
@@ -937,6 +937,42 @@ bool IME::commit(int idx, std::string &out) {
     return true;
 }
 
+bool IME::handleFullwidthPunct(int key, std::string &out) {
+    // Map ASCII punctuation to fullwidth equivalents when IME is active
+    switch (key) {
+    case ',':  out = "，"; return true; // ，
+    case '.':  out = "。"; return true; // 。
+    case '?':  out = "？"; return true; // ？
+    case '!':  out = "！"; return true; // ！
+    case ':':  out = "："; return true; // ：
+    case ';':  out = "；"; return true; // ；
+    case '(':  out = "（"; return true; // （
+    case ')':  out = "）"; return true; // ）
+    case '[':  out = "［"; return true; // ［
+    case ']':  out = "］"; return true; // ］
+    case '~':  out = "～"; return true; // ～
+    case '-':  out = "－"; return true; // －
+    case '_':  out = "＿"; return true; // ＿
+    case '+':  out = "＋"; return true; // ＋
+    case '=':  out = "＝"; return true; // ＝
+    case '@':  out = "＠"; return true; // ＠
+    case '$':  out = "￥"; return true; // ￥ (fullwidth yen/yuan)
+    case '^':  out = "＾"; return true; // ＾
+    case '%':  out = "％"; return true; // ％
+    case '&':  out = "＆"; return true; // ＆
+    case '*':  out = "＊"; return true; // ＊
+    case '<':  out = "＜"; return true; // ＜
+    case '>':  out = "＞"; return true; // ＞
+    case '\\': out = "、"; return true; // 、 (ideographic comma)
+    case '/':  out = "／"; return true; // ／
+    case '|':  out = "｜"; return true; // ｜
+    case '`':  out = "‘"; return true; // '
+    case '\'': out = "‘"; return true; // '
+    case '"':  out = "“"; return true; // "
+    default:   return false;
+    }
+}
+
 bool IME::handleKey(int key, std::string &out) {
     if (!_active) return false;
     if (_predicting) {
@@ -1003,7 +1039,9 @@ bool IME::handleKey(int key, std::string &out) {
         }
         return true;
     }
-    if (_code.length() == 0) return false;
+    if (_code.length() == 0) {
+        return handleFullwidthPunct(key, out);
+    }
     if (key >= '1' && key <= '9') {
         commit(key - '1', out);
         return true;

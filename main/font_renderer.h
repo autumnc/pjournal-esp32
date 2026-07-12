@@ -55,6 +55,8 @@ private:
     struct CjkBlock { uint32_t start_cp, end_cp, first_meta; };
     const CjkBlock *cjk_blocks_ = nullptr;
     int cjk_block_count_ = 0;
+    const CjkBlock *other_blocks_ = nullptr;
+    int other_block_count_ = 0;
     const uint8_t *meta_array_ = nullptr;
     const uint8_t *bitmap_data_ = nullptr;
 };

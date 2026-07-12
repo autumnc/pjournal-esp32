@@ -29,15 +29,21 @@ bool FontRenderer::begin() {
     uint32_t cjk_off    = *(const uint32_t *)(blob_ + 18);
     uint32_t meta_off   = *(const uint32_t *)(blob_ + 22);
     uint32_t data_off   = *(const uint32_t *)(blob_ + 26);
+    uint32_t other_off  = *(const uint32_t *)(blob_ + 30);
 
     // bdf_to_fnt.py stores all offsets relative to base=24, actual
-    // header is 30 bytes. Correct by adding the difference.
-    uint32_t hdr_adj = 6; // actual header (30) - stored base (24)
+    // header is 34 bytes (added other_offset). Correct by adding the difference.
+    uint32_t hdr_adj = 10; // actual header (34) - stored base (24)
     ascii_table_ = (const uint32_t *)(blob_ + ascii_off + hdr_adj);
     cjk_block_count_ = *(const uint16_t *)(blob_ + cjk_off + hdr_adj);
     cjk_blocks_ = (const CjkBlock *)(blob_ + cjk_off + hdr_adj + 2);
     meta_array_ = blob_ + meta_off + hdr_adj;
     bitmap_data_ = blob_ + data_off + hdr_adj;
+
+    // Other block table (non-ASCII, non-CJK glyphs)
+    const uint8_t *other_ptr = blob_ + other_off + hdr_adj;
+    other_block_count_ = *(const uint16_t *)other_ptr;
+    other_blocks_ = (const CjkBlock *)(other_ptr + 2);
 
     loaded_ = true;
     ESP_LOGI(TAG, "Font loaded: %d glyphs, line=%d asc=%d desc=%d",
@@ -94,6 +100,22 @@ const FontRenderer::GlyphMeta *FontRenderer::findGlyph(uint32_t cp) {
         }
         if (lo < cjk_block_count_ && cp >= cjk_blocks_[lo].start_cp && cp <= cjk_blocks_[lo].end_cp) {
             uint32_t meta_idx = cjk_blocks_[lo].first_meta + (cp - cjk_blocks_[lo].start_cp);
+            if (meta_idx < (uint32_t)glyph_count_) {
+                return (const GlyphMeta *)(meta_array_ + meta_idx * 12);
+            }
+        }
+    }
+
+    // Other blocks (fullwidth, CJK punctuation, etc.)
+    if (other_block_count_ > 0) {
+        int lo = 0, hi = other_block_count_;
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if (cp > other_blocks_[mid].end_cp) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo < other_block_count_ && cp >= other_blocks_[lo].start_cp && cp <= other_blocks_[lo].end_cp) {
+            uint32_t meta_idx = other_blocks_[lo].first_meta + (cp - other_blocks_[lo].start_cp);
             if (meta_idx < (uint32_t)glyph_count_) {
                 return (const GlyphMeta *)(meta_array_ + meta_idx * 12);
             }
