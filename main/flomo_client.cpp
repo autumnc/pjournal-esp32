@@ -5,10 +5,37 @@
 #include <ctime>
 #include <esp_log.h>
 #include <esp_http_client.h>
+#include <esp_crt_bundle.h>
 #include <mbedtls/md5.h>
 
 static const char *TAG = "Flomo";
 FlomoClient g_flomo;
+
+// JSON string escaping: escapes ", \, newline, tab, and control chars
+static std::string jsonEscape(const std::string &s) {
+    std::string out;
+    out.reserve(s.length() + 16);
+    for (size_t i = 0; i < s.length(); i++) {
+        char c = s[i];
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+                break;
+        }
+    }
+    return out;
+}
 
 // Flomo constants
 #define FLOMO_API_BASE    "https://flomoapp.com/api/v1"
@@ -62,7 +89,7 @@ std::string FlomoClient::login() {
         "\"wechat_oa_open_id\":\"\",\"timestamp\":\"%s\","
         "\"api_key\":\"%s\",\"app_version\":\"%s\","
         "\"platform\":\"%s\",\"webp\":\"1\",\"sign\":\"%s\"}",
-        email_.c_str(), password_.c_str(), ts,
+        jsonEscape(email_).c_str(), jsonEscape(password_).c_str(), ts,
         FLOMO_API_KEY, FLOMO_APP_VERSION, FLOMO_PLATFORM, sign.c_str());
 
     esp_http_client_config_t cfg = {};
@@ -70,18 +97,20 @@ std::string FlomoClient::login() {
     cfg.method = HTTP_METHOD_POST;
     cfg.timeout_ms = 30000;
     cfg.skip_cert_common_name_check = true;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return "";
 
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_header(client, "User-Agent", "pjournal-esp32/1.0");
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
 
     std::string response;
     std::string token;
-    esp_err_t err = esp_http_client_perform(client);
+    esp_err_t err = esp_http_client_open(client, (int)strlen(body));
     if (err == ESP_OK) {
+        esp_http_client_write(client, body, (int)strlen(body));
+        int content_length = esp_http_client_fetch_headers(client);
         int status = esp_http_client_get_status_code(client);
         if (status == 200) {
             char buf[512];
@@ -91,20 +120,53 @@ std::string FlomoClient::login() {
                 response += buf;
             }
             // Parse JSON for access_token (simple search)
-            auto tokPos = response.find("\"access_token\"");
-            if (tokPos != std::string::npos) {
-                auto valStart = response.find('"', tokPos + 14);
-                if (valStart != std::string::npos) {
-                    valStart++;
-                    auto valEnd = response.find('"', valStart);
-                    if (valEnd != std::string::npos) {
-                        token = response.substr(valStart, valEnd - valStart);
+            // Response format: {"code":0,"data":{"access_token":"xxx"}}
+            // First check code == 0, then look for access_token in data
+            auto dataPos = response.find("\"data\"");
+            if (dataPos != std::string::npos) {
+                auto tokPos = response.find("\"access_token\"", dataPos);
+                if (tokPos != std::string::npos) {
+                    auto valStart = response.find('"', tokPos + 14);
+                    if (valStart != std::string::npos) {
+                        valStart++;
+                        auto valEnd = response.find('"', valStart);
+                        if (valEnd != std::string::npos) {
+                            token = response.substr(valStart, valEnd - valStart);
+                        }
                     }
                 }
             }
+            // Fallback: try top-level access_token (older API format)
+            if (token.empty()) {
+                auto tokPos = response.find("\"access_token\"");
+                if (tokPos != std::string::npos) {
+                    auto valStart = response.find('"', tokPos + 14);
+                    if (valStart != std::string::npos) {
+                        valStart++;
+                        auto valEnd = response.find('"', valStart);
+                        if (valEnd != std::string::npos) {
+                            token = response.substr(valStart, valEnd - valStart);
+                        }
+                    }
+                }
+            }
+            if (token.empty()) {
+                ESP_LOGW(TAG, "Login 200 but no token in response: %.*s", (int)response.size(), response.c_str());
+            }
+        } else {
+            ESP_LOGW(TAG, "Login returned HTTP %d (content-length: %d)", status, content_length);
+            // Read response body for diagnostics
+            char buf[256];
+            int len;
+            while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
+                buf[len] = 0;
+                response += buf;
+            }
+            if (!response.empty())
+                ESP_LOGW(TAG, "Login response: %.*s", (int)response.size(), response.c_str());
         }
     } else {
-        ESP_LOGW(TAG, "Login failed: %d", err);
+        ESP_LOGW(TAG, "Login open failed: %d", err);
     }
 
     esp_http_client_cleanup(client);
@@ -129,19 +191,21 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
         + "&webp=1";
     std::string sign = generateSign(params);
 
-    char body[1024];
+    char body[2048];
+    std::string escapedContent = jsonEscape(content);
     snprintf(body, sizeof(body),
         "{\"timestamp\":\"%s\",\"api_key\":\"%s\",\"app_version\":\"%s\","
         "\"platform\":\"%s\",\"webp\":\"1\",\"content\":\"%s\","
         "\"source\":\"web\",\"tz\":\"8:0\",\"sign\":\"%s\"}",
         ts, FLOMO_API_KEY, FLOMO_APP_VERSION, FLOMO_PLATFORM,
-        content.c_str(), sign.c_str());
+        escapedContent.c_str(), sign.c_str());
 
     esp_http_client_config_t cfg = {};
     cfg.url = FLOMO_API_BASE "/memo";
     cfg.method = HTTP_METHOD_PUT;
     cfg.timeout_ms = 30000;
     cfg.skip_cert_common_name_check = true;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return false;
@@ -150,25 +214,41 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
     esp_http_client_set_header(client, "User-Agent", "pjournal-esp32/1.0");
     std::string bearer = "Bearer " + token;
     esp_http_client_set_header(client, "Authorization", bearer.c_str());
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
 
     bool ok = false;
-    esp_err_t err = esp_http_client_perform(client);
+    std::string response;
+    esp_err_t err = esp_http_client_open(client, (int)strlen(body));
     if (err == ESP_OK) {
+        esp_http_client_write(client, body, (int)strlen(body));
+        int content_length = esp_http_client_fetch_headers(client);
         int status = esp_http_client_get_status_code(client);
         if (status == 200) {
             char buf[256];
             int len;
             while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
                 buf[len] = 0;
-                // Parse code field from JSON response
-                auto codePos = std::string(buf).find("\"code\":0");
-                if (codePos != std::string::npos) {
-                    ok = true;
-                    break;
-                }
+                response += buf;
             }
+            // Parse code field from JSON response
+            auto codePos = response.find("\"code\":0");
+            if (codePos != std::string::npos) {
+                ok = true;
+            } else {
+                ESP_LOGW(TAG, "Memo 200 but code not 0: %.*s", (int)response.size(), response.c_str());
+            }
+        } else {
+            ESP_LOGW(TAG, "Memo returned HTTP %d (content-length: %d)", status, content_length);
+            char buf[256];
+            int len;
+            while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
+                buf[len] = 0;
+                response += buf;
+            }
+            if (!response.empty())
+                ESP_LOGW(TAG, "Memo response: %.*s", (int)response.size(), response.c_str());
         }
+    } else {
+        ESP_LOGW(TAG, "Memo open failed: %d", err);
     }
 
     esp_http_client_cleanup(client);
@@ -176,6 +256,11 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
 }
 
 FlomoResult FlomoClient::send(const std::string &text) {
+    if (!isConfigured()) {
+        std::string email = g_settings.flomoEmail();
+        std::string pass = g_settings.flomoPassword();
+        if (!email.empty() && !pass.empty()) configure(email, pass);
+    }
     if (!isConfigured()) {
         return {false, "请先在设置中配置Flomo账号"};
     }
@@ -212,4 +297,5 @@ std::string FlomoClient::getCachedToken() {
 
 void FlomoClient::setCachedToken(const std::string &token) {
     g_settings.setFlomoToken(token);
+    ESP_LOGI(TAG, "Token saved to settings");
 }

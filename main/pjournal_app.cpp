@@ -19,6 +19,7 @@
 #include <esp_log.h>
 #include <esp_random.h>
 #include <esp_timer.h>
+#include <esp_sntp.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
@@ -626,9 +627,12 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
         ctx.nextState = APP_MAIN; return APP_MAIN;
     }
-    if (key == 0x17) return finishEditor(ctx);
-    if (key == 0x11) { ctx.nextState = APP_MAIN; return APP_MAIN; }
-    if (key == 0x13) { ctx.nextState = APP_SYNC_SEND_FLOMO; return APP_SYNC_SEND_FLOMO; }
+    if (key == 0x13) return finishEditor(ctx);  // Ctrl+S → save & exit
+    if (key == 0x11) { ctx.nextState = APP_MAIN; return APP_MAIN; }  // Ctrl+Q → quit
+    if (key == 0x06) {  // Ctrl+F → send to Flomo
+        ctx.nextState = APP_SYNC_SEND_FLOMO;
+        return APP_SYNC_SEND_FLOMO;
+    }
 
     // Navigation & editing
     if (key == 0x0A || key == 0x0D) { // Enter
@@ -914,7 +918,7 @@ AppState screen_bt_manage_handle(int key, ScreenContext &ctx) {
         int n = g_bt.deviceCount();
         if (n == 0) {
             ui_draw_text_centered(y, "未找到蓝牙键盘"); y += FONT_H;
-            ui_draw_text_centered(y, "按 [q] 返回后重试");
+            ui_draw_text_centered(y, "双击 USER 按钮返回后重试");
         } else {
             int visible = (SCREEN_H - y + FONT_H - 1) / FONT_H;
             if (g_btState.selection < g_btState.scroll) g_btState.scroll = g_btState.selection;
@@ -936,15 +940,37 @@ AppState screen_bt_manage_handle(int key, ScreenContext &ctx) {
     return APP_BT_MANAGE;
 }
 
+// ── WiFi helper ─────────────────────────────────────────────────────────
+static bool connect_wifi_from_settings() {
+    std::string ssid = g_settings.wifiSsid();
+    if (ssid.empty()) return false;
+    std::string pass = g_settings.wifiPassword();
+    g_wifi.begin();
+    g_wifi.connect(ssid.c_str(), pass.c_str());
+    for (int i = 0; i < 100; i++) {
+        if (g_wifi.isConnected()) break;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return g_wifi.isConnected();
+}
+
 // ── Settings Screen ────────────────────────────────────────────────────
-struct SettingField { const char *key; const char *label; bool masked; };
+struct SettingField { const char *key; const char *label; bool masked; bool action; };
 static const SettingField SETTINGS_FIELDS[] = {
-    {"deepseek_key", "Deepseek Key", false}, {"flomo_email", "Flomo 邮箱", false},
-    {"flomo_pass", "Flomo 密码", false}, {"webdav_url", "WebDAV URL", false},
-    {"webdav_user", "WebDAV 用户", false}, {"webdav_pass", "WebDAV 密码", false},
-    {"personal_exp", "个人经历", false}, {"personal_hob", "个人爱好", false},
-    {"wifi_ssid", "WiFi SSID", false}, {"wifi_pass", "WiFi 密码", false},
-    {"timezone", "时区(如CST-8)", false}, {"ntp_server", "NTP服务器", false},
+    {"deepseek_key", "Deepseek Key", false, false},
+    {"flomo_email", "Flomo 邮箱", false, false},
+    {"flomo_pass", "Flomo 密码", false, false},
+    {"_flomo_token", "生成Flomo Token", false, true},
+    {"webdav_url", "WebDAV URL", false, false},
+    {"webdav_user", "WebDAV 用户", false, false},
+    {"webdav_pass", "WebDAV 密码", false, false},
+    {"personal_exp", "个人经历", false, false},
+    {"personal_hob", "个人爱好", false, false},
+    {"wifi_ssid", "WiFi SSID", false, false},
+    {"wifi_pass", "WiFi 密码", false, false},
+    {"timezone", "时区(如CST-8)", false, false},
+    {"ntp_server", "NTP服务器", false, false},
+    {"_sync_time", "网络同步时间", false, true},
 };
 static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);
 
@@ -1008,12 +1034,89 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     if (key == 'q' || key == 'Q' || key == 0x1B) { ctx.nextState = APP_MAIN; return APP_MAIN; }
     if (key == 'k' || key == KEY_UP) { if (g_settingsState.selection > 0) g_settingsState.selection--; }
     if (key == 'j' || key == KEY_DOWN) { if (g_settingsState.selection < NUM_SETTINGS-1) g_settingsState.selection++; }
-    if (key == 'd' || key == 'D') { g_settings.erase(SETTINGS_FIELDS[g_settingsState.selection].key); }
+    if (key == 'd' || key == 'D') {
+        auto &f = SETTINGS_FIELDS[g_settingsState.selection];
+        if (!f.action) g_settings.erase(SETTINGS_FIELDS[g_settingsState.selection].key);
+    }
     if (key == 0x0A || key == 0x0D) {
         auto &f = SETTINGS_FIELDS[g_settingsState.selection];
-        g_settingsState.editBuffer = g_settings.getString(f.key);
-        g_settingsState.editCursor = (int)g_settingsState.editBuffer.length();
-        g_settingsState.editing = true;
+        if (f.action) {
+            // ── Execute action ────────────────────────────────────────
+            if (strcmp(f.key, "_flomo_token") == 0) {
+                std::string email = g_settings.flomoEmail();
+                std::string pass = g_settings.flomoPassword();
+                if (email.empty() || pass.empty()) {
+                    ui_clear(); ui_show_message_centered("请先设置Flomo邮箱和密码");
+                    vTaskDelay(pdMS_TO_TICKS(2000)); return APP_SETTINGS;
+                }
+                bool wifiWas = g_wifi.isConnected();
+                if (!wifiWas) {
+                    ui_clear(); ui_show_message_centered("正在连接WiFi..."); ui_commit();
+                    if (!connect_wifi_from_settings()) {
+                        ui_clear(); ui_show_message_centered("WiFi连接失败");
+                        vTaskDelay(pdMS_TO_TICKS(2000)); return APP_SETTINGS;
+                    }
+                }
+                ui_clear(); ui_show_message_centered("正在生成Token..."); ui_commit();
+                g_flomo.configure(email, pass);
+                std::string token = g_flomo.login();
+                if (!token.empty()) {
+                    g_flomo.setCachedToken(token);
+                    ui_clear(); ui_show_message_centered("Token生成成功 ✓");
+                } else {
+                    ui_clear(); ui_show_message_centered("Flomo登录失败");
+                }
+                if (!wifiWas) g_wifi.disconnect();
+                vTaskDelay(pdMS_TO_TICKS(2000)); return APP_SETTINGS;
+            }
+            if (strcmp(f.key, "_sync_time") == 0) {
+                bool wifiWas = g_wifi.isConnected();
+                if (!wifiWas) {
+                    ui_clear(); ui_show_message_centered("正在连接WiFi..."); ui_commit();
+                    if (!connect_wifi_from_settings()) {
+                        ui_clear(); ui_show_message_centered("WiFi连接失败");
+                        vTaskDelay(pdMS_TO_TICKS(2000)); return APP_SETTINGS;
+                    }
+                }
+                std::string ntp = g_settings.ntpServer();
+                std::string tz = g_settings.timezone();
+                if (tz.empty()) tz = "CST-8";
+                if (ntp.empty()) {
+                    ui_clear(); ui_show_message_centered("请先设置NTP服务器");
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                } else {
+                    esp_sntp_stop();
+                    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+                    esp_sntp_setservername(0, ntp.c_str());
+                    esp_sntp_init();
+                    setenv("TZ", tz.c_str(), 1);
+                    tzset();
+                    time_t now = 0;
+                    for (int i = 0; i < 50; i++) {
+                        vTaskDelay(pdMS_TO_TICKS(200));
+                        time(&now);
+                        if (now > 100000) break;
+                    }
+                    if (now > 100000) {
+                        struct tm *tm = localtime(&now);
+                        char ts[64];
+                        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+                        char msg[80];
+                        snprintf(msg, sizeof(msg), "同步成功: %s", ts);
+                        ui_clear(); ui_show_message_centered(msg);
+                    } else {
+                        ui_clear(); ui_show_message_centered("时间同步失败");
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                }
+                if (!wifiWas) g_wifi.disconnect();
+                return APP_SETTINGS;
+            }
+        } else {
+            g_settingsState.editBuffer = g_settings.getString(f.key);
+            g_settingsState.editCursor = (int)g_settingsState.editBuffer.length();
+            g_settingsState.editing = true;
+        }
     }
 
     ui_clear(); int y = 28;
@@ -1026,12 +1129,17 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     for (int i = 0; i < visible && (g_settingsState.scroll + i) < NUM_SETTINGS; i++) {
         int idx = g_settingsState.scroll + i; auto &f = SETTINGS_FIELDS[idx];
         bool sel = (idx == g_settingsState.selection);
-        std::string value = g_settings.getString(f.key);
-        std::string display;
-        if (value.empty()) display = "(未设置)";
-        else if (f.masked) display = "********";
-        else display = value;
-        char buf[80]; snprintf(buf, sizeof(buf), "%s:%s", f.label, display.c_str());
+        char buf[80];
+        if (f.action) {
+            snprintf(buf, sizeof(buf), "▶ %s", f.label);
+        } else {
+            std::string value = g_settings.getString(f.key);
+            std::string display;
+            if (value.empty()) display = "(未设置)";
+            else if (f.masked) display = "********";
+            else display = value;
+            snprintf(buf, sizeof(buf), "%s:%s", f.label, display.c_str());
+        }
         ui_draw_text(8, y + i * FONT_H, buf, sel);
     }
     ui_commit();

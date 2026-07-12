@@ -1,7 +1,7 @@
 #include "bt_keyboard.h"
-#include "settings_manager.h"
 #include <cstring>
 #include <cstdio>
+#include <sys/stat.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -150,7 +150,9 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                 // Save device for auto-reconnect on next boot
                 const uint8_t *bda = esp_hidh_dev_bda_get(param->open.dev);
                 if (bda) {
-                    s_self->savePairedDevice(bda, s_paired_addr_type);
+                    const char *dev_name = esp_hidh_dev_name_get(param->open.dev);
+                    s_self->savePairedDevice(bda, s_paired_addr_type,
+                                             dev_name ? dev_name : "?");
                     ESP_LOGI(TAG, "Saved paired device for auto-reconnect");
                 }
             }
@@ -511,33 +513,48 @@ void BtKeyboard::flushKeys() {
     if (s_queue) xQueueReset(s_queue);
 }
 
-void BtKeyboard::savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_type) {
+void BtKeyboard::savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_type, const char *name) {
     char hex[13];
     snprintf(hex, sizeof(hex), "%02x%02x%02x%02x%02x%02x",
              bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
-    g_settings.setString("bt_bda", hex);
-    char at[2] = { (char)('0' + (int)addr_type), '\0' };
-    g_settings.setString("bt_addr_type", at);
-    ESP_LOGI(TAG, "Saved device %s (addr_type=%d)", hex, addr_type);
+    mkdir("/sdcard/settings", 0777);
+    FILE *f = fopen("/sdcard/settings/bt_paired", "w");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to save paired device (no SD card?)");
+        return;
+    }
+    fprintf(f, "%s\n%d\n%s\n", hex, (int)addr_type, name ? name : "");
+    fclose(f);
+    ESP_LOGI(TAG, "Saved paired device %s (%s)", hex, name ? name : "?");
 }
 
 bool BtKeyboard::loadPairedDevice(uint8_t *bda, esp_ble_addr_type_t &addr_type) {
-    std::string hex = g_settings.getString("bt_bda");
-    if (hex.length() != 12) return false;
+    FILE *f = fopen("/sdcard/settings/bt_paired", "r");
+    if (!f) {
+        ESP_LOGW(TAG, "No saved device file at /sdcard/settings/bt_paired");
+        return false;
+    }
+    char hex[16] = {0};
+    int at = 0;
+    if (fscanf(f, "%15s\n%d", hex, &at) < 2 || strlen(hex) != 12) {
+        ESP_LOGW(TAG, "Invalid saved device file (hex='%s', at=%d)", hex, at);
+        fclose(f);
+        return false;
+    }
+    fclose(f);
     for (int i = 0; i < 6; i++) {
         unsigned int byte;
-        sscanf(hex.c_str() + i * 2, "%02x", &byte);
+        sscanf(hex + i * 2, "%02x", &byte);
         bda[i] = (uint8_t)byte;
     }
-    std::string at = g_settings.getString("bt_addr_type");
-    addr_type = at.empty() ? BLE_ADDR_TYPE_PUBLIC : (esp_ble_addr_type_t)(at[0] - '0');
+    addr_type = (esp_ble_addr_type_t)at;
+    ESP_LOGI(TAG, "Loaded saved device %s", hex);
     return true;
 }
 
 void BtKeyboard::clearPairedDevice() {
-    g_settings.erase("bt_bda");
-    g_settings.erase("bt_addr_type");
-    ESP_LOGI(TAG, "Cleared saved device info");
+    remove("/sdcard/settings/bt_paired");
+    ESP_LOGI(TAG, "Cleared saved paired device file");
 }
 
 esp_err_t BtKeyboard::connectBDA(const uint8_t *bda, esp_ble_addr_type_t addr_type) {

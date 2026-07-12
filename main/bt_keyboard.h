@@ -35,8 +35,8 @@ public:
     esp_err_t connectDevice(int idx);
     void disconnect();
 
-    // Persistent pairing: save/load device for auto-reconnect
-    void savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_type);
+    // Persistent pairing: save/load device on SD card for auto-reconnect
+    void savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_type, const char *name);
     bool loadPairedDevice(uint8_t *bda, esp_ble_addr_type_t &addr_type);
     void clearPairedDevice();
     esp_err_t connectBDA(const uint8_t *bda, esp_ble_addr_type_t addr_type);

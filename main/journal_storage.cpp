@@ -154,6 +154,34 @@ std::vector<JournalEntry> JournalStorage::listEntries() {
     return entries;
 }
 
+std::vector<std::pair<std::string, time_t>> JournalStorage::listFileMtimes() {
+    std::vector<std::pair<std::string, time_t>> result;
+    if (!mounted_) return result;
+
+    DIR *dir = opendir(basePath().c_str());
+    if (!dir) return result;
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (fn[0] == '.') continue;
+        // Check for .txt or .md extension
+        auto dot = fn.rfind('.');
+        if (dot == std::string::npos) continue;
+        std::string ext = fn.substr(dot);
+        if (ext != ".txt" && ext != ".md") continue;
+
+        struct stat st;
+        std::string full = basePath() + "/" + fn;
+        if (stat(full.c_str(), &st) == 0) {
+            result.push_back({fn, st.st_mtime});
+        }
+    }
+    closedir(dir);
+    return result;
+}
+
 std::string JournalStorage::readEntry(const std::string &filename) {
     if (!mounted_) return "";
     FILE *f = fopen((basePath() + "/" + filename).c_str(), "r");

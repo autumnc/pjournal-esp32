@@ -1,44 +1,45 @@
 #include "settings_manager.h"
+#include <cstdio>
+#include <cstring>
+#include <sys/stat.h>
 #include <esp_log.h>
 
 static const char *TAG = "Settings";
+static const char *BASE_DIR = "/sdcard/settings";
 
 SettingsManager g_settings;
 
 bool SettingsManager::begin() {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "Erasing NVS");
-        nvs_flash_erase();
-        ret = nvs_flash_init();
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS init failed: %d", ret);
-        return false;
-    }
-    ret = nvs_open("pjournal", NVS_READWRITE, &nvs_);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS open failed: %d", ret);
-        return false;
-    }
+    mkdir(BASE_DIR, 0777);
+    ESP_LOGI(TAG, "Settings directory: %s", BASE_DIR);
     return true;
 }
 
 std::string SettingsManager::get(const std::string &key) {
-    if (!nvs_) return "";
-    size_t len = 0;
-    if (nvs_get_str(nvs_, key.c_str(), NULL, &len) != ESP_OK) return "";
-    std::string val(len, '\0');
-    esp_err_t ret = nvs_get_str(nvs_, key.c_str(), &val[0], &len);
-    if (ret != ESP_OK) return "";
-    val.resize(len > 0 ? len - 1 : 0);
+    std::string path = std::string(BASE_DIR) + "/" + key;
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) return "";
+    std::string val;
+    char buf[256];
+    int n;
+    while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+        buf[n] = 0;
+        val += buf;
+    }
+    fclose(f);
     return val;
 }
 
 void SettingsManager::set(const std::string &key, const std::string &val) {
-    if (!nvs_) return;
-    nvs_set_str(nvs_, key.c_str(), val.c_str());
-    nvs_commit(nvs_);
+    mkdir(BASE_DIR, 0777);
+    std::string path = std::string(BASE_DIR) + "/" + key;
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to write %s", path.c_str());
+        return;
+    }
+    fwrite(val.data(), 1, val.size(), f);
+    fclose(f);
 }
 
 std::string SettingsManager::getString(const std::string &key, const std::string &def) {
@@ -51,10 +52,11 @@ void SettingsManager::setString(const std::string &key, const std::string &val) 
 }
 
 void SettingsManager::erase(const std::string &key) {
-    if (nvs_) nvs_erase_key(nvs_, key.c_str());
+    std::string path = std::string(BASE_DIR) + "/" + key;
+    remove(path.c_str());
 }
 
-// Convenience
+// Convenience accessors
 std::string SettingsManager::flomoEmail() { return get("flomo_email"); }
 std::string SettingsManager::flomoPassword() { return get("flomo_pass"); }
 std::string SettingsManager::flomoToken() { return get("flomo_token"); }

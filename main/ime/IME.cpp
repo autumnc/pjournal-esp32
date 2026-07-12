@@ -36,7 +36,7 @@ bool IME::parseHeader(const uint8_t *hdrIndex, size_t total) {
     }
     _recordSize = _codeLen + HANZI_SIZE + FLAG_SIZE;
     switch (_scheme) {
-    case PINYIN:    _maxCode = 11; break;
+    case PINYIN:    _maxCode = 20; break;
     case SHUANGPIN: _maxCode = 2; break;
     case WUBI:
     default:        _maxCode = 4; break;

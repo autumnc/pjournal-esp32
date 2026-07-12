@@ -4,6 +4,7 @@
 #include <cstring>
 #include <esp_log.h>
 #include <esp_http_client.h>
+#include <esp_crt_bundle.h>
 
 static const char *TAG = "Deepseek";
 DeepseekClient g_deepseek;
@@ -34,6 +35,7 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
     cfg.method = HTTP_METHOD_POST;
     cfg.timeout_ms = 30000;
     cfg.skip_cert_common_name_check = true;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return {false, "HTTP客户端初始化失败"};
@@ -42,13 +44,15 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
     esp_http_client_set_header(client, "User-Agent", "pjournal-esp32/1.0");
     std::string auth = "Bearer " + apiKey;
     esp_http_client_set_header(client, "Authorization", auth.c_str());
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
 
     std::string response;
     DeepseekResult result = {false, "API请求失败"};
 
-    esp_err_t err = esp_http_client_perform(client);
+    esp_err_t err = esp_http_client_open(client, (int)strlen(body));
     if (err == ESP_OK) {
+        esp_http_client_write(client, body, (int)strlen(body));
+        int content_length = esp_http_client_fetch_headers(client);
+        (void)content_length;
         int status = esp_http_client_get_status_code(client);
         if (status == 200) {
             char buf[512];

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,9 @@ public:
 
     // List all entries, newest first
     std::vector<JournalEntry> listEntries();
+
+    // List filenames with modification times (for sync)
+    std::vector<std::pair<std::string, time_t>> listFileMtimes();
 
     // Read entry content by filename
     std::string readEntry(const std::string &filename);

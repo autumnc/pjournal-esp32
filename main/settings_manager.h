@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <nvs_flash.h>
 
 class SettingsManager {
 public:
@@ -42,7 +41,6 @@ public:
 private:
     std::string get(const std::string &key);
     void set(const std::string &key, const std::string &val);
-    nvs_handle_t nvs_ = 0;
 };
 
 extern SettingsManager g_settings;

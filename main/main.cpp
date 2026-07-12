@@ -12,6 +12,7 @@
 
 #include <esp_log.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <nvs_flash.h>
 #include <esp_sntp.h>
 #include <driver/gpio.h>
@@ -66,15 +67,15 @@ extern "C" void app_main() {
     gpio_set_direction(PIN_BOOT, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIN_BOOT, GPIO_PULLUP_ONLY);
 
-    // Initialize settings
+    // Initialize SD card (needed before settings on SD)
+    g_journal.begin();
+    ESP_LOGI(TAG, "Journal entries: %d", g_journal.totalEntries());
+
+    // Initialize settings (stored on SD card)
     g_settings.begin();
 
     // Initialize battery ADC
     battery_init();
-
-    // Initialize SPIFFS for journal storage
-    g_journal.begin();
-    ESP_LOGI(TAG, "Journal entries: %d", g_journal.totalEntries());
 
     // Initialize font renderer
     g_font.begin();
@@ -120,18 +121,15 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "Starting Bluetooth...");
     g_bt.init();
 
-    // Auto-connect to saved keyboard if available
+    // Auto-connect saved keyboard (first attempt, may retry in main loop)
     {
         uint8_t saved_bda[6];
         esp_ble_addr_type_t saved_addr_type;
         if (g_bt.loadPairedDevice(saved_bda, saved_addr_type)) {
-            ESP_LOGI(TAG, "Found saved keyboard, auto-connecting...");
+            ESP_LOGI(TAG, "Found saved keyboard, will auto-connect...");
+            // Give BT stack a moment to settle before first connect attempt
+            vTaskDelay(pdMS_TO_TICKS(1000));
             g_bt.connectBDA(saved_bda, saved_addr_type);
-            // Wait up to 8 seconds for connection
-            for (int i = 0; i < 80; i++) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-                if (g_bt.isConnected()) break;
-            }
         }
     }
 
@@ -140,8 +138,8 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "Ready!");
 
     // ── App State Machine ────────────────────────────────────────────────
-    // Start with BT management screen on first boot for keyboard pairing
-    AppState currentState = g_bt.isConnected() ? APP_MAIN : APP_BT_MANAGE;
+    // Always start at main screen; BT connects in background
+    AppState currentState = APP_MAIN;
     ScreenContext ctx;
 
     // Button debounce counters
@@ -157,6 +155,38 @@ extern "C" void app_main() {
             key = 0;
         }
 
+        // ── BT auto-reconnect retry ──────────────────────────────────────
+        // Retry connecting to saved device every 5s if not connected
+        {
+            static int64_t last_bt_retry_us = 0;
+            static int64_t last_bt_reload_us = 0;
+            static bool bt_retry_loaded = false;
+            static uint8_t bt_retry_bda[6];
+            static esp_ble_addr_type_t bt_retry_addr_type;
+
+            // Periodically re-check for paired device file (in case user paired
+            // after initial boot but before reboot)
+            if (!bt_retry_loaded) {
+                int64_t now_us = esp_timer_get_time();
+                if (last_bt_reload_us == 0 || (now_us - last_bt_reload_us) > 30000000) {
+                    last_bt_reload_us = now_us;
+                    bt_retry_loaded = g_bt.loadPairedDevice(bt_retry_bda, bt_retry_addr_type);
+                    if (bt_retry_loaded) {
+                        ESP_LOGI(TAG, "BT paired device file found, will auto-reconnect");
+                    }
+                }
+            }
+
+            if (bt_retry_loaded && !g_bt.isConnected()) {
+                int64_t now_us = esp_timer_get_time();
+                if (last_bt_retry_us == 0 || (now_us - last_bt_retry_us) > 5000000) {
+                    last_bt_retry_us = now_us;
+                    ESP_LOGI(TAG, "BT auto-reconnect retry...");
+                    g_bt.connectBDA(bt_retry_bda, bt_retry_addr_type);
+                }
+            }
+        }
+
         // ── Physical button handling ──────────────────────────────────────
         // With pull-up: 1=released, 0=pressed (active LOW)
         // Simple counters, no auto-detection — just read the pin directly.
@@ -164,13 +194,28 @@ extern "C" void app_main() {
 
         // USER button (GPIO 18)
         {
+            static int64_t user_btn_last_release_us = 0;
+            static bool user_btn_double = false;
+
             bool held = PIN_LOW(PIN_USER_BTN);
             if (held) {
+                if (btn_user.count == 0) {
+                    int64_t now = esp_timer_get_time();
+                    if (user_btn_last_release_us > 0 &&
+                        (now - user_btn_last_release_us) < 400000) {
+                        user_btn_double = true;
+                    }
+                }
                 btn_user.count++;
-                // Short press ~150ms (3 iterations)
-                if (btn_user.count == 3 && currentState == APP_BT_MANAGE)
-                    key = KEY_UP;
-                // Long press ~700ms (14 iterations)
+                if (btn_user.count == 3 && currentState == APP_BT_MANAGE) {
+                    if (user_btn_double) {
+                        key = 0x1B;
+                        user_btn_double = false;
+                        user_btn_last_release_us = 0;
+                    } else {
+                        key = KEY_UP;
+                    }
+                }
                 if (btn_user.count == 14) {
                     if (currentState != APP_BT_MANAGE) {
                         currentState = APP_BT_MANAGE;
@@ -178,7 +223,10 @@ extern "C" void app_main() {
                     }
                 }
             } else {
+                if (btn_user.count >= 1 && btn_user.count < 14)
+                    user_btn_last_release_us = esp_timer_get_time();
                 btn_user.count = 0;
+                user_btn_double = false;
             }
         }
 
@@ -275,11 +323,13 @@ extern "C" void app_main() {
             std::string user = g_settings.webdavUsername();
             std::string pass = g_settings.webdavPassword();
             if (url.empty() || user.empty()) {
+                ui_clear();
                 ui_show_message_centered("请先配置WebDAV");
                 vTaskDelay(pdMS_TO_TICKS(2000));
             } else {
                 g_webdav.configure(url, user, pass);
                 auto result = g_webdav.sync("/sdcard/pjournal");
+                ui_clear();
                 ui_show_message_centered(result.message.c_str());
                 vTaskDelay(pdMS_TO_TICKS(2000));
             }
@@ -311,8 +361,10 @@ extern "C" void app_main() {
             std::string text = app_get_editor_text();
             if (!text.empty()) {
                 auto result = g_flomo.send(text);
+                ui_clear();
                 ui_show_message_centered(result.message.c_str());
             } else {
+                ui_clear();
                 ui_show_message_centered("内容为空");
             }
             vTaskDelay(pdMS_TO_TICKS(2000));
