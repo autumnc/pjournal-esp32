@@ -82,6 +82,39 @@ static int charCellWidth(unsigned char c) {
     return (c < 0x80) ? 1 : 2;
 }
 
+static int utf8CharLen(unsigned char c) {
+    if (c < 0x80) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+// Convert byte offset to cell column position (ASCII=1, CJK=2)
+static int byteToCells(const std::string &line, int byteOffset) {
+    int cells = 0;
+    for (int i = 0; i < byteOffset; ) {
+        cells += charCellWidth((unsigned char)line[i]);
+        i += utf8CharLen((unsigned char)line[i]);
+    }
+    return cells;
+}
+
+// Find byte position in line[start..end) closest to targetCells cell-column
+static int cellsToByte(const std::string &line, int start, int end, int targetCells) {
+    int cells = 0;
+    for (int ci = start; ci < end; ) {
+        unsigned char c = (unsigned char)line[ci];
+        int cc = charCellWidth(c);
+        if (cells + cc > targetCells) {
+            return (targetCells - cells <= cells + cc - targetCells) ? ci : ci + utf8CharLen(c);
+        }
+        cells += cc;
+        ci += utf8CharLen(c);
+    }
+    return end;
+}
+
 struct VRow { int lineIdx; int start; int end; };
 
 static std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
@@ -685,38 +718,11 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
         if (curVR > 0) {
             auto &prev = vrows[curVR - 1];
+            // Save target column (in cell units) before changing cy
+            if (g_editor.targetCx < 0)
+                g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
             g_editor.cy = prev.lineIdx;
-            // Set target column on first vertical move
-            if (g_editor.targetCx < 0) g_editor.targetCx = g_editor.cx;
-            // Find the closest column in the target row
-            const std::string &pline = g_editor.lines[prev.lineIdx];
-            int cells = 0;
-            int bestCx = prev.start;
-            for (int ci = prev.start; ci < prev.end; ) {
-                unsigned char c = (unsigned char)pline[ci];
-                int cc = charCellWidth(c);
-                if (cells + cc > g_editor.targetCx) {
-                    // Choose closer of this position or previous
-                    int prevCells = cells;
-                    if (g_editor.targetCx - prevCells < cells + cc - g_editor.targetCx) {
-                        bestCx = ci;
-                    } else {
-                        bestCx = ci;
-                        if (c < 0x80) bestCx++; else if ((c & 0xE0) == 0xC0) bestCx += 2;
-                        else if ((c & 0xF0) == 0xE0) bestCx += 3; else bestCx += 4;
-                    }
-                    break;
-                }
-                cells += cc;
-                bestCx = ci;
-                if (c < 0x80) ci++; else if ((c & 0xE0) == 0xC0) ci += 2;
-                else if ((c & 0xF0) == 0xE0) ci += 3; else if ((c & 0xF8) == 0xF0) ci += 4;
-                else ci++;
-            }
-            if (prev.end > prev.start) bestCx = prev.end; // if loop didn't break (full width)
-            g_editor.cx = bestCx;
-            if (g_editor.cx > (int)g_editor.lines[g_editor.cy].length())
-                g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
+            g_editor.cx = cellsToByte(g_editor.lines[prev.lineIdx], prev.start, prev.end, g_editor.targetCx);
         }
     } else if (key == KEY_DOWN) {
         vrows = buildVrows(g_editor.lines);
@@ -728,23 +734,11 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
         if (curVR >= 0 && curVR < (int)vrows.size() - 1) {
             auto &next = vrows[curVR + 1];
+            if (g_editor.targetCx < 0)
+                g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
             g_editor.cy = next.lineIdx;
-            if (g_editor.targetCx < 0) g_editor.targetCx = g_editor.cx;
-            const std::string &pline = g_editor.lines[next.lineIdx];
-            int cells = 0;
-            int bestCx = next.start;
-            for (int ci = next.start; ci < next.end; ) {
-                unsigned char c = (unsigned char)pline[ci];
-                int cc = charCellWidth(c);
-                if (cells + cc > g_editor.targetCx) break;
-                cells += cc;
-                bestCx = ci;
-                if (c < 0x80) ci++; else if ((c & 0xE0) == 0xC0) ci += 2;
-                else if ((c & 0xF0) == 0xE0) ci += 3; else if ((c & 0xF8) == 0xF0) ci += 4;
-                else ci++;
-            }
-            bestCx = next.end; // use the full segment width
-            g_editor.cx = std::min(bestCx, (int)g_editor.lines[g_editor.cy].length());
+            g_editor.cx = std::min(cellsToByte(g_editor.lines[next.lineIdx], next.start, next.end, g_editor.targetCx),
+                                   (int)g_editor.lines[g_editor.cy].length());
         }
     }
 

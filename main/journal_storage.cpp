@@ -2,14 +2,20 @@
 #include <cstring>
 #include <ctime>
 #include <algorithm>
+#include <unordered_set>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <esp_vfs_fat.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 static const char *TAG = "Journal";
+
+// SD card mutex (recursive to handle nested public method calls)
+static SemaphoreHandle_t s_sd_mutex = nullptr;
 
 // SDMMC pin configuration for ESP32-S3-RLCD-4.2
 #define SDMMC_CLK GPIO_NUM_38
@@ -46,6 +52,7 @@ bool JournalStorage::begin() {
         mounted_ = true;
     }
 
+    if (!s_sd_mutex) s_sd_mutex = xSemaphoreCreateRecursiveMutex();
     ensureDir();
     ESP_LOGI(TAG, "SD card ready at %s", basePath().c_str());
     return true;
@@ -68,6 +75,7 @@ void JournalStorage::ensureDir() {
 
 bool JournalStorage::saveEntry(const std::string &text) {
     if (!mounted_) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
     ensureDir();
     time_t now;
     time(&now);
@@ -77,29 +85,33 @@ bool JournalStorage::saveEntry(const std::string &text) {
     std::string fname = std::string(ts) + ".txt";
 
     FILE *f = fopen((basePath() + "/" + fname).c_str(), "w");
-    if (!f) return false;
+    if (!f) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return false; }
     fwrite(text.data(), 1, text.size(), f);
     fclose(f);
     ESP_LOGI(TAG, "Saved: %s", fname.c_str());
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return true;
 }
 
 bool JournalStorage::saveEntryRaw(const std::string &filename, const std::string &content) {
     if (!mounted_) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
     ensureDir();
     FILE *f = fopen((basePath() + "/" + filename).c_str(), "w");
-    if (!f) return false;
+    if (!f) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return false; }
     fwrite(content.data(), 1, content.size(), f);
     fclose(f);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return true;
 }
 
 std::vector<JournalEntry> JournalStorage::listEntries() {
     std::vector<JournalEntry> entries;
     if (!mounted_) return entries;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
 
     DIR *dir = opendir(basePath().c_str());
-    if (!dir) return entries;
+    if (!dir) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return entries; }
 
     struct dirent *de;
     while ((de = readdir(dir)) != NULL) {
@@ -151,15 +163,17 @@ std::vector<JournalEntry> JournalStorage::listEntries() {
         [](const JournalEntry &a, const JournalEntry &b) {
             return a.filename > b.filename;
         });
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return entries;
 }
 
 std::vector<std::pair<std::string, time_t>> JournalStorage::listFileMtimes() {
     std::vector<std::pair<std::string, time_t>> result;
     if (!mounted_) return result;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
 
     DIR *dir = opendir(basePath().c_str());
-    if (!dir) return result;
+    if (!dir) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return result; }
 
     struct dirent *de;
     while ((de = readdir(dir)) != NULL) {
@@ -179,13 +193,15 @@ std::vector<std::pair<std::string, time_t>> JournalStorage::listFileMtimes() {
         }
     }
     closedir(dir);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return result;
 }
 
 std::string JournalStorage::readEntry(const std::string &filename) {
     if (!mounted_) return "";
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
     FILE *f = fopen((basePath() + "/" + filename).c_str(), "r");
-    if (!f) return "";
+    if (!f) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return ""; }
     std::string result;
     char buf[256];
     int n;
@@ -194,50 +210,104 @@ std::string JournalStorage::readEntry(const std::string &filename) {
         result += buf;
     }
     fclose(f);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return result;
 }
 
 bool JournalStorage::deleteEntry(const std::string &filename) {
     if (!mounted_) return false;
-    return remove((basePath() + "/" + filename).c_str()) == 0;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    bool ok = remove((basePath() + "/" + filename).c_str()) == 0;
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return ok;
 }
 
 bool JournalStorage::hasEntry(const std::string &date) {
-    auto entries = listEntries();
-    for (auto &e : entries)
-        if (e.date == date) return true;
-    return false;
+    if (!mounted_) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+
+    DIR *dir = opendir(basePath().c_str());
+    if (!dir) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return false; }
+
+    struct dirent *de;
+    bool found = false;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
+        if (fn[0] == '.') continue;
+        if (fn.substr(0, 10) == date) { found = true; break; }
+    }
+    closedir(dir);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return found;
 }
 
 int JournalStorage::countToday() {
+    if (!mounted_) return 0;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+
     time_t now; time(&now);
     struct tm *tm = localtime(&now);
     char today[16];
     strftime(today, sizeof(today), "%Y-%m-%d", tm);
+
     int count = 0;
-    auto entries = listEntries();
-    for (auto &e : entries)
-        if (e.date == today) count++;
+    DIR *dir = opendir(basePath().c_str());
+    if (!dir) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return 0; }
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
+        if (fn[0] == '.') continue;
+        if (fn.substr(0, 10) == today) count++;
+    }
+    closedir(dir);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return count;
 }
 
 int JournalStorage::getStreak() {
+    if (!mounted_) return 0;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+
+    // Build date set from directory scan (no file content reads)
+    std::unordered_set<std::string> dates;
+    DIR *dir = opendir(basePath().c_str());
+    if (dir) {
+        struct dirent *de;
+        while ((de = readdir(dir)) != NULL) {
+            if (de->d_type != DT_REG) continue;
+            std::string fn = de->d_name;
+            if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
+            if (fn[0] == '.') continue;
+            dates.insert(fn.substr(0, 10));
+        }
+        closedir(dir);
+    }
+
     int streak = 0;
     time_t now; time(&now);
-
     for (int i = 0; i < 365; i++) {
         time_t t = now - i * 86400;
         struct tm *tm2 = localtime(&t);
         char date[16];
         strftime(date, sizeof(date), "%Y-%m-%d", tm2);
-        if (hasEntry(date))
+        if (dates.count(date))
             streak++;
         else
             break;
     }
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return streak;
 }
 
 int JournalStorage::totalEntries() {
-    return listEntries().size();
+    if (!mounted_) return 0;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    int n = (int)listEntries().size();
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return n;
 }

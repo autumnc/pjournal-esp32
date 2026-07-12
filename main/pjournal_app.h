@@ -32,10 +32,10 @@ struct ScreenContext {
 // Shared UI constants
 #define SCREEN_W 400
 #define SCREEN_H 300
-#define FONT_H 29
-#define STATUS_H 29
+#define FONT_H 28
+#define STATUS_H 28
 #define VISIBLE_LINES ((SCREEN_H - STATUS_H) / FONT_H)  // ~9 lines
-#define LINE_SPACING 29
+#define LINE_SPACING 28
 
 // Arrow key codes (must match bt_keyboard.cpp)
 #define KEY_UP      0x80
