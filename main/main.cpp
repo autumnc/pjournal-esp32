@@ -116,20 +116,16 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "Starting Bluetooth...");
     g_bt.init();
 
-    // Auto-connect saved keyboard (first attempt, may retry in main loop)
+    // Auto-connect saved keyboard (background, non-blocking)
     {
         uint8_t saved_bda[6];
         esp_ble_addr_type_t saved_addr_type;
         if (g_bt.loadPairedDevice(saved_bda, saved_addr_type)) {
             ESP_LOGI(TAG, "Found saved keyboard, will auto-connect...");
-            // Give BT stack a moment to settle before first connect attempt
-            vTaskDelay(pdMS_TO_TICKS(1000));
             g_bt.connectBDA(saved_bda, saved_addr_type);
         }
     }
 
-    // Show ready
-    vTaskDelay(pdMS_TO_TICKS(500));
     ESP_LOGI(TAG, "Ready!");
 
     // ── App State Machine ────────────────────────────────────────────────
