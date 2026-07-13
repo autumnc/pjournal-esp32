@@ -315,7 +315,8 @@ extern "C" void app_main() {
             if (!editorInited) { screen_editor_init(ctx); editorInited = true; }
             if (key > 0) currentState = screen_editor_handle(key, ctx);
             else { screen_editor_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(50)); }
-            if (currentState != APP_EDITOR) editorInited = false;
+            // Don't reset editorInited when returning from Flomo send
+            if (currentState != APP_EDITOR && currentState != APP_SYNC_SEND_FLOMO) editorInited = false;
             break;
         }
 
