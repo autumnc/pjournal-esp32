@@ -36,8 +36,8 @@ extern "C" {
 }
 
 #define STATUS_Y (SCREEN_H - FONT_H)  // 272, separator + white bg below
-#define IME_CODE_Y (STATUS_Y - 2*FONT_H + 14)  // 230, content fills to here
-#define IME_CAND_Y (STATUS_Y - FONT_H + 14)     // 252
+#define IME_CODE_Y (STATUS_Y - 2*FONT_H + 18)  // 234, content fills to here
+#define IME_CAND_Y (STATUS_Y - FONT_H + 16)     // 254
 
 // Editor word wrap: max display cells per visual row (ASCII=1, CJK=2)
 // ASCII=14px cell, CJK=28px. Screen=400px, start at x=4 → usable 396px.
