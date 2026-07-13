@@ -38,6 +38,117 @@ static std::string jsonEscape(const std::string &s) {
     return out;
 }
 
+// Apply inline formatting: **bold**, __underline__, ==highlight==
+static std::string applyInlineFormats(const std::string &text) {
+    std::string result = text;
+
+    // **bold** -> <strong>bold</strong>
+    size_t pos = 0;
+    while ((pos = result.find("**", pos)) != std::string::npos) {
+        size_t end = result.find("**", pos + 2);
+        if (end != std::string::npos) {
+            std::string bold = result.substr(pos + 2, end - pos - 2);
+            result.replace(pos, end - pos + 2, "<strong>" + bold + "</strong>");
+            pos += 8 + bold.length(); // skip past </strong>
+        } else {
+            break;
+        }
+    }
+
+    // __underline__ -> <u>underline</u>
+    pos = 0;
+    while ((pos = result.find("__", pos)) != std::string::npos) {
+        size_t end = result.find("__", pos + 2);
+        if (end != std::string::npos) {
+            std::string underline = result.substr(pos + 2, end - pos - 2);
+            result.replace(pos, end - pos + 2, "<u>" + underline + "</u>");
+            pos += 7 + underline.length(); // skip past </u>
+        } else {
+            break;
+        }
+    }
+
+    // ==highlight== -> <mark>highlight</mark>
+    pos = 0;
+    while ((pos = result.find("==", pos)) != std::string::npos) {
+        size_t end = result.find("==", pos + 2);
+        if (end != std::string::npos) {
+            std::string highlight = result.substr(pos + 2, end - pos - 2);
+            result.replace(pos, end - pos + 2, "<mark>" + highlight + "</mark>");
+            pos += 12 + highlight.length(); // skip past </mark>
+        } else {
+            break;
+        }
+    }
+
+    return result;
+}
+
+// Convert plain text to HTML format for Flomo
+// Supports: **bold**, __underline__, ==highlight==, - list items
+static std::string textToHtml(const std::string &text) {
+    if (text.empty()) return "";
+
+    // If already starts with '<', assume it's already HTML
+    if (text[0] == '<') return text;
+
+    std::string result;
+    std::vector<std::string> lines;
+
+    // Split text into lines
+    size_t start = 0;
+    for (size_t i = 0; i <= text.length(); i++) {
+        if (i == text.length() || text[i] == '\n') {
+            if (i > start) {
+                lines.push_back(text.substr(start, i - start));
+            } else {
+                lines.push_back("");
+            }
+            start = i + 1;
+        }
+    }
+
+    bool inList = false;
+    for (const auto &line : lines) {
+        // Trim leading/trailing spaces for processing
+        size_t trimStart = line.find_first_not_of(" \t");
+        size_t trimEnd = line.find_last_not_of(" \t");
+        std::string trimmed = (trimStart == std::string::npos) ? "" :
+            line.substr(trimStart, trimEnd == std::string::npos ? std::string::npos : trimEnd - trimStart + 1);
+
+        // Check for list items (- or * followed by space)
+        bool isListItem = (trimmed.length() >= 2 && trimmed[0] == '-' && trimmed[1] == ' ') ||
+                         (trimmed.length() >= 2 && trimmed[0] == '*' && trimmed[1] == ' ');
+
+        if (isListItem) {
+            if (!inList) {
+                result += "<ul>";
+                inList = true;
+            }
+            std::string content = trimmed.substr(2);
+            content = applyInlineFormats(content);
+            result += "<li>" + content + "</li>";
+        } else {
+            if (inList) {
+                result += "</ul>";
+                inList = false;
+            }
+            if (trimmed.empty()) {
+                result += "<p><br></p>";
+            } else {
+                std::string content = applyInlineFormats(trimmed);
+                result += "<p>" + content + "</p>";
+            }
+        }
+    }
+
+    if (inList) {
+        result += "</ul>";
+    }
+
+    return result;
+}
+
 // Flomo constants
 #define FLOMO_API_BASE    "https://flomoapp.com/api/v1"
 #define FLOMO_API_KEY     "flomo_web"
@@ -294,8 +405,9 @@ FlomoResult FlomoClient::send(const std::string &text) {
     std::string token = getCachedToken();
     if (!token.empty()) {
         for (auto &chunk : chunks) {
-            std::string content = "<p>" + chunk + "\n\n#日记</p>";
-            if (createMemo(token, content)) {
+            std::string htmlContent = textToHtml(chunk);
+            htmlContent += "\n\n<p>#日记</p>";
+            if (createMemo(token, htmlContent)) {
                 success++;
             } else {
                 // Cached token failed, try re-login
@@ -314,8 +426,9 @@ FlomoResult FlomoClient::send(const std::string &text) {
         if (!token.empty()) {
             setCachedToken(token);
             for (auto &chunk : chunks) {
-                std::string content = "<p>" + chunk + "\n\n#日记</p>";
-                if (createMemo(token, content)) {
+                std::string htmlContent = textToHtml(chunk);
+                htmlContent += "\n\n<p>#日记</p>";
+                if (createMemo(token, htmlContent)) {
                     success++;
                 } else {
                     failed++;

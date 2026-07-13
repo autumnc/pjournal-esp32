@@ -7,6 +7,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <esp_bt.h>
 #include <esp_bt_main.h>
 #include <esp_bt_device.h>
@@ -68,6 +69,9 @@ static bool s_connected = false;
 static bool s_scanning = false;
 static bool s_connecting = false;  // 新增：标记正在连接中
 static uint8_t s_last_keys[MAX_KEYS] = {0};
+static uint8_t s_last_mod = 0;
+static int64_t s_key_press_time[MAX_KEYS] = {0};
+static int64_t s_last_repeat_time[MAX_KEYS] = {0};
 static esp_ble_addr_type_t s_paired_addr_type = BLE_ADDR_TYPE_RANDOM;
 
 // Device list collected during scan
@@ -171,6 +175,8 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
         s_connected = false;
         s_connecting = false;  // 连接断开
         memset(s_last_keys, 0, MAX_KEYS);
+        memset(s_key_press_time, 0, MAX_KEYS * sizeof(int64_t));
+        memset(s_last_repeat_time, 0, MAX_KEYS * sizeof(int64_t));
         if (s_self) s_self->setConnected(false);
         ESP_LOGI(TAG, "Keyboard disconnected (rsn=0x%x)", param->close.reason);
         break;
@@ -183,36 +189,70 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
         const uint8_t *keys = (len >= HID_REPORT_LEN) ? (data + 2) : (data + 1);
         int nkeys = (len >= HID_REPORT_LEN) ? 6 : ((int)len - 1);
         if (nkeys > MAX_KEYS) nkeys = MAX_KEYS;
+
+        // Track which keys are currently pressed for repeat logic
+        bool current_pressed[MAX_KEYS] = {false};
+
         for (int i = 0; i < nkeys; i++) {
             uint8_t kc = keys[i];
             if (kc == 0) continue;
+
+            // Check if this key was already pressed
             bool old = false;
-            for (int j = 0; j < MAX_KEYS; j++)
-                if (s_last_keys[j] == kc) { old = true; break; }
-            if (old) continue;
-
-            // Ctrl modifier handling
-            bool ctrl = (mod & 0x11) != 0;
-            if (ctrl && kc >= 4 && kc <= 29) {
-                // Ctrl+letter → control character (0x01-0x1A)
-                uint8_t cc = kc - 3;
-                xQueueSendToBack(s_queue, &cc, 0);
-                continue;
-            }
-            if (ctrl && kc == 44) {
-                // Ctrl+Space → IME toggle
-                uint8_t toggle = KEY_IME_TOGGLE;
-                xQueueSendToBack(s_queue, &toggle, 0);
-                continue;
+            int slot = -1;
+            for (int j = 0; j < MAX_KEYS; j++) {
+                if (s_last_keys[j] == kc) {
+                    old = true;
+                    slot = j;
+                    break;
+                }
             }
 
-            uint8_t ascii = hid_to_ascii(kc, mod);
-            if (ascii) xQueueSendToBack(s_queue, &ascii, 0);
+            // Mark as currently pressed
+            if (slot >= 0) current_pressed[slot] = true;
+
+            // If new key press, record time and send event
+            if (!old) {
+                // Find empty slot for this new key
+                for (int j = 0; j < MAX_KEYS; j++) {
+                    if (s_last_keys[j] == 0) {
+                        s_last_keys[j] = kc;
+                        s_key_press_time[j] = esp_timer_get_time();
+                        current_pressed[j] = true;
+                        break;
+                    }
+                }
+
+                // Ctrl modifier handling
+                bool ctrl = (mod & 0x11) != 0;
+                if (ctrl && kc >= 4 && kc <= 29) {
+                    // Ctrl+letter → control character (0x01-0x1A)
+                    uint8_t cc = kc - 3;
+                    xQueueSendToBack(s_queue, &cc, 0);
+                    continue;
+                }
+                if (ctrl && kc == 44) {
+                    // Ctrl+Space → IME toggle
+                    uint8_t toggle = KEY_IME_TOGGLE;
+                    xQueueSendToBack(s_queue, &toggle, 0);
+                    continue;
+                }
+
+                uint8_t ascii = hid_to_ascii(kc, mod);
+                if (ascii) xQueueSendToBack(s_queue, &ascii, 0);
+            }
         }
-        if (len >= HID_REPORT_LEN)
-            memcpy(s_last_keys, data + 2, MAX_KEYS);
-        else
-            memset(s_last_keys, 0, MAX_KEYS);
+
+        // Clear keys that were released
+        for (int i = 0; i < MAX_KEYS; i++) {
+            if (s_last_keys[i] != 0 && !current_pressed[i]) {
+                s_last_keys[i] = 0;
+                s_key_press_time[i] = 0;
+                s_last_repeat_time[i] = 0;
+            }
+        }
+
+        s_last_mod = mod;
         break;
     }
     default:
@@ -529,6 +569,52 @@ uint8_t BtKeyboard::readKey() {
 
 void BtKeyboard::flushKeys() {
     if (s_queue) xQueueReset(s_queue);
+}
+
+void BtKeyboard::checkKeyRepeat() {
+    if (!s_queue || !s_connected) return;
+
+    int64_t now = esp_timer_get_time();
+    int64_t delay_us = KEY_REPEAT_DELAY_MS * 1000;
+    int64_t interval_us = KEY_REPEAT_INTERVAL_MS * 1000;
+
+    // Check each key slot for repeat
+    for (int i = 0; i < MAX_KEYS; i++) {
+        uint8_t kc = s_last_keys[i];
+        if (kc == 0) continue;
+
+        int64_t press_time = s_key_press_time[i];
+        if (press_time == 0) continue;
+
+        int64_t elapsed = now - press_time;
+
+        // Check if key held long enough for repeat
+        if (elapsed >= delay_us) {
+            // Initialize last repeat time on first check
+            if (s_last_repeat_time[i] == 0) {
+                s_last_repeat_time[i] = press_time + delay_us;
+            }
+
+            // Send one repeat if we're past the next repeat time
+            if (now >= s_last_repeat_time[i] + interval_us) {
+                // Ctrl modifier handling for repeat
+                bool ctrl = (s_last_mod & 0x11) != 0;
+                if (ctrl && kc >= 4 && kc <= 29) {
+                    uint8_t cc = kc - 3;
+                    xQueueSendToBack(s_queue, &cc, 0);
+                } else if (ctrl && kc == 44) {
+                    uint8_t toggle = KEY_IME_TOGGLE;
+                    xQueueSendToBack(s_queue, &toggle, 0);
+                } else {
+                    uint8_t ascii = hid_to_ascii(kc, s_last_mod);
+                    if (ascii) xQueueSendToBack(s_queue, &ascii, 0);
+                }
+
+                // Update last repeat time
+                s_last_repeat_time[i] = now;
+            }
+        }
+    }
 }
 
 void BtKeyboard::savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_type, const char *name) {

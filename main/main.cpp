@@ -185,6 +185,9 @@ extern "C" void app_main() {
         int key = g_bt.readKey();
         if (key < 0) key = 0;
 
+        // Check for key repeat events
+        g_bt.checkKeyRepeat();
+
         // Global Ctrl+Space IME toggle
         if (key == KEY_IME_TOGGLE) {
             app_toggle_ime();

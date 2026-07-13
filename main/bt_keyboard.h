@@ -8,6 +8,10 @@
 
 #define MAX_BT_DEVICES 10
 
+// Key repeat timing
+#define KEY_REPEAT_DELAY_MS    500  // Initial delay before first repeat
+#define KEY_REPEAT_INTERVAL_MS 50   // Interval between repeats
+
 struct BtDeviceInfo {
     esp_bd_addr_t bda;
     esp_ble_addr_type_t addr_type;
@@ -44,6 +48,7 @@ public:
     // Keyboard input
     uint8_t readKey();
     void flushKeys();
+    void checkKeyRepeat();  // Check for key repeat events
 
     // Status
     bool isConnected() const;
