@@ -942,37 +942,48 @@ bool IME::commit(int idx, std::string &out) {
 
 bool IME::handleFullwidthPunct(int key, std::string &out) {
     // Map ASCII punctuation to fullwidth equivalents when IME is active
+    // Only convert specific punctuation, others remain half-width
     switch (key) {
     case ',':  out = "，"; return true; // ，
     case '.':  out = "。"; return true; // 。
     case '?':  out = "？"; return true; // ？
-    case '!':  out = "！"; return true; // ！
-    case ':':  out = "："; return true; // ：
     case ';':  out = "；"; return true; // ；
+    case ':':  out = "："; return true; // ：
+    case '!':  out = "！"; return true; // ！
     case '(':  out = "（"; return true; // （
     case ')':  out = "）"; return true; // ）
-    case '[':  out = "［"; return true; // ［
-    case ']':  out = "］"; return true; // ］
-    case '~':  out = "～"; return true; // ～
-    case '-':  out = "－"; return true; // －
-    case '_':  out = "＿"; return true; // ＿
-    case '+':  out = "＋"; return true; // ＋
-    case '=':  out = "＝"; return true; // ＝
-    case '@':  out = "＠"; return true; // ＠
-    case '$':  out = "￥"; return true; // ￥ (fullwidth yen/yuan)
-    case '^':  out = "＾"; return true; // ＾
-    case '%':  out = "％"; return true; // ％
-    case '&':  out = "＆"; return true; // ＆
-    case '*':  out = "＊"; return true; // ＊
-    case '<':  out = "＜"; return true; // ＜
-    case '>':  out = "＞"; return true; // ＞
-    case '\\': out = "、"; return true; // 、 (ideographic comma)
-    case '/':  out = "／"; return true; // ／
-    case '|':  out = "｜"; return true; // ｜
-    case '`':  out = "‘"; return true; // '
-    case '\'': out = "‘"; return true; // '
-    case '"':  out = "“"; return true; // "
-    default:   return false;
+    case '[':  out = "【"; return true; // 【
+    case ']':  out = "】"; return true; // 】
+    case '{':  out = "「"; return true; // 「
+    case '}':  out = "」"; return true; // 」
+    case '\\': out = "、"; return true; // 、
+    case '^':  out = "……"; return true; // ……
+    case '<':  out = "《"; return true; // 《
+    case '>':  out = "》"; return true; // 》
+    case '`':  out = "·"; return true; // ·
+    case '_':  out = "——"; return true; // ——
+    case '$':  out = "¥"; return true; // ¥
+    case '\'':
+        // Single quote pairing: first press = ‘, second press = ’
+        if (_singleQuoteOpen) {
+            out = "’";
+            _singleQuoteOpen = false;
+        } else {
+            out = "‘";
+            _singleQuoteOpen = true;
+        }
+        return true;
+    case '"':
+        // Double quote pairing: first press = “, second press = ”
+        if (_doubleQuoteOpen) {
+            out = "”";
+            _doubleQuoteOpen = false;
+        } else {
+            out = "“";
+            _doubleQuoteOpen = true;
+        }
+        return true;
+    default:   return false; // Other characters remain half-width
     }
 }
 

@@ -125,6 +125,9 @@ private:
     mutable std::string _displayCodeCache;
     mutable bool _displayCodeDirty = true;
 
+    bool _singleQuoteOpen = false;  // Track single quote pairing state
+    bool _doubleQuoteOpen = false;  // Track double quote pairing state
+
     void reset();
     void lookup();
     void buildPage();

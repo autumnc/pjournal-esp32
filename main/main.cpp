@@ -425,7 +425,7 @@ extern "C" void app_main() {
             vTaskDelay(pdMS_TO_TICKS(2000));
 
             if (!wifiWasConnected) g_wifi.disconnect();
-            currentState = APP_MAIN;
+            currentState = APP_EDITOR;  // Return to editor instead of main screen
             break;
         }
 
