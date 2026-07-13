@@ -9,6 +9,7 @@
 #include "ime/IME.h"
 #include "pjournal_app.h"
 #include "u8g2_st7305.h"
+#include "pcf85063.h"
 
 #include <esp_log.h>
 #include <esp_system.h>
@@ -16,6 +17,7 @@
 #include <nvs_flash.h>
 #include <esp_sntp.h>
 #include <driver/gpio.h>
+#include <sys/time.h>
 #include <cstdio>
 
 static const char *TAG = "Main";
@@ -82,6 +84,13 @@ extern "C" void app_main() {
     // Initialize settings (stored on SD card)
     g_settings.begin();
 
+    // Initialize RTC
+    if (g_rtc.begin()) {
+        ESP_LOGI(TAG, "PCF85063 RTC initialized");
+    } else {
+        ESP_LOGW(TAG, "PCF85063 RTC not available or invalid time");
+    }
+
     // Initialize battery ADC
     battery_init();
 
@@ -108,12 +117,21 @@ extern "C" void app_main() {
         tzset();
     }
 
-    // Auto sync time via NTP on every boot
-    // (ESP32-S3 has no battery-backed RTC — always sync in case time is stale)
+    // Auto sync time via NTP on every boot (RTC has no battery, resets on power cycle)
     {
         std::string ssid = g_settings.wifiSsid();
         if (ssid.empty()) {
-            ESP_LOGI(TAG, "WiFi not configured, skipping NTP sync");
+            ESP_LOGI(TAG, "WiFi not configured, trusting RTC time if valid");
+            // Fall back to RTC time
+            time_t rtcTime = g_rtc.getTime();
+            if (rtcTime > 1704067200) {
+                struct timeval tv = {(time_t)rtcTime, 0};
+                settimeofday(&tv, NULL);
+                struct tm *tm = localtime(&rtcTime);
+                char ts[32];
+                strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+                ESP_LOGI(TAG, "Time loaded from RTC: %s", ts);
+            }
         } else {
             ESP_LOGI(TAG, "Syncing time via NTP...");
             std::string ntp = g_settings.ntpServer();
@@ -129,24 +147,46 @@ extern "C" void app_main() {
                 esp_sntp_stop();
                 esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
                 esp_sntp_setservername(0, ntp.c_str());
+                esp_sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
                 esp_sntp_init();
 
-                time_t now;
+                time_t now = 0;
                 for (int i = 0; i < 100; i++) {
                     vTaskDelay(pdMS_TO_TICKS(200));
-                    time(&now);
-                    if (now > 100000) break;
+                    if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+                        time(&now);
+                        break;
+                    }
                 }
-                if (now > 100000) {
+                if (now > 1704067200) {
                     struct tm *tm = localtime(&now);
                     char ts[32];
                     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
                     ESP_LOGI(TAG, "Time synced: %s", ts);
+
+                    // Sync to RTC (for deep sleep timekeeping)
+                    if (g_rtc.setTime(now)) {
+                        ESP_LOGI(TAG, "Time written to RTC");
+                    } else {
+                        ESP_LOGW(TAG, "Failed to write time to RTC");
+                    }
                 } else {
                     ESP_LOGW(TAG, "NTP sync timeout (%s)", ntp.c_str());
+                    // Fall back to RTC time
+                    time_t rtcTime = g_rtc.getTime();
+                    if (rtcTime > 1704067200) {
+                        struct timeval tv = {(time_t)rtcTime, 0};
+                        settimeofday(&tv, NULL);
+                    }
                 }
             } else {
                 ESP_LOGW(TAG, "WiFi connection failed for NTP sync");
+                // Fall back to RTC time
+                time_t rtcTime = g_rtc.getTime();
+                if (rtcTime > 1704067200) {
+                    struct timeval tv = {(time_t)rtcTime, 0};
+                    settimeofday(&tv, NULL);
+                }
             }
             g_wifi.disconnect();
         }

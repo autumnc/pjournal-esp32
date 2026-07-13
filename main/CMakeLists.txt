@@ -9,6 +9,7 @@ idf_component_register(SRCS
     "webdav_client.cpp"
     "flomo_client.cpp"
     "deepseek_client.cpp"
+    "pcf85063.cpp"
     "ime/IME.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES

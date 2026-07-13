@@ -9,6 +9,7 @@
 #include "deepseek_client.h"
 #include "ime/IME.h"
 #include "builtin_prompts.h"
+#include "pcf85063.h"
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -555,10 +556,12 @@ void screen_main_init() {
 
 AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = 28;
-    ui_draw_text_centered(y, "个人日记", false, true); y += FONT_H;
 
-    // Week tracker — pixel-perfect column alignment
+    // Current date for title and week tracker
     time_t now_t; time(&now_t); struct tm *tm = localtime(&now_t);
+    char dateStr[32]; strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm);
+    char title[64]; snprintf(title, sizeof(title), "个人日记 %s", dateStr);
+    ui_draw_text_centered(y, title, false, true); y += FONT_H;
     int daysSinceMon = (tm->tm_wday == 0) ? 6 : tm->tm_wday - 1;
     time_t monday = now_t - daysSinceMon * 86400;
     const char *dnames[7] = {"一","二","三","四","五","六","日"};
@@ -1164,19 +1167,24 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     esp_sntp_stop();
                     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
                     esp_sntp_setservername(0, ntp.c_str());
+                    esp_sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
                     esp_sntp_init();
                     setenv("TZ", tz.c_str(), 1);
                     tzset();
                     time_t now = 0;
                     for (int i = 0; i < 100; i++) {
                         vTaskDelay(pdMS_TO_TICKS(200));
-                        time(&now);
-                        if (now > 100000) break;
+                        if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+                            time(&now);
+                            break;
+                        }
                     }
-                    if (now > 100000) {
+                    if (now > 1704067200) {
                         struct tm *tm = localtime(&now);
                         char ts[64];
                         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+                        // Sync to RTC
+                        g_rtc.setTime(now);
                         char msg[80];
                         snprintf(msg, sizeof(msg), "同步成功: %s", ts);
                         ui_clear(); ui_show_message_centered(msg);
