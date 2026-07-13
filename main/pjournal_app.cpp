@@ -36,7 +36,7 @@ extern "C" {
 }
 
 #define STATUS_Y (SCREEN_H - FONT_H)  // 272, separator + white bg below
-#define IME_CODE_Y (STATUS_Y - 2*FONT_H + 14)  // 223, content fills to here
+#define IME_CODE_Y (STATUS_Y - 2*FONT_H + 14)  // 230, content fills to here
 #define IME_CAND_Y (STATUS_Y - FONT_H + 14)     // 252
 
 // Editor word wrap: max display cells per visual row (ASCII=1, CJK=2)
@@ -392,9 +392,14 @@ static void drawEditor() {
     }
 
     // Adjust scroll to keep cursor visible
+    int normalVisibleVrows = (STATUS_Y - y + FONT_H - 1) / FONT_H;
+    // When IME composing, bottom 2 lines are reserved for IME area
+    int effectiveVisibleVrows = composing ? (normalVisibleVrows - 2) : normalVisibleVrows;
+    if (effectiveVisibleVrows < 1) effectiveVisibleVrows = 1;
+
     if (cursorVR < g_editor.scroll) g_editor.scroll = cursorVR;
-    if (cursorVR >= g_editor.scroll + visibleVrows)
-        g_editor.scroll = cursorVR - visibleVrows + 1;
+    if (cursorVR >= g_editor.scroll + effectiveVisibleVrows)
+        g_editor.scroll = cursorVR - effectiveVisibleVrows + 1;
     if (g_editor.scroll < 0) g_editor.scroll = 0;
 
     // Draw visible visual rows
@@ -439,7 +444,7 @@ static void drawEditor() {
         char pageInfo[32];
         snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
         int sepY = IME_CODE_Y - 4;
-        int codeBaseline = sepY - 4;
+        int codeBaseline = sepY - 7;
         {
             int cw = g_font.textWidth(code.c_str()) + 8;
             u8g2_SetDrawColor(g_u8g2, 1);
