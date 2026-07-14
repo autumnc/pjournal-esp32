@@ -216,7 +216,7 @@ static struct { int selection = 0; int scroll = 0; bool scanning = true;
 static struct { std::vector<std::string> lines; int scroll = 0; std::string filename;
     std::string dateStr; } g_viewer;
 static struct { int selection = 0; int scroll = 0; bool editing = false;
-    std::string editBuffer; int editCursor = 0; } g_settingsState;
+    std::string editBuffer; int editCursor = 0; bool imeActive = false; } g_settingsState;
 
 // ── UI Helpers ─────────────────────────────────────────────────────────
 void ui_clear() {
@@ -1047,24 +1047,134 @@ void screen_settings_init() {
     g_settingsState.editing = false;
     g_settingsState.editBuffer.clear();
     g_settingsState.editCursor = 0;
+    g_settingsState.imeActive = false;
 }
 
 AppState screen_settings_handle(int key, ScreenContext &ctx) {
     // ── Edit mode ──────────────────────────────────────────────────────
     if (g_settingsState.editing) {
+        // Handle IME input
+        if (g_settingsState.imeActive && key != 0) {
+            std::string imeOut;
+            if (g_ime.handleKey(key, imeOut)) {
+                if (!imeOut.empty()) {
+                    g_settingsState.editBuffer.insert(g_settingsState.editCursor, imeOut);
+                    g_settingsState.editCursor += (int)imeOut.length();
+                }
+                // Redraw with IME status
+                ui_clear();
+                auto &f = SETTINGS_FIELDS[g_settingsState.selection];
+                ui_draw_text_centered(28, f.label, false, true);
+                u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
+
+                // Draw edit buffer
+                std::string display = g_settingsState.editBuffer;
+                if (f.masked) display = std::string(display.length(), '*');
+                if (display.empty()) display = " ";
+                int textY = FONT_H + 32;
+                int cx = g_font.textWidth(display.substr(0, g_settingsState.editCursor).c_str());
+                ui_draw_text(4, textY, display.c_str());
+
+                // Draw cursor
+                std::string cursorChar = display.substr(g_settingsState.editCursor, 1);
+                int cw = cursorChar.empty() || cursorChar == " " ? 8 : g_font.textWidth(cursorChar.c_str());
+                u8g2_SetDrawColor(g_u8g2, 0);
+                u8g2_DrawBox(g_u8g2, 4 + cx, textY + 4, cw, 3);
+                u8g2_SetDrawColor(g_u8g2, 1);
+
+                // Draw IME status if active (horizontal layout like editor)
+                if (g_ime.composing()) {
+                    std::string code = g_ime.displayCode();
+                    auto &cands = g_ime.candidates();
+                    int pageSize = g_ime.pageSize();
+                    int curPage = g_ime.currentPage();
+                    int total = g_ime.totalCandidates();
+                    int totalPages = (total + pageSize - 1) / pageSize;
+                    if (totalPages < 1) totalPages = 1;
+
+                    // Code line with page indicator
+                    char pageInfo[32];
+                    snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
+                    int imeY = SCREEN_H - 67;  // Moved up 7px
+                    u8g2_DrawBox(g_u8g2, 0, imeY, SCREEN_W, 67);
+                    u8g2_SetDrawColor(g_u8g2, 1);
+
+                    // Draw code (white box, black text)
+                    int cw = g_font.textWidth(code.c_str()) + 8;
+                    u8g2_DrawBox(g_u8g2, 4, imeY + 4, cw, FONT_H);
+                    u8g2_SetDrawColor(g_u8g2, 0);
+                    g_font.drawText(4, imeY + 4 + FONT_H - 6, code.c_str(), false);
+                    u8g2_SetDrawColor(g_u8g2, 1);
+
+                    // Draw page indicator
+                    int tw = g_font.textWidth(pageInfo);
+                    int pw = tw + 8;
+                    int px = SCREEN_W - pw - 4;
+                    u8g2_DrawBox(g_u8g2, px, imeY + 4, pw, FONT_H);
+                    u8g2_SetDrawColor(g_u8g2, 0);
+                    g_font.drawText(px + 4, imeY + 4 + FONT_H - 6, pageInfo, false);
+                    u8g2_SetDrawColor(g_u8g2, 1);
+
+                    // Separator line
+                    u8g2_SetDrawColor(g_u8g2, 0);
+                    u8g2_DrawHLine(g_u8g2, 0, imeY + FONT_H + 4, SCREEN_W);
+                    u8g2_SetDrawColor(g_u8g2, 1);
+
+                    // Candidates inline (horizontal)
+                    std::string candLine;
+                    for (int i = 0; i < (int)cands.size(); i++) {
+                        char idx[16];
+                        snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
+                        std::string part = std::string(" ") + idx + cands[i];
+                        int curW = g_font.textWidth(candLine.c_str());
+                        int partW = g_font.textWidth(part.c_str());
+                        if (curW + partW + 8 > SCREEN_W) break;
+                        candLine += part;
+                    }
+                    if (!candLine.empty()) {
+                        int candW = g_font.textWidth(candLine.c_str()) + 8;
+                        u8g2_DrawBox(g_u8g2, 4, imeY + FONT_H + 8, candW, FONT_H);
+                        u8g2_SetDrawColor(g_u8g2, 0);
+                        g_font.drawText(4, imeY + FONT_H + 8 + FONT_H - 6, candLine.c_str(), false);
+                        u8g2_SetDrawColor(g_u8g2, 0);
+                    }
+                }
+
+                ui_commit();
+                return APP_SETTINGS;
+            }
+        }
+
+        if (key == KEY_IME_TOGGLE) {
+            g_settingsState.imeActive = !g_settingsState.imeActive;
+            g_ime.setActive(g_settingsState.imeActive);
+            key = 0;
+        }
+
         if (key == 0x1B) {
             g_settingsState.editing = false;
             g_settingsState.editBuffer.clear();
             g_settingsState.editCursor = 0;
+            g_settingsState.imeActive = false;
+            g_ime.setActive(false);
         } else if (key == 0x0A || key == 0x0D) {
             auto &f = SETTINGS_FIELDS[g_settingsState.selection];
             g_settings.setString(f.key, g_settingsState.editBuffer);
             g_settingsState.editing = false;
             g_settingsState.editBuffer.clear();
             g_settingsState.editCursor = 0;
+            g_settingsState.imeActive = false;
+            g_ime.setActive(false);
         } else if (key == 0x7F || key == 0x08) {
+            // UTF-8 aware backspace
             if (g_settingsState.editCursor > 0) {
-                g_settingsState.editBuffer.erase(--g_settingsState.editCursor, 1);
+                int prev = g_settingsState.editCursor - 1;
+                // Move back over continuation bytes
+                while (prev > 0 && ((unsigned char)g_settingsState.editBuffer[prev] & 0xC0) == 0x80)
+                    prev--;
+                // Delete the whole UTF-8 character
+                g_settingsState.editBuffer.erase(prev, g_settingsState.editCursor - prev);
+                g_settingsState.editCursor = prev;
             }
         } else if (key == KEY_LEFT) {
             if (g_settingsState.editCursor > 0) {
@@ -1090,20 +1200,123 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         auto &f = SETTINGS_FIELDS[g_settingsState.selection];
         ui_draw_text_centered(28, f.label, false, true);
         u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
+
         std::string display = g_settingsState.editBuffer;
         if (f.masked) display = std::string(display.length(), '*');
-        if (display.empty()) display = " ";
+
+        // Word-wrap display text
         int textY = FONT_H + 32;
-        int cx = g_font.textWidth(display.substr(0, g_settingsState.editCursor).c_str());
-        ui_draw_text(4, textY, display.c_str());
-        // Underline cursor at bottom of character cell
-        {
-            std::string cursorChar = display.substr(g_settingsState.editCursor, 1);
-            int cw = cursorChar.empty() || cursorChar == " " ? 8 : g_font.textWidth(cursorChar.c_str());
-            u8g2_SetDrawColor(g_u8g2, 0);
-            u8g2_DrawBox(g_u8g2, 4 + cx, textY + 4, cw, 3);
-            u8g2_SetDrawColor(g_u8g2, 1);
+        int maxW = SCREEN_W - 8;  // 4px margins on each side
+        std::vector<std::pair<int,int>> lines;  // start, end in display string
+
+        int lineStart = 0;
+        while (lineStart < (int)display.length()) {
+            int lineEnd = lineStart;
+            int lastGood = lineStart;
+            // Find how many chars fit
+            while (lineEnd <= (int)display.length()) {
+                int w = g_font.textWidth(display.substr(lineStart, lineEnd - lineStart).c_str());
+                if (w > maxW) {
+                    lineEnd = lastGood;
+                    break;
+                }
+                lastGood = lineEnd;
+                // UTF-8: move to next char
+                lineEnd++;
+                while (lineEnd < (int)display.length() &&
+                       ((unsigned char)display[lineEnd] & 0xC0) == 0x80)
+                    lineEnd++;
+            }
+            if (lineEnd <= lineStart) lineEnd = lastGood;
+            if (lineEnd <= lineStart) lineEnd = display.length();
+            lines.push_back({lineStart, lineEnd});
+            lineStart = lineEnd;
         }
+
+        // Draw all lines
+        for (int i = 0; i < (int)lines.size(); i++) {
+            std::string lineText = display.substr(lines[i].first, lines[i].second - lines[i].first);
+            if (lineText.empty() && i == 0) lineText = " ";
+            ui_draw_text(4, textY + i * FONT_H, lineText.c_str());
+        }
+
+        // Find cursor position (which line, which x offset)
+        int cursorLine = 0;
+        int cursorX = 0;
+        for (int i = 0; i < (int)lines.size(); i++) {
+            if (g_settingsState.editCursor >= lines[i].first && g_settingsState.editCursor <= lines[i].second) {
+                cursorLine = i;
+                std::string beforeCursor = display.substr(lines[i].first, g_settingsState.editCursor - lines[i].first);
+                cursorX = g_font.textWidth(beforeCursor.c_str());
+                break;
+            }
+        }
+
+        // Draw cursor
+        std::string cursorChar = display.substr(g_settingsState.editCursor, 1);
+        int cw = cursorChar.empty() || cursorChar == " " ? 8 : g_font.textWidth(cursorChar.c_str());
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawBox(g_u8g2, 4 + cursorX, textY + cursorLine * FONT_H + 4, cw, 3);
+        u8g2_SetDrawColor(g_u8g2, 1);
+
+        // Draw IME status if active (horizontal layout like editor)
+        if (g_settingsState.imeActive && g_ime.composing()) {
+            std::string code = g_ime.displayCode();
+            auto &cands = g_ime.candidates();
+            int pageSize = g_ime.pageSize();
+            int curPage = g_ime.currentPage();
+            int total = g_ime.totalCandidates();
+            int totalPages = (total + pageSize - 1) / pageSize;
+            if (totalPages < 1) totalPages = 1;
+
+            // Code line with page indicator
+            char pageInfo[32];
+            snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
+            int imeY = SCREEN_H - 67;  // Moved up 7px
+            u8g2_DrawBox(g_u8g2, 0, imeY, SCREEN_W, 67);
+            u8g2_SetDrawColor(g_u8g2, 1);
+
+            // Draw code (white box, black text)
+            int cw = g_font.textWidth(code.c_str()) + 8;
+            u8g2_DrawBox(g_u8g2, 4, imeY + 4, cw, FONT_H);
+            u8g2_SetDrawColor(g_u8g2, 0);
+            g_font.drawText(4, imeY + 4 + FONT_H - 6, code.c_str(), false);
+            u8g2_SetDrawColor(g_u8g2, 1);
+
+            // Draw page indicator
+            int tw = g_font.textWidth(pageInfo);
+            int pw = tw + 8;
+            int px = SCREEN_W - pw - 4;
+            u8g2_DrawBox(g_u8g2, px, imeY + 4, pw, FONT_H);
+            u8g2_SetDrawColor(g_u8g2, 0);
+            g_font.drawText(px + 4, imeY + 4 + FONT_H - 6, pageInfo, false);
+            u8g2_SetDrawColor(g_u8g2, 1);
+
+            // Separator line
+            u8g2_SetDrawColor(g_u8g2, 0);
+            u8g2_DrawHLine(g_u8g2, 0, imeY + FONT_H + 4, SCREEN_W);
+            u8g2_SetDrawColor(g_u8g2, 1);
+
+            // Candidates inline (horizontal)
+            std::string candLine;
+            for (int i = 0; i < (int)cands.size(); i++) {
+                char idx[16];
+                snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
+                std::string part = std::string(" ") + idx + cands[i];
+                int curW = g_font.textWidth(candLine.c_str());
+                int partW = g_font.textWidth(part.c_str());
+                if (curW + partW + 8 > SCREEN_W) break;
+                candLine += part;
+            }
+            if (!candLine.empty()) {
+                int candW = g_font.textWidth(candLine.c_str()) + 8;
+                u8g2_DrawBox(g_u8g2, 4, imeY + FONT_H + 8, candW, FONT_H);
+                u8g2_SetDrawColor(g_u8g2, 0);
+                g_font.drawText(4, imeY + FONT_H + 8 + FONT_H - 6, candLine.c_str(), false);
+                u8g2_SetDrawColor(g_u8g2, 0);
+            }
+        }
+
         ui_commit();
         return APP_SETTINGS;
     }
@@ -1200,6 +1413,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.editBuffer = g_settings.getString(f.key);
             g_settingsState.editCursor = (int)g_settingsState.editBuffer.length();
             g_settingsState.editing = true;
+            g_settingsState.imeActive = false;  // Start with IME off, user can toggle with Ctrl+Space
         }
     }
 

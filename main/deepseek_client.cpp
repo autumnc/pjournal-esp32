@@ -11,21 +11,50 @@ DeepseekClient g_deepseek;
 
 #define DEEPSEEK_API_URL "https://api.deepseek.com/chat/completions"
 
+// Helper: escape string for JSON (handles quotes, backslashes, and control chars)
+static std::string json_escape(const std::string &s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char c = s[i];
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                // Control characters (0x00-0x1F) need \uXXXX
+                if (c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
 DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
     std::string apiKey = g_settings.deepseekKey();
     if (apiKey.empty()) {
         return {false, "请先在设置中配置Deepseek Key"};
     }
 
-    // Build request body
+    // Build request body with proper JSON escaping
+    std::string escapedContext = json_escape(userContext);
     char body[1024];
     int n = snprintf(body, sizeof(body),
         "{\"model\":\"deepseek-chat\",\"messages\":["
-        "{\"role\":\"system\",\"content\":\"你是一个日记写作助手。根据用户的背景信息，"
-        "生成一个简短的日记写作提示（不超过42字），引导用户记录今天的生活。\"},"
+        "{\"role\":\"system\",\"content\":\"你是一个日记写作助手。根据用户的背景和爱好，"
+        "运用这些爱好领域内的专业知识、概念、理论和思维方式，生成一个富有洞见和启发性的"
+        "日记写作提示（不超过56字），引导用户用该领域的视角观察和记录今天的生活。\"},"
         "{\"role\":\"user\",\"content\":\"我的背景：%s。请生成一个写作提示。\"}],"
-        "\"max_tokens\":100,\"temperature\":0.7}",
-        userContext.c_str());
+        "\"max_tokens\":100,\"temperature\":0.9}",
+        escapedContext.c_str());
     if (n >= (int)sizeof(body)) {
         ESP_LOGE(TAG, "Request body truncated (%d >= %d), userContext too long", n, (int)sizeof(body));
         return {false, "背景信息过长"};
@@ -50,6 +79,7 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
     DeepseekResult result = {false, "API请求失败"};
 
     esp_err_t err = esp_http_client_open(client, (int)strlen(body));
+    ESP_LOGI(TAG, "Request body: %s", body);
     if (err == ESP_OK) {
         esp_http_client_write(client, body, (int)strlen(body));
         int content_length = esp_http_client_fetch_headers(client);
@@ -89,7 +119,16 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
                 }
             }
         } else {
-            ESP_LOGW(TAG, "API returned status %d", status);
+            // Read error response body for debugging
+            char buf[512];
+            int len;
+            std::string errorResponse;
+            while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
+                buf[len] = 0;
+                errorResponse += buf;
+                if (errorResponse.size() > 1024) break;
+            }
+            ESP_LOGW(TAG, "API returned status %d, response: %s", status, errorResponse.c_str());
             result.content = "API返回错误";
         }
     } else {

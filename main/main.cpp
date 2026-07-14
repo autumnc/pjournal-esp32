@@ -228,8 +228,8 @@ extern "C" void app_main() {
         // Check for key repeat events
         g_bt.checkKeyRepeat();
 
-        // Global Ctrl+Space IME toggle
-        if (key == KEY_IME_TOGGLE) {
+        // Global Ctrl+Space IME toggle (only for editor)
+        if (key == KEY_IME_TOGGLE && currentState == APP_EDITOR) {
             app_toggle_ime();
             key = 0;
         }
