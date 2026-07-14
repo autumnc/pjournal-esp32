@@ -103,7 +103,28 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
                 for (auto i = contentKey; i < response.size(); i++) {
                     char c = response[i];
                     if (escaped) {
-                        content += c;
+                        // Handle JSON escape sequences
+                        switch (c) {
+                            case '"': content += '"'; break;
+                            case '\\': content += '\\'; break;
+                            case '/': content += '/'; break;
+                            case 'b': content += '\b'; break;
+                            case 'f': content += '\f'; break;
+                            case 'n': content += '\n'; break;
+                            case 'r': content += '\r'; break;
+                            case 't': content += '\t'; break;
+                            case 'u': {
+                                // Unicode escape \uXXXX - simplified: just skip 4 hex digits
+                                // For now, append a placeholder (proper handling would need UTF-8 encoding)
+                                if (i + 4 < response.size()) {
+                                    i += 4; // Skip XXXX
+                                    content += '?'; // Placeholder for unicode
+                                }
+                                break;
+                            }
+                            default:
+                                content += c; // Unknown escape, keep as-is
+                        }
                         escaped = false;
                     } else if (c == '\\') {
                         escaped = true;

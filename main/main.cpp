@@ -170,9 +170,14 @@ extern "C" void app_main() {
                     } else {
                         ESP_LOGW(TAG, "Failed to write time to RTC");
                     }
+
+                    // Stop SNTP polling to save power
+                    esp_sntp_stop();
+                    ESP_LOGI(TAG, "SNTP stopped");
                 } else {
                     ESP_LOGW(TAG, "NTP sync timeout (%s)", ntp.c_str());
-                    // Fall back to RTC time
+                    // Stop SNTP and fall back to RTC time
+                    esp_sntp_stop();
                     time_t rtcTime = g_rtc.getTime();
                     if (rtcTime > 1704067200) {
                         struct timeval tv = {(time_t)rtcTime, 0};

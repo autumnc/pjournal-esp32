@@ -540,7 +540,10 @@ static AppState finishEditor(ScreenContext &ctx) {
         fullText = headerStr + "提示词: " + g_editor.promptText + "\n\n" + text;
     else
         fullText = headerStr + "自由写作\n\n" + text;
-    g_journal.saveEntry(fullText);
+
+    if (!g_journal.saveEntry(fullText)) {
+        ctx.statusMessage = "保存失败，请检查SD卡";
+    }
     ctx.nextState = APP_MAIN;
     return APP_MAIN;
 }
@@ -1398,10 +1401,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
                         // Sync to RTC
                         g_rtc.setTime(now);
+                        // Stop SNTP polling to save power
+                        esp_sntp_stop();
                         char msg[80];
                         snprintf(msg, sizeof(msg), "同步成功: %s", ts);
                         ui_clear(); ui_show_message_centered(msg);
                     } else {
+                        esp_sntp_stop();
                         ui_clear(); ui_show_message_centered("时间同步失败");
                     }
                     vTaskDelay(pdMS_TO_TICKS(2000));
