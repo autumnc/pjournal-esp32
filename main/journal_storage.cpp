@@ -154,7 +154,12 @@ std::vector<JournalEntry> JournalStorage::listEntries() {
                     while (start < body.size()) {
                         size_t nl = body.find('\n', start);
                         std::string line = (nl != std::string::npos) ? body.substr(start, nl - start) : body.substr(start);
-                        if (!line.empty() && line.find("日期:") != 0 && line.find("字数:") != 0) {
+                        // Skip metadata lines and prompt label
+                        if (!line.empty() &&
+                            line.find("日期:") != 0 &&
+                            line.find("字数:") != 0 &&
+                            line.find("提示词:") != 0 &&
+                            line.find("自由写作") == std::string::npos) {
                             preview_text = line;
                             break;
                         }
