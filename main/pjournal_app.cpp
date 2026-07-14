@@ -858,7 +858,9 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
         std::string dateDisplay;
         if (e.filename.length() >= 10) dateDisplay = e.filename.substr(0, 10);
         else dateDisplay = e.date;
-        char buf[64]; snprintf(buf, sizeof(buf), "%s %s", dateDisplay.c_str(), e.title.c_str());
+        std::string preview = e.preview.empty() ? e.title : e.preview;
+        char buf[80];
+        snprintf(buf, sizeof(buf), "%s %s", dateDisplay.c_str(), preview.c_str());
         ui_draw_text(8, y + i * FONT_H, buf, sel);
     }
     ui_commit();
