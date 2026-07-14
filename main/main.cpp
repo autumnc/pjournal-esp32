@@ -352,7 +352,7 @@ extern "C" void app_main() {
         switch (currentState) {
         case APP_MAIN:
             if (key > 0) currentState = screen_main_handle(key, ctx);
-            else { screen_main_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(50)); }
+            else { screen_main_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(200)); }  // 200ms for power saving
             break;
 
         case APP_EDITOR: {
