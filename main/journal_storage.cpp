@@ -124,10 +124,21 @@ std::vector<JournalEntry> JournalStorage::listEntries() {
         e.filename = fn;
         e.date = fn.substr(0, 10);
 
-        // Read and extract preview
-        std::string content = readEntry(fn);
+        // Read only first 512 bytes for preview extraction (performance optimization)
+        std::string content;
+        std::string path = basePath() + "/" + fn;
+        FILE *f = fopen(path.c_str(), "r");
+        if (f) {
+            char buf[512];
+            int len = fread(buf, 1, sizeof(buf) - 1, f);
+            if (len > 0) {
+                buf[len] = 0;
+                content = buf;
+            }
+            fclose(f);
+        }
+
         if (!content.empty()) {
-            e.full_text = content;
             size_t pos = content.find('\n');
             if (pos != std::string::npos) {
                 std::string first = content.substr(0, pos);
@@ -136,13 +147,13 @@ std::vector<JournalEntry> JournalStorage::listEntries() {
                 else if (first.find("自由写作") != std::string::npos)
                     e.title = "自由写作";
                 size_t body_start = content.find("\n\n");
-                if (body_start != std::string::npos) {
+                if (body_start != std::string::npos && body_start < content.size()) {
                     std::string body = content.substr(body_start + 2);
                     std::string preview_text;
                     size_t start = 0;
                     while (start < body.size()) {
                         size_t nl = body.find('\n', start);
-                        std::string line = body.substr(start, nl - start);
+                        std::string line = (nl != std::string::npos) ? body.substr(start, nl - start) : body.substr(start);
                         if (!line.empty() && line.find("日期:") != 0 && line.find("字数:") != 0) {
                             preview_text = line;
                             break;

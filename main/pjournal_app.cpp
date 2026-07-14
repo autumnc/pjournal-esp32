@@ -290,6 +290,33 @@ void ui_show_message_centered(const char *msg) {
     ui_commit();
 }
 
+// ── WiFi helper functions ─────────────────────────────────────────────
+static bool ensure_wifi_connected() {
+    if (g_wifi.isConnected()) return true;
+
+    std::string ssid = g_settings.wifiSsid();
+    std::string pass = g_settings.wifiPassword();
+    if (ssid.empty()) return false;
+
+    g_wifi.begin();
+    if (!g_wifi.connect(ssid.c_str(), pass.c_str())) {
+        return false;
+    }
+
+    // Wait up to 10s for connection
+    for (int i = 0; i < 100; i++) {
+        if (g_wifi.isConnected()) return true;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return false;
+}
+
+static void restore_wifi_state(bool wasConnected) {
+    if (!wasConnected) {
+        g_wifi.disconnect();
+    }
+}
+
 // ── Word/body helpers ──────────────────────────────────────────────────
 // Count visible characters (non-whitespace). Each visible char = 1 count,
 // suitable for Chinese text (字数统计).
@@ -669,34 +696,29 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == 0x10) { // Ctrl+P - AI generate prompt via Deepseek
-        // Auto-connect WiFi if needed
         bool wifiWasConnected = g_wifi.isConnected();
-        if (!wifiWasConnected) {
-            std::string ssid = g_settings.wifiSsid();
-            std::string pass = g_settings.wifiPassword();
-            if (!ssid.empty()) {
-                g_wifi.begin();
-                g_wifi.connect(ssid.c_str(), pass.c_str());
+        if (ensure_wifi_connected()) {
+            g_editor.promptMode = true;
+            ui_clear();
+            ui_show_message_centered("AI生成提示中...");
+            std::string context;
+            std::string exp = g_settings.personalExperience();
+            std::string hob = g_settings.personalHobbies();
+            if (!exp.empty()) context += "我的经历:" + exp + ";";
+            if (!hob.empty()) context += "我的爱好:" + hob + ";";
+            if (context.empty()) context = "一个普通用户";
+            auto result = g_deepseek.generatePrompt(context);
+            if (result.success && !result.content.empty()) {
+                g_editor.promptText = result.content;
+            } else if (g_editor.promptText.empty()) {
+                g_editor.promptText = "今天发生了什么？";
             }
+        } else {
+            ui_clear();
+            ui_show_message_centered("WiFi连接失败");
+            vTaskDelay(pdMS_TO_TICKS(2000));
         }
-
-        g_editor.promptMode = true;
-        ui_clear();
-        ui_show_message_centered("AI生成提示中...");
-        std::string context;
-        std::string exp = g_settings.personalExperience();
-        std::string hob = g_settings.personalHobbies();
-        if (!exp.empty()) context += "我的经历:" + exp + ";";
-        if (!hob.empty()) context += "我的爱好:" + hob + ";";
-        if (context.empty()) context = "一个普通用户";
-        auto result = g_deepseek.generatePrompt(context);
-        if (result.success && !result.content.empty()) {
-            g_editor.promptText = result.content;
-        } else if (g_editor.promptText.empty()) {
-            g_editor.promptText = "今天发生了什么？";
-        }
-
-        if (!wifiWasConnected) g_wifi.disconnect();
+        restore_wifi_state(wifiWasConnected);
         ui_clear(); drawEditor(); ui_commit();
         return APP_EDITOR;
     }
