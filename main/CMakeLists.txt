@@ -10,6 +10,7 @@ idf_component_register(SRCS
     "flomo_client.cpp"
     "deepseek_client.cpp"
     "pcf85063.cpp"
+    "json_utils.cpp"
     "ime/IME.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES

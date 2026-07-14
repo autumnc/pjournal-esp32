@@ -1,5 +1,6 @@
 #include "flomo_client.h"
 #include "settings_manager.h"
+#include "json_utils.h"
 #include <cstring>
 #include <cstdio>
 #include <ctime>
@@ -11,32 +12,6 @@
 
 static const char *TAG = "Flomo";
 FlomoClient g_flomo;
-
-// JSON string escaping: escapes ", \, newline, tab, and control chars
-static std::string jsonEscape(const std::string &s) {
-    std::string out;
-    out.reserve(s.length() + 16);
-    for (size_t i = 0; i < s.length(); i++) {
-        char c = s[i];
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if ((unsigned char)c < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-                break;
-        }
-    }
-    return out;
-}
 
 // Apply inline formatting: **bold**, __underline__, ==highlight==
 static std::string applyInlineFormats(const std::string &text) {
@@ -201,7 +176,7 @@ std::string FlomoClient::login() {
         "\"wechat_oa_open_id\":\"\",\"timestamp\":\"%s\","
         "\"api_key\":\"%s\",\"app_version\":\"%s\","
         "\"platform\":\"%s\",\"webp\":\"1\",\"sign\":\"%s\"}",
-        jsonEscape(email_).c_str(), jsonEscape(password_).c_str(), ts,
+        json_escape(email_).c_str(), json_escape(password_).c_str(), ts,
         FLOMO_API_KEY, FLOMO_APP_VERSION, FLOMO_PLATFORM, sign.c_str());
 
     esp_http_client_config_t cfg = {};
@@ -304,7 +279,7 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
     std::string sign = generateSign(params);
 
     char body[2048];
-    std::string escapedContent = jsonEscape(content);
+    std::string escapedContent = json_escape(content);
     int needed = snprintf(nullptr, 0,
         "{\"timestamp\":\"%s\",\"api_key\":\"%s\",\"app_version\":\"%s\","
         "\"platform\":\"%s\",\"webp\":\"1\",\"content\":\"%s\","
