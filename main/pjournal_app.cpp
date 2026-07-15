@@ -226,9 +226,19 @@ static struct { int selection = 0; int scroll = 0; bool scanning = true;
     bool connecting = false; int64_t conn_start_ms = 0;
     char statusMsg[64]; } g_btState;
 static struct { std::vector<std::string> lines; int scroll = 0; std::string filename;
-    std::string dateStr; } g_viewer;
+    std::string dateStr;
+    std::vector<VRow> cachedVrows; bool vrowsDirty = true; } g_viewer;
 static struct { int selection = 0; int scroll = 0; bool editing = false;
     std::string editBuffer; int editCursor = 0; bool imeActive = false; } g_settingsState;
+
+// Cached vrows accessor for viewer
+static const std::vector<VRow>& getViewerVrows() {
+    if (g_viewer.vrowsDirty) {
+        g_viewer.cachedVrows = buildVrows(g_viewer.lines);
+        g_viewer.vrowsDirty = false;
+    }
+    return g_viewer.cachedVrows;
+}
 
 // ── UI Helpers ─────────────────────────────────────────────────────────
 void ui_clear() {
@@ -879,6 +889,7 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
 // ── Viewer Screen ──────────────────────────────────────────────────────
 void screen_viewer_init(const std::string &filename) {
     g_viewer.filename = filename; g_viewer.scroll = 0; g_viewer.lines.clear();
+    g_viewer.vrowsDirty = true;  // Mark vrows as dirty
     if (filename.length() >= 15)
         g_viewer.dateStr = filename.substr(0,10) + " " + filename.substr(11,2) + ":" + filename.substr(13,2);
     else g_viewer.dateStr = filename;
@@ -899,8 +910,8 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     if (key == 'j' || key == KEY_DOWN) g_viewer.scroll++;
     if (key == 'k' || key == KEY_UP) { if (g_viewer.scroll > 0) g_viewer.scroll--; }
 
-    // Build word-wrapped visual rows from content lines
-    auto vrows = buildVrows(g_viewer.lines);
+    // Build word-wrapped visual rows from content lines (cached)
+    const auto& vrows = getViewerVrows();
 
     // Layout constants
     const int headerY = 28;
