@@ -8,6 +8,9 @@
 #include "flomo_client.h"
 #include "ime/IME.h"
 #include "pjournal_app.h"
+#include "screen_editor.h"
+#include "screen_settings.h"
+#include "screen_bt_manage.h"
 #include "u8g2_st7305.h"
 #include "pcf85063.h"
 

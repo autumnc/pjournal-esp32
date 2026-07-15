@@ -1,6 +1,10 @@
 idf_component_register(SRCS
     "main.cpp"
     "pjournal_app.cpp"
+    "ui_helpers.cpp"
+    "screen_editor.cpp"
+    "screen_settings.cpp"
+    "screen_bt_manage.cpp"
     "font_renderer.cpp"
     "bt_keyboard.cpp"
     "journal_storage.cpp"
