@@ -104,7 +104,7 @@ int byteToCells(const std::string &line, int byteOffset) {
 }
 
 int cellsToByte(const std::string &line, int start, int end, int targetCells) {
-    int cells = 0;
+    int cells = byteToCells(line, start);
     for (int ci = start; ci < end; ) {
         unsigned char c = (unsigned char)line[ci];
         int cc = charCellWidth(c);

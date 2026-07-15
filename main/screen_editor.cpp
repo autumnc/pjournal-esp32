@@ -40,6 +40,9 @@ static struct {
     std::vector<VRow> cachedVrows;
     int cachedWordCount = 0;
     bool wordCountDirty = true;
+    int64_t autoSaveTime = 0;
+    bool modifiedSinceSave = false;
+    std::string savedFilename;
 } g_editor;
 
 static const std::vector<VRow>& getVrows() {
@@ -219,17 +222,18 @@ static void drawConfirmDialog() {
     u8g2_DrawBox(g_u8g2, bx, by, bw, bh);
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawFrame(g_u8g2, bx, by, bw, bh);
-    g_font.drawText(bx + 20, by + 28, "是否保存当前内容？");
-    g_font.drawText(bx + 20, by + 58, "Enter=保存");
-    g_font.drawText(bx + 20, by + 88, "ESC=放弃");
+    ui_draw_text_centered(by + 28, "是否保存当前内容？");
+    ui_draw_text_centered(by + 58, "Enter=保存");
+    ui_draw_text_centered(by + 88, "ESC=放弃");
     u8g2_SetDrawColor(g_u8g2, 1);
 }
 
-static AppState finishEditor(ScreenContext &ctx) {
+// ── Editor save helper ────────────────────────────────────────────────────
+static bool saveCurrentContent() {
     std::string text;
     for (auto &l : g_editor.lines) { text += l; text += '\n'; }
     while (!text.empty() && text.back() == '\n') text.pop_back();
-    if (text.empty()) return APP_MAIN;
+    if (text.empty()) return false;
 
     time_t now; time(&now); struct tm *tm = localtime(&now);
     char ts[32]; strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
@@ -243,22 +247,58 @@ static AppState finishEditor(ScreenContext &ctx) {
     else
         fullText = headerStr + "自由写作\n\n" + text;
 
-    if (!g_journal.saveEntry(fullText)) {
-        ctx.statusMessage = "保存失败，请检查SD卡";
+    if (g_editor.savedFilename.empty()) {
+        char fname[32];
+        strftime(fname, sizeof(fname), "%Y-%m-%d_%H%M%S", tm);
+        g_editor.savedFilename = std::string(fname) + ".txt";
     }
-    ctx.nextState = APP_MAIN;
-    return APP_MAIN;
+    return g_journal.saveEntryRaw(g_editor.savedFilename, fullText);
+}
+
+static AppState finishEditor(ScreenContext &ctx) {
+    g_editor.modifiedSinceSave = false;
+    if (saveCurrentContent()) {
+        ctx.nextState = ctx.prevState;
+        return ctx.prevState;
+    }
+    ctx.statusMessage = "保存失败，请检查SD卡";
+    ctx.nextState = ctx.prevState;
+    return ctx.prevState;
 }
 
 // ── Screen entry points ──────────────────────────────────────────────────
-void screen_editor_init(const ScreenContext &ctx) {
-    g_editor.lines.clear(); g_editor.lines.push_back("");
-    g_editor.cx = g_editor.cy = g_editor.scroll = 0;
+void screen_editor_init(ScreenContext &ctx) {
+    g_editor.lines.clear();
+    g_editor.autoSaveTime = 0;
+
+    if (!ctx.editContent.empty()) {
+        size_t pos = 0;
+        while (pos < ctx.editContent.length()) {
+            size_t nl = ctx.editContent.find('\n', pos);
+            g_editor.lines.push_back((nl == std::string::npos) ? ctx.editContent.substr(pos) : ctx.editContent.substr(pos, nl - pos));
+            if (nl == std::string::npos) break;
+            pos = nl + 1;
+        }
+        while (g_editor.lines.size() > 1 && g_editor.lines.back().empty())
+            g_editor.lines.pop_back();
+        g_editor.cx = (int)g_editor.lines.back().length();
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+        ctx.editContent.clear();
+    } else {
+        g_editor.lines.push_back("");
+        g_editor.cx = g_editor.cy = 0;
+    }
+
+    g_editor.scroll = 0;
     g_editor.targetCx = -1;
+    g_editor.imeActive = false;
     g_editor.confirmSave = false;
+    g_editor.modifiedSinceSave = false;
     g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     g_editor.promptText = ctx.promptText;
     g_editor.promptMode = ctx.promptMode;
+    g_editor.savedFilename = ctx.editFilename;
+    ctx.editFilename.clear();
 }
 
 AppState screen_editor_handle(int key, ScreenContext &ctx) {
@@ -271,8 +311,8 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
         if (key == 0x1B || key == 'n' || key == 'N') {
             g_editor.confirmSave = false;
-            ctx.nextState = APP_MAIN;
-            return APP_MAIN;
+            ctx.nextState = ctx.prevState;
+            return ctx.prevState;
         }
         ui_clear(); drawEditor(); drawConfirmDialog(); ui_commit();
         return APP_EDITOR;
@@ -286,6 +326,8 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
                 g_editor.cx += (int)imeOut.length();
                 g_editor.targetCx = -1;
                 g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+                g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+                g_editor.modifiedSinceSave = true;
             }
             ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
         }
@@ -296,6 +338,8 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.cx += 4;
         g_editor.targetCx = -1;
         g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+        g_editor.modifiedSinceSave = true;
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == 0x10) { // Ctrl+P
@@ -328,15 +372,27 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     if (key == 0x1B) {
         bool hasContent = g_editor.lines.size() > 1 ||
             (g_editor.lines.size() == 1 && !g_editor.lines[0].empty());
-        if (hasContent) {
+        if (hasContent && g_editor.modifiedSinceSave) {
             g_editor.confirmSave = true;
             ui_clear(); drawEditor(); drawConfirmDialog(); ui_commit();
             return APP_EDITOR;
         }
-        ctx.nextState = APP_MAIN; return APP_MAIN;
+        ctx.nextState = ctx.prevState; return ctx.prevState;
     }
-    if (key == 0x13) return finishEditor(ctx);  // Ctrl+S
-    if (key == 0x11) { ctx.nextState = APP_MAIN; return APP_MAIN; }  // Ctrl+Q
+    if (key == 0x13) {
+        std::string text;
+        for (auto &l : g_editor.lines) { text += l; text += '\n'; }
+        while (!text.empty() && text.back() == '\n') text.pop_back();
+        if (!text.empty()) {
+            if (saveCurrentContent()) ctx.statusMessage = "已保存";
+            else ctx.statusMessage = "保存失败";
+        }
+        ui_clear(); drawEditor(); ui_commit();
+        g_editor.autoSaveTime = 0;
+        g_editor.modifiedSinceSave = false;
+        return APP_EDITOR;
+    }  // Ctrl+S
+    if (key == 0x11) { ctx.nextState = ctx.prevState; return ctx.prevState; }  // Ctrl+Q
     if (key == 0x06) {  // Ctrl+F
         ctx.nextState = APP_SYNC_SEND_FLOMO;
         return APP_SYNC_SEND_FLOMO;
@@ -350,6 +406,8 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines.insert(g_editor.lines.begin() + g_editor.cy, rest);
         g_editor.targetCx = -1;
         g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+        g_editor.modifiedSinceSave = true;
     } else if (key == 0x7F || key == 0x08) { // Backspace
         if (g_editor.cx > 0) {
             int prev = g_editor.cx - 1;
@@ -365,11 +423,15 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
         g_editor.targetCx = -1;
         g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+        g_editor.modifiedSinceSave = true;
     } else if (key >= 0x20 && key <= 0x7E) { // ASCII printable
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 1, (char)key);
         g_editor.cx++;
         g_editor.targetCx = -1;
         g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+        g_editor.modifiedSinceSave = true;
     } else if (key == KEY_LEFT) {
         if (g_editor.cx > 0) {
             g_editor.cx--;
@@ -393,8 +455,11 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             auto &prev = vrows[curVR - 1];
             if (g_editor.targetCx < 0)
                 g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
+            int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
             g_editor.cy = prev.lineIdx;
-            g_editor.cx = cellsToByte(g_editor.lines[prev.lineIdx], prev.start, prev.end, g_editor.targetCx);
+            int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], prev.start);
+            int targetCells = vrowStartCells + visualCol;
+            g_editor.cx = cellsToByte(g_editor.lines[g_editor.cy], prev.start, prev.end, targetCells);
         }
     } else if (key == KEY_DOWN) {
         int curVR = -1;
@@ -407,9 +472,20 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             auto &next = vrows[curVR + 1];
             if (g_editor.targetCx < 0)
                 g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
+            int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
             g_editor.cy = next.lineIdx;
-            g_editor.cx = std::min(cellsToByte(g_editor.lines[next.lineIdx], next.start, next.end, g_editor.targetCx),
+            int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], next.start);
+            int targetCells = vrowStartCells + visualCol;
+            g_editor.cx = std::min(cellsToByte(g_editor.lines[g_editor.cy], next.start, next.end, targetCells),
                                    (int)g_editor.lines[g_editor.cy].length());
+        }
+    }
+
+    // Auto-save on idle ticks
+    if (key == 0 && g_editor.autoSaveTime > 0 && esp_timer_get_time() > g_editor.autoSaveTime) {
+        g_editor.autoSaveTime = 0;
+        if (g_settings.autoSave()) {
+            if (saveCurrentContent()) g_editor.modifiedSinceSave = false;
         }
     }
 

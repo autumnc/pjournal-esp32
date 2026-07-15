@@ -3,7 +3,7 @@
 #include "pjournal_app.h"
 
 // Editor screen entry points
-void screen_editor_init(const ScreenContext &ctx);
+void screen_editor_init(ScreenContext &ctx);
 AppState screen_editor_handle(int key, ScreenContext &ctx);
 
 // IME state for global Ctrl+Space toggle

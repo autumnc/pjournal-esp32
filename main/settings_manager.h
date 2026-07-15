@@ -23,6 +23,7 @@ public:
     std::string wifiPassword();
     std::string timezone();
     std::string ntpServer();
+    bool autoSave();
 
     void setFlomoEmail(const std::string &v);
     void setFlomoPassword(const std::string &v);

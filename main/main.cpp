@@ -120,83 +120,69 @@ extern "C" void app_main() {
         tzset();
     }
 
-    // Auto sync time via NTP on every boot (RTC has no battery, resets on power cycle)
+    // Time sync: prefer RTC if its time is recent (>= July 2026), otherwise NTP
     {
-        std::string ssid = g_settings.wifiSsid();
-        if (ssid.empty()) {
-            ESP_LOGI(TAG, "WiFi not configured, trusting RTC time if valid");
-            // Fall back to RTC time
-            time_t rtcTime = g_rtc.getTime();
+        time_t rtcTime = g_rtc.getTime();
+        bool rtcRecent = (rtcTime >= 1782864000); // July 1, 2026 00:00:00 UTC
+
+        if (rtcRecent) {
+            struct timeval tv = {(time_t)rtcTime, 0};
+            settimeofday(&tv, NULL);
+            struct tm *tm = localtime(&rtcTime);
+            char ts[32];
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+            ESP_LOGI(TAG, "RTC time is recent, using directly: %s", ts);
+        } else {
+            ESP_LOGW(TAG, "RTC time (%lld) is before July 2026, attempting NTP sync...", (long long)rtcTime);
+            std::string ssid = g_settings.wifiSsid();
+            if (!ssid.empty()) {
+                std::string ntp = g_settings.ntpServer();
+                if (ntp.empty()) ntp = "pool.ntp.org";
+
+                ui_draw_text_centered(165, "正在同步时间...");
+                ui_commit();
+
+                std::string pass = g_settings.wifiPassword();
+                g_wifi.begin();
+                if (g_wifi.connect(ssid.c_str(), pass.c_str())) {
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                    esp_sntp_stop();
+                    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+                    esp_sntp_setservername(0, ntp.c_str());
+                    esp_sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
+                    esp_sntp_init();
+
+                    time_t now = 0;
+                    for (int i = 0; i < 100; i++) {
+                        vTaskDelay(pdMS_TO_TICKS(200));
+                        if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+                            time(&now);
+                            break;
+                        }
+                    }
+                    if (now > 1782864000) {
+                        struct tm *tm = localtime(&now);
+                        char ts[32];
+                        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+                        ESP_LOGI(TAG, "NTP sync succeeded: %s", ts);
+                        g_rtc.setTime(now);
+                    } else {
+                        ESP_LOGW(TAG, "NTP sync timeout (%s)", ntp.c_str());
+                    }
+                    esp_sntp_stop();
+                } else {
+                    ESP_LOGW(TAG, "WiFi connection failed for NTP sync");
+                }
+                g_wifi.disconnect();
+            } else {
+                ESP_LOGW(TAG, "WiFi not configured, cannot NTP sync");
+            }
+            // Fallback: use whatever RTC has, even if old
             if (rtcTime > 1704067200) {
                 struct timeval tv = {(time_t)rtcTime, 0};
                 settimeofday(&tv, NULL);
-                struct tm *tm = localtime(&rtcTime);
-                char ts[32];
-                strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
-                ESP_LOGI(TAG, "Time loaded from RTC: %s", ts);
+                ESP_LOGW(TAG, "Fallback to RTC time");
             }
-        } else {
-            ESP_LOGI(TAG, "Syncing time via NTP...");
-            std::string ntp = g_settings.ntpServer();
-            if (ntp.empty()) ntp = "pool.ntp.org";
-
-            ui_draw_text_centered(165, "正在同步时间...");
-            ui_commit();
-
-            std::string pass = g_settings.wifiPassword();
-            g_wifi.begin();
-            if (g_wifi.connect(ssid.c_str(), pass.c_str())) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-                esp_sntp_stop();
-                esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-                esp_sntp_setservername(0, ntp.c_str());
-                esp_sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
-                esp_sntp_init();
-
-                time_t now = 0;
-                for (int i = 0; i < 100; i++) {
-                    vTaskDelay(pdMS_TO_TICKS(200));
-                    if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
-                        time(&now);
-                        break;
-                    }
-                }
-                if (now > 1704067200) {
-                    struct tm *tm = localtime(&now);
-                    char ts[32];
-                    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
-                    ESP_LOGI(TAG, "Time synced: %s", ts);
-
-                    // Sync to RTC (for deep sleep timekeeping)
-                    if (g_rtc.setTime(now)) {
-                        ESP_LOGI(TAG, "Time written to RTC");
-                    } else {
-                        ESP_LOGW(TAG, "Failed to write time to RTC");
-                    }
-
-                    // Stop SNTP polling to save power
-                    esp_sntp_stop();
-                    ESP_LOGI(TAG, "SNTP stopped");
-                } else {
-                    ESP_LOGW(TAG, "NTP sync timeout (%s)", ntp.c_str());
-                    // Stop SNTP and fall back to RTC time
-                    esp_sntp_stop();
-                    time_t rtcTime = g_rtc.getTime();
-                    if (rtcTime > 1704067200) {
-                        struct timeval tv = {(time_t)rtcTime, 0};
-                        settimeofday(&tv, NULL);
-                    }
-                }
-            } else {
-                ESP_LOGW(TAG, "WiFi connection failed for NTP sync");
-                // Fall back to RTC time
-                time_t rtcTime = g_rtc.getTime();
-                if (rtcTime > 1704067200) {
-                    struct timeval tv = {(time_t)rtcTime, 0};
-                    settimeofday(&tv, NULL);
-                }
-            }
-            g_wifi.disconnect();
         }
     }
 
@@ -484,6 +470,7 @@ extern "C" void app_main() {
         }
 
         if (!ctx.statusMessage.empty()) {
+            ui_clear();
             ui_show_message_centered(ctx.statusMessage.c_str());
             ctx.statusMessage.clear();
             vTaskDelay(pdMS_TO_TICKS(1500));

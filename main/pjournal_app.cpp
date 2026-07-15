@@ -2,11 +2,15 @@
 #include "font_renderer.h"
 #include "journal_storage.h"
 #include "flomo_client.h"
+#include "wifi_manager.h"
+#include "settings_manager.h"
 #include "builtin_prompts.h"
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
 #include <esp_random.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 extern void *g_u8g2;
 
@@ -87,8 +91,8 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     }
     ui_commit();
 
-    if (key == 'p'||key=='P') { ctx.promptMode=true; ctx.promptText=BUILTIN_PROMPTS[rand()%BUILTIN_PROMPT_COUNT]; ctx.nextState=APP_EDITOR; }
-    else if (key == 'f'||key=='F') { ctx.promptMode=false; ctx.promptText=""; ctx.nextState=APP_EDITOR; }
+    if (key == 'p'||key=='P') { ctx.promptMode=true; ctx.promptText=BUILTIN_PROMPTS[rand()%BUILTIN_PROMPT_COUNT]; ctx.prevState=APP_MAIN; ctx.nextState=APP_EDITOR; }
+    else if (key == 'f'||key=='F') { ctx.promptMode=false; ctx.promptText=""; ctx.prevState=APP_MAIN; ctx.nextState=APP_EDITOR; }
     else if ((key=='v'||key=='V') && g_journal.totalEntries()>0) ctx.nextState=APP_BROWSER;
     else if (key=='w'||key=='W') ctx.nextState=APP_SYNC_WEBDAV;
     else if (key=='s'||key=='S') ctx.nextState=APP_SETTINGS;
@@ -114,10 +118,46 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
         if (entries.empty()) { ctx.nextState=APP_MAIN; return APP_MAIN; }
         if (g_browser.selection>=(int)entries.size()) g_browser.selection=(int)entries.size()-1;
     }
+    if (key == 'e' || key == 'E') {
+        ctx.prevState = APP_BROWSER;
+        std::string content = g_journal.readEntry(entries[g_browser.selection].filename);
+        if (!content.empty()) {
+            ctx.editContent = extractBody(content);
+            ctx.editFilename = entries[g_browser.selection].filename;
+            ctx.promptMode = false;
+            ctx.promptText = "";
+            ctx.nextState = APP_EDITOR;
+            return APP_EDITOR;
+        }
+    }
     if (key == 0x13) {
         auto content = g_journal.readEntry(entries[g_browser.selection].filename);
-        if (!content.empty()) { auto body = extractBody(content);
-            if (!body.empty()) ctx.statusMessage = g_flomo.send(body).message; }
+        if (!content.empty()) {
+            auto body = extractBody(content);
+            if (!body.empty()) {
+                ui_clear();
+                ui_show_message_centered("正在发送...");
+                ui_commit();
+                bool wifiWas = g_wifi.isConnected();
+                if (!wifiWas) {
+                    std::string ssid = g_settings.wifiSsid();
+                    std::string pass = g_settings.wifiPassword();
+                    if (!ssid.empty()) {
+                        g_wifi.begin();
+                        g_wifi.connect(ssid.c_str(), pass.c_str());
+                        for (int i = 0; i < 100; i++) {
+                            if (g_wifi.isConnected()) break;
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                        }
+                    }
+                }
+                if (g_wifi.isConnected())
+                    ctx.statusMessage = g_flomo.send(body).message;
+                else
+                    ctx.statusMessage = "WiFi未连接";
+                if (!wifiWas) g_wifi.disconnect();
+            }
+        }
     }
 
     ui_clear(); int y = 28;
@@ -165,6 +205,48 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     if (key == 'q' || key == 'Q' || key == 0x1B) { ctx.nextState = APP_BROWSER; return APP_BROWSER; }
     if (key == 'j' || key == KEY_DOWN) g_viewer.scroll++;
     if (key == 'k' || key == KEY_UP) { if (g_viewer.scroll > 0) g_viewer.scroll--; }
+    if (key == 'e' || key == 'E') {
+        ctx.prevState = APP_VIEWER;
+        ctx.selectedEntry = g_viewer.filename;
+        std::string content = g_journal.readEntry(g_viewer.filename);
+        if (!content.empty()) {
+            ctx.editContent = extractBody(content);
+            ctx.editFilename = g_viewer.filename;
+            ctx.promptMode = false;
+            ctx.promptText = "";
+            ctx.nextState = APP_EDITOR;
+            return APP_EDITOR;
+        }
+    }
+    if (key == 'f' || key == 'F') {
+        std::string content = g_journal.readEntry(g_viewer.filename);
+        if (!content.empty()) {
+            auto body = extractBody(content);
+            if (!body.empty()) {
+                ui_clear();
+                ui_show_message_centered("正在发送...");
+                ui_commit();
+                bool wifiWas = g_wifi.isConnected();
+                if (!wifiWas) {
+                    std::string ssid = g_settings.wifiSsid();
+                    std::string pass = g_settings.wifiPassword();
+                    if (!ssid.empty()) {
+                        g_wifi.begin();
+                        g_wifi.connect(ssid.c_str(), pass.c_str());
+                        for (int i = 0; i < 100; i++) {
+                            if (g_wifi.isConnected()) break;
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                        }
+                    }
+                }
+                if (g_wifi.isConnected())
+                    ctx.statusMessage = g_flomo.send(body).message;
+                else
+                    ctx.statusMessage = "WiFi未连接";
+                if (!wifiWas) g_wifi.disconnect();
+            }
+        }
+    }
 
     const auto& vrows = getViewerVrows();
 

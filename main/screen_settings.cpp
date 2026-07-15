@@ -36,6 +36,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"wifi_pass", "WiFi 密码", false, false},
     {"timezone", "时区(如CST-8)", false, false},
     {"ntp_server", "NTP服务器", false, false},
+    {"auto_save", "自动保存", false, false},
     {"_sync_time", "网络同步时间", false, true},
 };
 static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);

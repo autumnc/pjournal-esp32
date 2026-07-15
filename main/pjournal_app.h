@@ -23,8 +23,11 @@ struct ScreenContext {
     std::string selectedEntry;    // for viewer
     std::string promptText;       // for editor
     bool promptMode = false;      // true = prompt writing, false = free writing
+    std::string editContent;      // body text to load into editor (from browser)
+    std::string editFilename;     // original filename when editing existing entry
     std::string statusMessage;    // one-shot status message to show
     int statusDuration = 0;       // ticks to show status message
+    AppState prevState = APP_MAIN;
 };
 
 // Arrow key codes (must match bt_keyboard.cpp)

@@ -88,7 +88,7 @@ bool PCF85063::begin() {
     uint8_t regAddr = REG_SC;
     if (i2c_master_transmit(s_rtc_dev, &regAddr, 1, 100) == ESP_OK &&
         i2c_master_receive(s_rtc_dev, regs, 7, 100) == ESP_OK) {
-        ESP_LOGI(TAG, "RTC registers: SC=0x%02x MN=0x%02x HR=0x%02x DW=0x%02x DY=0x%02x MO=0x%02x YR=0x%02x",
+        ESP_LOGI(TAG, "RTC registers: SC=0x%02x MN=0x%02x HR=0x%02x DY=0x%02x DW=0x%02x MO=0x%02x YR=0x%02x",
                  regs[0], regs[1], regs[2], regs[3], regs[4], regs[5], regs[6]);
     }
 
@@ -125,9 +125,9 @@ bool PCF85063::writeTimeRegisters(const struct tm *tm) {
     uint8_t verify[7];
     if (i2c_master_transmit(s_rtc_dev, &regAddr, 1, 100) == ESP_OK &&
         i2c_master_receive(s_rtc_dev, verify, 7, 100) == ESP_OK) {
-        ESP_LOGI(TAG, "RTC write verify: wrote SC=0x%02x MN=0x%02x HR=0x%02x DY=0x%02x MO=0x%02x YR=0x%02x, read back SC=0x%02x MN=0x%02x HR=0x%02x DY=0x%02x MO=0x%02x YR=0x%02x",
-                 buf[1], buf[2], buf[3], buf[5], buf[6], buf[7],
-                 verify[0], verify[1], verify[2], verify[4], verify[5], verify[6]);
+        ESP_LOGI(TAG, "RTC write verify: wrote SC=0x%02x MN=0x%02x HR=0x%02x DY=0x%02x DW=0x%02x MO=0x%02x YR=0x%02x, read back SC=0x%02x MN=0x%02x HR=0x%02x DY=0x%02x DW=0x%02x MO=0x%02x YR=0x%02x",
+                 buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+                 verify[0], verify[1], verify[2], verify[3], verify[4], verify[5], verify[6]);
     }
 
     ESP_LOGI(TAG, "RTC time set successfully");
@@ -165,8 +165,8 @@ bool PCF85063::readTimeRegisters(struct tm *tm) {
     uint8_t min   = fromBcd(buf[1] & 0x7F);
     uint8_t hour  = fromBcd(buf[2] & 0x3F);
     uint8_t mday  = fromBcd(buf[3] & 0x3F);
-    uint8_t mon   = fromBcd(buf[4] & 0x1F);
-    uint8_t wday  = fromBcd(buf[5] & 0x07);
+    uint8_t wday  = fromBcd(buf[4] & 0x07);
+    uint8_t mon   = fromBcd(buf[5] & 0x1F);
     uint16_t year = fromBcd(buf[6]) + 2000;
 
     // Validate time fields

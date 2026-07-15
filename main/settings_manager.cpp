@@ -92,3 +92,4 @@ std::string SettingsManager::timezone() { return get("timezone"); }
 std::string SettingsManager::ntpServer() { return get("ntp_server"); }
 void SettingsManager::setTimezone(const std::string &v) { set("timezone", v); }
 void SettingsManager::setNtpServer(const std::string &v) { set("ntp_server", v); }
+bool SettingsManager::autoSave() { return get("auto_save") == "1"; }
