@@ -240,6 +240,67 @@ static const std::vector<VRow>& getViewerVrows() {
     return g_viewer.cachedVrows;
 }
 
+// IME drawing helper - draws IME UI at specified Y position
+static void drawIMEUI(int baseY) {
+    if (!g_ime.composing()) return;
+
+    std::string code = g_ime.displayCode();
+    auto &cands = g_ime.candidates();
+    int pageSize = g_ime.pageSize();
+    int curPage = g_ime.currentPage();
+    int total = g_ime.totalCandidates();
+    int totalPages = (total + pageSize - 1) / pageSize;
+    if (totalPages < 1) totalPages = 1;
+
+    // Code line with page indicator
+    char pageInfo[32];
+    snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
+
+    // Draw background
+    u8g2_DrawBox(g_u8g2, 0, baseY, SCREEN_W, 67);
+    u8g2_SetDrawColor(g_u8g2, 1);
+
+    // Draw code (white box, black text)
+    int cw = g_font.textWidth(code.c_str()) + 8;
+    u8g2_DrawBox(g_u8g2, 4, baseY + 4, cw, FONT_H);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    g_font.drawText(4, baseY + 4 + FONT_H - 6, code.c_str(), false);
+    u8g2_SetDrawColor(g_u8g2, 1);
+
+    // Draw page indicator
+    int tw = g_font.textWidth(pageInfo);
+    int pw = tw + 8;
+    int px = SCREEN_W - pw - 4;
+    u8g2_DrawBox(g_u8g2, px, baseY + 4, pw, FONT_H);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    g_font.drawText(px + 4, baseY + 4 + FONT_H - 6, pageInfo, false);
+    u8g2_SetDrawColor(g_u8g2, 1);
+
+    // Separator line
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 0, baseY + FONT_H + 4, SCREEN_W);
+    u8g2_SetDrawColor(g_u8g2, 1);
+
+    // Candidates inline (horizontal)
+    std::string candLine;
+    for (int i = 0; i < (int)cands.size(); i++) {
+        char idx[16];
+        snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
+        std::string part = std::string(" ") + idx + cands[i];
+        int curW = g_font.textWidth(candLine.c_str());
+        int partW = g_font.textWidth(part.c_str());
+        if (curW + partW + 8 > SCREEN_W) break;
+        candLine += part;
+    }
+    if (!candLine.empty()) {
+        int candW = g_font.textWidth(candLine.c_str()) + 8;
+        u8g2_DrawBox(g_u8g2, 4, baseY + FONT_H + 8, candW, FONT_H);
+        u8g2_SetDrawColor(g_u8g2, 0);
+        g_font.drawText(4, baseY + FONT_H + 8 + FONT_H - 6, candLine.c_str(), false);
+        u8g2_SetDrawColor(g_u8g2, 0);
+    }
+}
+
 // ── UI Helpers ─────────────────────────────────────────────────────────
 void ui_clear() {
     if (g_u8g2) { u8g2_SetDrawColor(g_u8g2, 1);
