@@ -198,7 +198,8 @@ static struct { std::vector<std::string> lines; int cx = 0, cy = 0; int scroll =
     int targetCx = -1;
     std::string promptText; bool promptMode = false; bool imeActive = false;
     bool confirmSave = false; bool vrowsDirty = true;
-    std::vector<VRow> cachedVrows; } g_editor;
+    std::vector<VRow> cachedVrows;
+    int cachedWordCount = 0; bool wordCountDirty = true; } g_editor;
 
 // Cached vrows accessor for editor
 static const std::vector<VRow>& getVrows() {
@@ -207,6 +208,17 @@ static const std::vector<VRow>& getVrows() {
         g_editor.vrowsDirty = false;
     }
     return g_editor.cachedVrows;
+}
+
+// Cached word count accessor for editor
+static int getWordCount() {
+    if (g_editor.wordCountDirty) {
+        std::string fullText;
+        for (auto &l : g_editor.lines) { if (!fullText.empty()) fullText += '\n'; fullText += l; }
+        g_editor.cachedWordCount = countVisibleChars(fullText);
+        g_editor.wordCountDirty = false;
+    }
+    return g_editor.cachedWordCount;
 }
 
 static struct { int selection = 0; int scroll = 0; } g_browser;
@@ -520,10 +532,7 @@ static void drawEditor() {
 
     // ── Status bar ──────────────────────────────────────────────────
     const char *mode = g_editor.promptMode ? "提示写作" : "自由写作";
-    // Word count: join all lines
-    std::string fullText;
-    for (auto &l : g_editor.lines) { if (!fullText.empty()) fullText += '\n'; fullText += l; }
-    int wc = countVisibleChars(fullText);
+    int wc = getWordCount();
     char left[48];
     snprintf(left, sizeof(left), "%s", mode);
     int bpct = battery_pct();
@@ -558,7 +567,7 @@ static AppState finishEditor(ScreenContext &ctx) {
 
     time_t now; time(&now); struct tm *tm = localtime(&now);
     char ts[32]; strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
-    int wc = countVisibleChars(text);
+    int wc = getWordCount();  // Use cached word count
     std::string headerStr; headerStr.resize(128);
     int hlen = snprintf(&headerStr[0], 128, "日期: %s\n字数: %d\n\n", ts, wc);
     headerStr.resize(hlen);
@@ -649,7 +658,7 @@ void screen_editor_init(const ScreenContext &ctx) {
     g_editor.cx = g_editor.cy = g_editor.scroll = 0;
     g_editor.targetCx = -1;
     g_editor.confirmSave = false;
-    g_editor.vrowsDirty = true;
+    g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     g_editor.promptText = ctx.promptText;
     g_editor.promptMode = ctx.promptMode;
 }
@@ -679,7 +688,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
                 g_editor.lines[g_editor.cy].insert(g_editor.cx, imeOut);
                 g_editor.cx += (int)imeOut.length();
                 g_editor.targetCx = -1;
-                g_editor.vrowsDirty = true;
+                g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
             }
             ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
         }
@@ -692,7 +701,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 4, ' ');
         g_editor.cx += 4;
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true;
+        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == 0x10) { // Ctrl+P - AI generate prompt via Deepseek
@@ -747,7 +756,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.cx = 0; g_editor.cy++;
         g_editor.lines.insert(g_editor.lines.begin() + g_editor.cy, rest);
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true;
+        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     } else if (key == 0x7F || key == 0x08) { // Backspace (UTF-8 aware)
         if (g_editor.cx > 0) {
             int prev = g_editor.cx - 1;
@@ -762,12 +771,12 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cy--;
         }
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true;
+        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     } else if (key >= 0x20 && key <= 0x7E) { // ASCII printable
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 1, (char)key);
         g_editor.cx++;
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true;
+        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     } else if (key == KEY_LEFT) {
         if (g_editor.cx > 0) {
             g_editor.cx--;
