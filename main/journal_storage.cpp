@@ -14,6 +14,13 @@
 
 static const char *TAG = "Journal";
 
+static bool isJournalExt(const std::string &fn) {
+    auto dot = fn.rfind('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = fn.substr(dot);
+    return ext == ".txt" || ext == ".md";
+}
+
 // SD card mutex (recursive to handle nested public method calls)
 static SemaphoreHandle_t s_sd_mutex = nullptr;
 
@@ -117,8 +124,7 @@ std::vector<JournalEntry> JournalStorage::listEntries() {
     while ((de = readdir(dir)) != NULL) {
         if (de->d_type != DT_REG) continue;
         std::string fn = de->d_name;
-        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
-        if (fn[0] == '.') continue;
+        if (fn[0] == '.' || !isJournalExt(fn)) continue;
 
         JournalEntry e;
         e.filename = fn;
@@ -196,11 +202,7 @@ std::vector<std::pair<std::string, time_t>> JournalStorage::listFileMtimes() {
         if (de->d_type != DT_REG) continue;
         std::string fn = de->d_name;
         if (fn[0] == '.') continue;
-        // Check for .txt or .md extension
-        auto dot = fn.rfind('.');
-        if (dot == std::string::npos) continue;
-        std::string ext = fn.substr(dot);
-        if (ext != ".txt" && ext != ".md") continue;
+        if (!isJournalExt(fn)) continue;
 
         struct stat st;
         std::string full = basePath() + "/" + fn;
@@ -250,8 +252,7 @@ bool JournalStorage::hasEntry(const std::string &date) {
     while ((de = readdir(dir)) != NULL) {
         if (de->d_type != DT_REG) continue;
         std::string fn = de->d_name;
-        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
-        if (fn[0] == '.') continue;
+        if (fn[0] == '.' || !isJournalExt(fn)) continue;
         if (fn.substr(0, 10) == date) { found = true; break; }
     }
     closedir(dir);
@@ -276,8 +277,7 @@ int JournalStorage::countToday() {
     while ((de = readdir(dir)) != NULL) {
         if (de->d_type != DT_REG) continue;
         std::string fn = de->d_name;
-        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
-        if (fn[0] == '.') continue;
+        if (fn[0] == '.' || !isJournalExt(fn)) continue;
         if (fn.substr(0, 10) == today) count++;
     }
     closedir(dir);
@@ -297,8 +297,7 @@ int JournalStorage::getStreak() {
         while ((de = readdir(dir)) != NULL) {
             if (de->d_type != DT_REG) continue;
             std::string fn = de->d_name;
-            if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
-            if (fn[0] == '.') continue;
+            if (fn[0] == '.' || !isJournalExt(fn)) continue;
             dates.insert(fn.substr(0, 10));
         }
         closedir(dir);
@@ -330,8 +329,7 @@ int JournalStorage::totalEntries() {
         while ((de = readdir(dir)) != NULL) {
             if (de->d_type != DT_REG) continue;
             std::string fn = de->d_name;
-            if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".txt") continue;
-            if (fn[0] == '.') continue;
+            if (fn[0] == '.' || !isJournalExt(fn)) continue;
             count++;
         }
         closedir(dir);
