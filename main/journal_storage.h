@@ -4,6 +4,8 @@
 #include <ctime>
 #include <string>
 #include <vector>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 struct JournalEntry {
     std::string filename;   // YYYY-MM-DD_HHMMSS.txt
@@ -50,6 +52,9 @@ public:
 
     // SD card status
     bool isMounted() const { return mounted_; }
+
+    // Get SD card mutex for thread-safe access from external callers
+    static SemaphoreHandle_t sdMutex();
 
 private:
     std::string basePath();

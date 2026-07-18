@@ -11,6 +11,7 @@
 #include "screen_editor.h"
 #include "screen_settings.h"
 #include "screen_bt_manage.h"
+#include "screen_file_manager.h"
 #include "u8g2_st7305.h"
 #include "pcf85063.h"
 
@@ -387,6 +388,15 @@ extern "C" void app_main() {
             if (key > 0) currentState = screen_bt_manage_handle(key, ctx);
             else { screen_bt_manage_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(50)); }
             if (currentState != APP_BT_MANAGE) btInited = false;
+            break;
+        }
+
+        case APP_FILE_MANAGER: {
+            static bool fileMgrInited = false;
+            if (!fileMgrInited) { screen_file_manager_init(); fileMgrInited = true; }
+            if (key > 0) currentState = screen_file_manager_handle(key, ctx);
+            else { screen_file_manager_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(200)); }
+            if (currentState != APP_FILE_MANAGER) fileMgrInited = false;
             break;
         }
 

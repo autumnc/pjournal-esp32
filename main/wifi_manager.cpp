@@ -81,7 +81,7 @@ void WifiManager::disconnect() {
 
 std::string WifiManager::getIp() {
     esp_netif_ip_info_t ip;
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("STA_DEF");
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK) {
         char buf[16];
         snprintf(buf, sizeof(buf), IPSTR, IP2STR(&ip.ip));

@@ -24,6 +24,8 @@ static bool isJournalExt(const std::string &fn) {
 // SD card mutex (recursive to handle nested public method calls)
 static SemaphoreHandle_t s_sd_mutex = nullptr;
 
+SemaphoreHandle_t JournalStorage::sdMutex() { return s_sd_mutex; }
+
 // SDMMC pin configuration for ESP32-S3-RLCD-4.2
 #define SDMMC_CLK GPIO_NUM_38
 #define SDMMC_CMD GPIO_NUM_21

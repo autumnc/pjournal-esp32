@@ -14,6 +14,7 @@ enum AppState {
     APP_SYNC_WEBDAV,
     APP_SYNC_SEND_FLOMO,
     APP_BT_MANAGE,
+    APP_FILE_MANAGER,
     APP_QUIT,
 };
 
