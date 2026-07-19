@@ -187,6 +187,9 @@ extern "C" void app_main() {
         }
     }
 
+    // Seed RNG with hardware random for prompt selection
+    srand(esp_random());
+
     // Initialize IME
     auto &ime = IME::getInstance();
     ime.begin();
