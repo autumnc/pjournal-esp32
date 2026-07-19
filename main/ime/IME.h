@@ -112,6 +112,7 @@ private:
     bool readLfHanzi(uint16_t i, char out[4]);
 
     void searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi);
+    static int pinyinPrefixLen(const std::string &code);
     bool parseHeader(const uint8_t *hdrIndex, size_t total);
     bool readCode(uint32_t i, char out[MAX_CODE_LEN + 1]);
     bool readHanzi(uint32_t i, char out[HANZI_SIZE + 1]);

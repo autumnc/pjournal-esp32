@@ -351,6 +351,12 @@ void IME::reset() {
     _deleteMode = false;
 }
 
+int IME::pinyinPrefixLen(const std::string &code) {
+    int i = 0;
+    while (i < (int)code.length() && code[i] >= 'a' && code[i] <= 'z') i++;
+    return i;
+}
+
 void IME::searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi) {
     lo = 0; hi = _count;
     if (_index.empty() || len < 1) return;
@@ -383,6 +389,21 @@ void IME::lookup() {
 
     const char *q = _code.c_str();
     int qlen = (int)_code.length();
+
+    int pinyinLen = pinyinPrefixLen(_code);
+    std::string pinyinCode = _code.substr(0, pinyinLen);
+
+    // First char uppercase: treat as literal, use partial match for remainder
+    if (pinyinLen == 0 && _code.length() > 0) {
+        _all.push_back(_code.substr(0, 1));
+        _partialStart = 0;
+        _remainder = _code.substr(1);
+        buildPage();
+        return;
+    }
+
+    q = pinyinCode.c_str();
+    qlen = pinyinLen;
 
     if (_lfMode && _lfBlob) {
         uint32_t llo, lhi;
@@ -901,9 +922,14 @@ bool IME::commit(int idx, std::string &out) {
     }
     int partialRel = _partialStart - _pageStart;
     bool partial = (_remainder.length() > 0 && idx >= partialRel);
+    int pLen = pinyinPrefixLen(_code);
+    bool hasUpperSuffix = (pLen < (int)_code.length());
+    // If matched the full pinyin prefix and remaining is uppercase suffix,
+    // append it directly instead of treating as partial match
     bool fullWordContinue = (!partial && _maxMatchLen > 0
                              && _maxMatchLen < (int)_code.length()
-                             && _maxMatchLen <= 17);
+                             && _maxMatchLen <= 17
+                             && !(_maxMatchLen == pLen && hasUpperSuffix));
     if (partial || fullWordContinue) {
         if (!partial)
             _remainder = _code.substr(_maxMatchLen);
@@ -926,12 +952,16 @@ bool IME::commit(int idx, std::string &out) {
     }
     if (_prefix.length() > 0) {
         _prefix += out;
+        if (hasUpperSuffix) _prefix += _code.substr(pLen);
         _displayCodeDirty = true;
-        addUserWord(_codeOrig, _prefix);
-        bumpFrequency(_codeOrig, _prefix);
+        if (!hasUpperSuffix) {
+            addUserWord(_codeOrig, _prefix);
+            bumpFrequency(_codeOrig, _prefix);
+        }
         out = _prefix;
     } else {
-        bumpFrequency(_code, out);
+        if (hasUpperSuffix) out += _code.substr(pLen);
+        if (!hasUpperSuffix) bumpFrequency(_code, out);
     }
     _prefix.clear();
     _displayCodeDirty = true;
@@ -992,7 +1022,7 @@ bool IME::handleKey(int key, std::string &out) {
     if (_predicting) {
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
             _predicting = false;
-            _code = (char)tolower(key);
+            _code = (char)key;
             _displayCodeDirty = true;
             lookup();
             return true;
@@ -1034,15 +1064,16 @@ bool IME::handleKey(int key, std::string &out) {
         return false;
     }
     if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
-        char c = (char)tolower(key);
-        if (_code.length() == 0 && !_deleteMode && !_lfMode && c == 'v') {
+        char cl = (char)tolower(key);
+        char c = (char)key;
+        if (_code.length() == 0 && !_deleteMode && !_lfMode && cl == 'v') {
             if (_userWords.size() > 0) {
                 _deleteMode = true;
                 lookup();
                 return true;
             }
         }
-        if (_code.length() == 0 && !_deleteMode && !_lfMode && c == 'u') {
+        if (_code.length() == 0 && !_deleteMode && !_lfMode && cl == 'u') {
             loadLfDict();
             if (_lfBlob) { _lfMode = true; _maxCode = 12; return true; }
         }

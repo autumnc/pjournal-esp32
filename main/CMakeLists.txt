@@ -44,4 +44,4 @@ idf_component_register(SRCS
         esp_adc
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="1.5.0")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="1.5.1")
