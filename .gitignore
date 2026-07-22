@@ -6,4 +6,5 @@ build/
 .vscode/
 .idea/
 *.fnt
-*.bin
+*.bin!/main/terminus28.fnt
+!/main/terminus24.fnt

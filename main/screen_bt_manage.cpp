@@ -70,7 +70,7 @@ AppState screen_bt_manage_handle(int key, ScreenContext &ctx) {
         }
     }
 
-    ui_clear(); int y = 28;
+    ui_clear(); int y = FONT_H;
     ui_draw_text_centered(y, "蓝牙键盘管理", false, true); y += FONT_H;
 
     if (g_btState.scanning) {

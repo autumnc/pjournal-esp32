@@ -38,6 +38,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"timezone", "时区(如CST-8)", false, false},
     {"ntp_server", "NTP服务器", false, false},
     {"auto_save", "自动保存", false, false},
+    {"_font_size", "字体大小", false, true},
     {"_sync_time", "网络同步时间", false, true},
 };
 static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);
@@ -119,7 +120,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     int cw = g_font.textWidth(code.c_str()) + 8;
                     u8g2_DrawBox(g_u8g2, 4, imeY + 4, cw, FONT_H);
                     u8g2_SetDrawColor(g_u8g2, 0);
-                    g_font.drawText(4, imeY + 4 + FONT_H - 6, code.c_str(), false);
+                    g_font.drawText(4, imeY + 4 + g_font.ascent(), code.c_str(), false);
                     u8g2_SetDrawColor(g_u8g2, 1);
 
                     int tw = g_font.textWidth(pageInfo);
@@ -127,7 +128,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     int px = SCREEN_W - pw - 4;
                     u8g2_DrawBox(g_u8g2, px, imeY + 4, pw, FONT_H);
                     u8g2_SetDrawColor(g_u8g2, 0);
-                    g_font.drawText(px + 4, imeY + 4 + FONT_H - 6, pageInfo, false);
+                    g_font.drawText(px + 4, imeY + 4 + g_font.ascent(), pageInfo, false);
                     u8g2_SetDrawColor(g_u8g2, 1);
 
                     u8g2_SetDrawColor(g_u8g2, 0);
@@ -148,7 +149,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                         int candW = g_font.textWidth(candLine.c_str()) + 8;
                         u8g2_DrawBox(g_u8g2, 4, imeY + FONT_H + 8, candW, FONT_H);
                         u8g2_SetDrawColor(g_u8g2, 0);
-                        g_font.drawText(4, imeY + FONT_H + 8 + FONT_H - 6, candLine.c_str(), false);
+                        g_font.drawText(4, imeY + FONT_H + 8 + g_font.ascent(), candLine.c_str(), false);
                         u8g2_SetDrawColor(g_u8g2, 0);
                     }
                 }
@@ -279,7 +280,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             int cw = g_font.textWidth(code.c_str()) + 8;
             u8g2_DrawBox(g_u8g2, 4, imeY + 4, cw, FONT_H);
             u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, imeY + 4 + FONT_H - 6, code.c_str(), false);
+            g_font.drawText(4, imeY + 4 + g_font.ascent(), code.c_str(), false);
             u8g2_SetDrawColor(g_u8g2, 1);
 
             int tw = g_font.textWidth(pageInfo);
@@ -287,7 +288,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             int px = SCREEN_W - pw - 4;
             u8g2_DrawBox(g_u8g2, px, imeY + 4, pw, FONT_H);
             u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(px + 4, imeY + 4 + FONT_H - 6, pageInfo, false);
+            g_font.drawText(px + 4, imeY + 4 + g_font.ascent(), pageInfo, false);
             u8g2_SetDrawColor(g_u8g2, 1);
 
             u8g2_SetDrawColor(g_u8g2, 0);
@@ -308,7 +309,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 int candW = g_font.textWidth(candLine.c_str()) + 8;
                 u8g2_DrawBox(g_u8g2, 4, imeY + FONT_H + 8, candW, FONT_H);
                 u8g2_SetDrawColor(g_u8g2, 0);
-                g_font.drawText(4, imeY + FONT_H + 8 + FONT_H - 6, candLine.c_str(), false);
+                g_font.drawText(4, imeY + FONT_H + 8 + g_font.ascent(), candLine.c_str(), false);
                 u8g2_SetDrawColor(g_u8g2, 0);
             }
         }
@@ -409,6 +410,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.nextState = APP_FILE_MANAGER;
                 return APP_FILE_MANAGER;
             }
+            if (strcmp(f.key, "_font_size") == 0) {
+                int curSize = g_settings.fontSize();
+                int newSize = (curSize == 24) ? 28 : 24;
+                g_settings.setString("font_size", newSize == 24 ? "24" : "28");
+                g_font.setSize(newSize);
+                return APP_SETTINGS;
+            }
         } else {
             g_settingsState.editBuffer = g_settings.getString(f.key);
             g_settingsState.editCursor = (int)g_settingsState.editBuffer.length();
@@ -417,7 +425,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         }
     }
 
-    ui_clear(); int y = 28;
+    ui_clear(); int y = FONT_H;
     ui_draw_text_centered(y, "设置", false, true); y += FONT_H;
     int visible = (SCREEN_H - y + FONT_H - 1) / FONT_H;
     if (g_settingsState.selection < g_settingsState.scroll) g_settingsState.scroll = g_settingsState.selection;
@@ -429,7 +437,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         bool sel = (idx == g_settingsState.selection);
         char buf[80];
         if (f.action) {
-            snprintf(buf, sizeof(buf), "▶ %s", f.label);
+            if (strcmp(f.key, "_font_size") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %dpt", f.label, g_settings.fontSize());
+            } else {
+                snprintf(buf, sizeof(buf), "▶ %s", f.label);
+            }
         } else {
             std::string value = g_settings.getString(f.key);
             std::string display;

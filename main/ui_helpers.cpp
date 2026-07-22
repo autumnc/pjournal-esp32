@@ -24,8 +24,6 @@ extern "C" {
     extern void u8g2_DrawFrame(void *u8g2, int x, int y, int w, int h);
 }
 
-#define STATUS_Y (SCREEN_H - FONT_H - 2)
-
 // ── Battery ADC ──────────────────────────────────────────────────────────
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static adc_cali_handle_t s_cali_handle = NULL;
@@ -134,7 +132,7 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
             while (end < len) {
                 unsigned char c = (unsigned char)line[end];
                 int cc = charCellWidth(c);
-                if (cells + cc > 28) break;
+                if (cells + cc > (SCREEN_W / g_font.halfAdvance())) break;
                 cells += cc;
                 if (c == ' ') lastBreak = end + 1;
                 if (c < 0x80) end++;
@@ -184,7 +182,7 @@ void drawIMEUI(int baseY) {
     int cw = g_font.textWidth(code.c_str()) + 8;
     u8g2_DrawBox(g_u8g2, 4, baseY + 4, cw, FONT_H);
     u8g2_SetDrawColor(g_u8g2, 0);
-    g_font.drawText(4, baseY + 4 + FONT_H - 6, code.c_str(), false);
+    g_font.drawText(4, baseY + 4 + g_font.ascent(), code.c_str(), false);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     int tw = g_font.textWidth(pageInfo);
@@ -192,7 +190,7 @@ void drawIMEUI(int baseY) {
     int px = SCREEN_W - pw - 4;
     u8g2_DrawBox(g_u8g2, px, baseY + 4, pw, FONT_H);
     u8g2_SetDrawColor(g_u8g2, 0);
-    g_font.drawText(px + 4, baseY + 4 + FONT_H - 6, pageInfo, false);
+    g_font.drawText(px + 4, baseY + 4 + g_font.ascent(), pageInfo, false);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     u8g2_SetDrawColor(g_u8g2, 0);
@@ -213,7 +211,7 @@ void drawIMEUI(int baseY) {
         int candW = g_font.textWidth(candLine.c_str()) + 8;
         u8g2_DrawBox(g_u8g2, 4, baseY + FONT_H + 8, candW, FONT_H);
         u8g2_SetDrawColor(g_u8g2, 0);
-        g_font.drawText(4, baseY + FONT_H + 8 + FONT_H - 6, candLine.c_str(), false);
+        g_font.drawText(4, baseY + FONT_H + 8 + g_font.ascent(), candLine.c_str(), false);
         u8g2_SetDrawColor(g_u8g2, 0);
     }
 }
@@ -233,7 +231,7 @@ void ui_draw_text(int x, int y, const char *text, bool invert, bool bold) {
     if (invert) {
         int w = g_font.textWidth(text);
         int bh = g_font.lineHeight();
-        int asc = 22;
+        int asc = g_font.ascent();
         u8g2_SetDrawColor(g_u8g2, 0);
         u8g2_DrawBox(g_u8g2, x, y - asc, w, bh);
         u8g2_SetDrawColor(g_u8g2, 1);
@@ -249,7 +247,7 @@ void ui_draw_text_centered(int y, const char *text, bool invert, bool bold) {
     int x = (SCREEN_W - w) / 2; if (x < 0) x = 0;
     if (invert) {
         int bh = g_font.lineHeight();
-        int asc = 22;
+        int asc = g_font.ascent();
         u8g2_SetDrawColor(g_u8g2, 0);
         u8g2_DrawBox(g_u8g2, x, y - asc, w, bh);
         u8g2_SetDrawColor(g_u8g2, 1);
@@ -267,10 +265,10 @@ void ui_draw_status(const char *left, const char *right) {
     u8g2_SetDrawColor(g_u8g2, 1);
     u8g2_DrawBox(g_u8g2, 0, y + 1, SCREEN_W, FONT_H + 3);
     u8g2_SetDrawColor(g_u8g2, 0);
-    if (left) g_font.drawText(4, y + 1 + 22, left, false);
+    if (left) g_font.drawText(4, y + 1 + g_font.ascent(), left, false);
     if (right) {
         int rw = g_font.textWidth(right);
-        g_font.drawText(SCREEN_W - rw - 4, y + 1 + 22, right, false);
+        g_font.drawText(SCREEN_W - rw - 4, y + 1 + g_font.ascent(), right, false);
     }
     u8g2_SetDrawColor(g_u8g2, 1);
 }

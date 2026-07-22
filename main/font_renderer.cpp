@@ -8,22 +8,48 @@ FontRenderer g_font;
 // Embedded font data from CMakeLists EMBED_FILES
 extern const uint8_t terminus28_fnt_start[] asm("_binary_terminus28_fnt_start");
 extern const uint8_t terminus28_fnt_end[]   asm("_binary_terminus28_fnt_end");
+extern const uint8_t terminus24_fnt_start[] asm("_binary_terminus24_fnt_start");
+extern const uint8_t terminus24_fnt_end[]   asm("_binary_terminus24_fnt_end");
 
 bool FontRenderer::begin() {
-    blob_ = terminus28_fnt_start;
-    size_t sz = terminus28_fnt_end - terminus28_fnt_start;
+    blob_28_ = terminus28_fnt_start;
+    blob_24_ = terminus24_fnt_start;
+    // Default to 28pt
+    return setSize(28);
+}
 
-    if (sz < 24 || memcmp(blob_, "PJFN", 4) != 0) {
+bool FontRenderer::setSize(int fontSize) {
+    const uint8_t *blob = nullptr;
+    size_t sz = 0;
+
+    if (fontSize == 28) {
+        blob = blob_28_;
+        sz = terminus28_fnt_end - terminus28_fnt_start;
+    } else if (fontSize == 24) {
+        blob = blob_24_;
+        sz = terminus24_fnt_end - terminus24_fnt_start;
+    } else {
+        return false;
+    }
+    if (!blob) return false;
+
+    return parseBlob(blob, sz);
+}
+
+bool FontRenderer::parseBlob(const uint8_t *blob, size_t sz) {
+    blob_ = blob;
+
+    if (sz < 34 || memcmp(blob_, "PJFN", 4) != 0) {
         ESP_LOGE(TAG, "Bad font magic");
         return false;
     }
 
-    // Read header (format: magic[4], header_size[2], line_height[2], ascent[2],
-    //                    descent[2], glyph_count[2], 4×offset[4])
+    // Read header
     line_height_ = blob_[6] | (blob_[7] << 8);
     ascent_      = blob_[8] | (blob_[9] << 8);
     descent_     = blob_[10] | (blob_[11] << 8);
     glyph_count_ = blob_[12] | (blob_[13] << 8);
+    font_size_   = line_height_;
 
     uint32_t ascii_off  = *(const uint32_t *)(blob_ + 14);
     uint32_t cjk_off    = *(const uint32_t *)(blob_ + 18);
@@ -31,23 +57,20 @@ bool FontRenderer::begin() {
     uint32_t data_off   = *(const uint32_t *)(blob_ + 26);
     uint32_t other_off  = *(const uint32_t *)(blob_ + 30);
 
-    // bdf_to_fnt.py stores all offsets relative to base=24, actual
-    // header is 34 bytes (added other_offset). Correct by adding the difference.
-    uint32_t hdr_adj = 10; // actual header (34) - stored base (24)
+    uint32_t hdr_adj = 10;
     ascii_table_ = (const uint32_t *)(blob_ + ascii_off + hdr_adj);
     cjk_block_count_ = *(const uint16_t *)(blob_ + cjk_off + hdr_adj);
     cjk_blocks_ = (const CjkBlock *)(blob_ + cjk_off + hdr_adj + 2);
     meta_array_ = blob_ + meta_off + hdr_adj;
     bitmap_data_ = blob_ + data_off + hdr_adj;
 
-    // Other block table (non-ASCII, non-CJK glyphs)
     const uint8_t *other_ptr = blob_ + other_off + hdr_adj;
     other_block_count_ = *(const uint16_t *)other_ptr;
     other_blocks_ = (const CjkBlock *)(other_ptr + 2);
 
     loaded_ = true;
-    ESP_LOGI(TAG, "Font loaded: %d glyphs, line=%d asc=%d desc=%d",
-             glyph_count_, line_height_, ascent_, descent_);
+    ESP_LOGI(TAG, "Font %dpt loaded: %d glyphs, line=%d asc=%d desc=%d",
+             font_size_, glyph_count_, line_height_, ascent_, descent_);
     return true;
 }
 
@@ -72,8 +95,8 @@ uint32_t FontRenderer::utf8Decode(const char *&str) {
     }
     if ((c & 0xF8) == 0xF0) {
         if ((str[1] & 0xC0) != 0x80 || (str[2] & 0xC0) != 0x80 || (str[3] & 0xC0) != 0x80) { str++; return 0; }
-        str += 4;
-        return ((uint32_t)(c & 0x07) << 18) | ((uint32_t)(str[-3] & 0x3F) << 12) | ((uint32_t)(str[-2] & 0x3F) << 6) | (uint32_t)(str[-1] & 0x3F);
+        str += 2;
+        return ((uint32_t)(c & 0x07) << 18) | ((uint32_t)(str[-1] & 0x3F) << 12) | ((uint32_t)(str[0] & 0x3F) << 6) | (uint32_t)(str[1] & 0x3F);
     }
     str++;
     return 0;
@@ -91,7 +114,6 @@ const FontRenderer::GlyphMeta *FontRenderer::findGlyph(uint32_t cp) {
 
     // CJK table
     if (cp >= 0x3400 && cp <= 0x9FFF) {
-        // Binary search blocks
         int lo = 0, hi = cjk_block_count_;
         while (lo < hi) {
             int mid = (lo + hi) / 2;
@@ -147,7 +169,6 @@ extern "C" {
     extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
     extern void *u8g2_st7305_get_u8g2(void *dev);
 }
-// We need a global u8g2 pointer. Set by main.
 extern void *g_u8g2;
 
 void FontRenderer::drawGlyph(int x, int y, const GlyphMeta *meta, bool invert) {
@@ -161,7 +182,6 @@ void FontRenderer::drawGlyph(int x, int y, const GlyphMeta *meta, bool invert) {
     const uint8_t *bits = bitmap_data_ + meta->bitmap_offset;
 
     int draw_x = x + xo;
-    // y_off = pixels from baseline to bottom of bitmap (positive = above baseline)
     int draw_y = y - yo - bh;
 
     for (int row = 0; row < bh; row++) {
@@ -187,7 +207,7 @@ int FontRenderer::drawText(int x, int y, const char *text, bool invert) {
             drawGlyph(x, y, meta, invert);
             x += meta->advance;
         } else {
-            x += line_height_ / 2; // fallback space for missing glyph
+            x += line_height_ / 2;
         }
     }
     return x - orig_x;

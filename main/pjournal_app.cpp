@@ -44,7 +44,7 @@ void screen_main_init() {
 }
 
 AppState screen_main_handle(int key, ScreenContext &ctx) {
-    ui_clear(); int y = 28;
+    ui_clear(); int y = FONT_H;
 
     time_t now_t; time(&now_t); struct tm *tm = localtime(&now_t);
     char dateStr[32]; strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm);
@@ -87,7 +87,7 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     if (bpct >= 0) {
         char pctStr[16]; snprintf(pctStr, sizeof(pctStr), "%d%%", bpct);
         int pw = g_font.textWidth(pctStr);
-        g_font.drawText(SCREEN_W - pw - 4, STATUS_Y + 22, pctStr, false);
+        g_font.drawText(SCREEN_W - pw - 4, STATUS_Y + g_font.ascent(), pctStr, false);
     }
     ui_commit();
 
@@ -160,10 +160,10 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
         }
     }
 
-    ui_clear(); int y = 28;
+    ui_clear(); int y = FONT_H;
     ui_draw_text(4, y, "过往日记", false, true);
     u8g2_DrawHLine(g_u8g2, 0, y + 7, SCREEN_W);
-    y = y + 7 + 24;
+    y = y + 7 + FONT_H - 4;
     int visible = (SCREEN_H - y + FONT_H - 1) / FONT_H;
     if (g_browser.selection < g_browser.scroll) g_browser.scroll = g_browser.selection;
     if (g_browser.selection >= g_browser.scroll + visible)
@@ -250,8 +250,8 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
 
     const auto& vrows = getViewerVrows();
 
-    const int headerY = 28;
-    const int sepY = headerY + FONT_H - 22;
+    const int headerY = FONT_H;
+    const int sepY = headerY + g_font.descent();
     const int contentY = sepY + 26;
     const int contentMaxY = STATUS_Y;
     int visible = (contentMaxY - contentY + FONT_H - 1) / FONT_H;

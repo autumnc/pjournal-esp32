@@ -3,10 +3,13 @@
 #include <cstdint>
 #include <cstddef>
 
-// Font renderer: reads from embedded terminus28.fnt blob
+// Font renderer: reads from embedded terminus28.fnt / terminus24.fnt blobs
 class FontRenderer {
 public:
     bool begin();
+
+    // Switch between 24pt and 28pt font
+    bool setSize(int fontSize);
 
     // Draw UTF-8 text at (x, y). y is baseline.
     // Returns width consumed.
@@ -18,8 +21,15 @@ public:
     // Get glyph advance width
     int charWidth(uint32_t codepoint);
 
-    // Get line height
+    // Font metrics
     int lineHeight() const { return line_height_; }
+    int ascent() const { return ascent_; }
+    int descent() const { return descent_; }
+    int fontSize() const { return font_size_; }
+
+    // Cell-based layout helpers (monospace assumption)
+    int cjkAdvance() const { return line_height_; }     // fullwidth advance (pixels)
+    int halfAdvance() const { return line_height_ / 2; } // halfwidth advance (pixels)
 
     // Check if font is loaded
     bool loaded() const { return loaded_; }
@@ -43,8 +53,14 @@ private:
     // Draw a single glyph at (x, y)
     void drawGlyph(int x, int y, const GlyphMeta *meta, bool invert);
 
+    // Parse font header from a blob pointer
+    bool parseBlob(const uint8_t *blob, size_t sz);
+
     const uint8_t *blob_ = nullptr;
+    const uint8_t *blob_24_ = nullptr;
+    const uint8_t *blob_28_ = nullptr;
     bool loaded_ = false;
+    int font_size_ = 28;
     int line_height_ = 28;
     int ascent_ = 22;
     int descent_ = 6;

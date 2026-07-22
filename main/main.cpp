@@ -100,6 +100,11 @@ extern "C" void app_main() {
 
     // Initialize font renderer
     g_font.begin();
+    // Apply saved font size
+    {
+        int fs = g_settings.fontSize();
+        if (fs != 28) g_font.setSize(fs);
+    }
 
     // Initialize display
     initDisplay();

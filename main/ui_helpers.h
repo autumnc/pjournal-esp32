@@ -2,20 +2,23 @@
 
 #include <string>
 #include <vector>
+#include "font_renderer.h"
 
 class IME;
 
 // VRow structure for word-wrap rendering
 struct VRow { int lineIdx; int start; int end; };
 
-// UI constants
+// UI constants - screen dimensions are fixed
 #define SCREEN_W 400
 #define SCREEN_H 300
-#define FONT_H 28
-#define STATUS_H 28
+
+// Font-dependent metrics (dynamic via g_font)
+#define FONT_H (g_font.lineHeight())
+#define STATUS_H (g_font.lineHeight())
 #define VISIBLE_LINES ((SCREEN_H - STATUS_H) / FONT_H)
-#define LINE_SPACING 28
-#define STATUS_Y (SCREEN_H - FONT_H - 2)  // 270
+#define LINE_SPACING (g_font.lineHeight())
+#define STATUS_Y (SCREEN_H - FONT_H - 2)
 
 // IME singleton (defined in ui_helpers.cpp)
 extern IME &g_ime;

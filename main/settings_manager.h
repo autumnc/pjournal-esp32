@@ -24,6 +24,7 @@ public:
     std::string timezone();
     std::string ntpServer();
     bool autoSave();
+    int fontSize();
 
     void setFlomoEmail(const std::string &v);
     void setFlomoPassword(const std::string &v);

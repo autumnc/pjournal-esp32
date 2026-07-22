@@ -23,6 +23,7 @@ idf_component_register(SRCS
         "ime/ime_table_pinyin.bin"
         "ime/liangfen.bin"
         "terminus28.fnt"
+        "terminus24.fnt"
     PRIV_REQUIRES
         spi_flash
         nvs_flash
@@ -44,4 +45,4 @@ idf_component_register(SRCS
         esp_adc
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="1.5.1")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="1.6.0")

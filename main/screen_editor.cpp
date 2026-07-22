@@ -22,9 +22,9 @@ extern "C" {
     extern void u8g2_DrawFrame(void *u8g2, int x, int y, int w, int h);
 }
 
-#define IME_CODE_Y (STATUS_Y - 2*FONT_H + 22)
-#define IME_CAND_Y (STATUS_Y - FONT_H + 19)
-#define EDITOR_MAX_CELLS 28
+#define IME_CODE_Y (STATUS_Y - 2*FONT_H + g_font.ascent())
+#define IME_CAND_Y (STATUS_Y - FONT_H + g_font.ascent() - 3)
+#define EDITOR_MAX_CELLS (SCREEN_W / g_font.halfAdvance())
 
 // ── Editor state ─────────────────────────────────────────────────────────
 static struct {
@@ -68,7 +68,7 @@ static int getWordCount() {
 
 // ── Editor drawing ────────────────────────────────────────────────────────
 static void drawEditor() {
-    int y = 28;
+    int y = FONT_H;
 
     if (g_editor.promptMode && !g_editor.promptText.empty()) {
         const int maxW = SCREEN_W - 8;
@@ -130,7 +130,7 @@ static void drawEditor() {
         std::string prefix = line.substr(vr.start, g_editor.cx - vr.start);
         int cx = 4 + g_font.textWidth(prefix.c_str());
         int cy_draw = y + (cursorVR - g_editor.scroll) * FONT_H;
-        int cw = 14;
+        int cw = g_font.halfAdvance();
         if (g_editor.cx < (int)line.length()) {
             const char *cp = line.c_str() + g_editor.cx;
             unsigned char b = (unsigned char)*cp;
@@ -160,7 +160,7 @@ static void drawEditor() {
         {
             int cw = g_font.textWidth(code.c_str()) + 8;
             u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, codeBaseline - 22, cw, FONT_H);
+            u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
             u8g2_SetDrawColor(g_u8g2, 0);
             g_font.drawText(4, codeBaseline, code.c_str(), false);
             u8g2_SetDrawColor(g_u8g2, 1);
@@ -170,7 +170,7 @@ static void drawEditor() {
             int pw = tw + 8;
             int px = SCREEN_W - pw - 4;
             u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, px, codeBaseline - 22, pw, FONT_H);
+            u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
             u8g2_SetDrawColor(g_u8g2, 0);
             g_font.drawText(px + 4, codeBaseline, pageInfo, false);
             u8g2_SetDrawColor(g_u8g2, 1);
@@ -193,7 +193,7 @@ static void drawEditor() {
         {
             int cw = g_font.textWidth(candLine.c_str()) + 8;
             u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, IME_CAND_Y - 22, cw, FONT_H);
+            u8g2_DrawBox(g_u8g2, 4, IME_CAND_Y - g_font.ascent(), cw, FONT_H);
             u8g2_SetDrawColor(g_u8g2, 0);
             g_font.drawText(4, IME_CAND_Y, candLine.c_str(), false);
             u8g2_SetDrawColor(g_u8g2, 1);

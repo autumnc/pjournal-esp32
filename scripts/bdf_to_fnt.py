@@ -268,6 +268,7 @@ def convert_bdf_to_fnt(bdf_path, output_path):
     print(f"  Line height: {line_height}, Ascent: {ascent}, Descent: {descent}")
 
 if __name__ == '__main__':
-    bdf_path = "/media/sf_share/Terminus/TerminusSongMedium-28.bdf"
-    output_path = os.path.join(os.path.dirname(__file__), "..", "main", "terminus28.fnt")
+    import sys
+    bdf_path = sys.argv[1] if len(sys.argv) > 1 else "/media/sf_share/Terminus/TerminusSongMedium-28.bdf"
+    output_path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "main", "terminus28.fnt")
     convert_bdf_to_fnt(bdf_path, os.path.abspath(output_path))
