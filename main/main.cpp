@@ -198,7 +198,11 @@ extern "C" void app_main() {
     // Initialize IME
     auto &ime = IME::getInstance();
     ime.begin();
-    ime.setPageSize(5);
+    // Set candidate page size based on font size
+    {
+        int fs = g_font.fontSize();
+        ime.setPageSize(fs <= 20 ? 9 : fs <= 22 ? 7 : 5);
+    }
 
     // Initialize Bluetooth keyboard
     ESP_LOGI(TAG, "Starting Bluetooth...");

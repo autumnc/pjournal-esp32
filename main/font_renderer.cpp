@@ -8,12 +8,15 @@ FontRenderer g_font;
 // Embedded font data from CMakeLists EMBED_FILES
 extern const uint8_t terminus28_fnt_start[] asm("_binary_terminus28_fnt_start");
 extern const uint8_t terminus28_fnt_end[]   asm("_binary_terminus28_fnt_end");
-extern const uint8_t terminus24_fnt_start[] asm("_binary_terminus24_fnt_start");
-extern const uint8_t terminus24_fnt_end[]   asm("_binary_terminus24_fnt_end");
+extern const uint8_t terminus22_fnt_start[] asm("_binary_terminus22_fnt_start");
+extern const uint8_t terminus22_fnt_end[]   asm("_binary_terminus22_fnt_end");
+extern const uint8_t terminus20_fnt_start[] asm("_binary_terminus20_fnt_start");
+extern const uint8_t terminus20_fnt_end[]   asm("_binary_terminus20_fnt_end");
 
 bool FontRenderer::begin() {
     blob_28_ = terminus28_fnt_start;
-    blob_24_ = terminus24_fnt_start;
+    blob_22_ = terminus22_fnt_start;
+    blob_20_ = terminus20_fnt_start;
     // Default to 28pt
     return setSize(28);
 }
@@ -25,9 +28,12 @@ bool FontRenderer::setSize(int fontSize) {
     if (fontSize == 28) {
         blob = blob_28_;
         sz = terminus28_fnt_end - terminus28_fnt_start;
-    } else if (fontSize == 24) {
-        blob = blob_24_;
-        sz = terminus24_fnt_end - terminus24_fnt_start;
+    } else if (fontSize == 22) {
+        blob = blob_22_;
+        sz = terminus22_fnt_end - terminus22_fnt_start;
+    } else if (fontSize == 20) {
+        blob = blob_20_;
+        sz = terminus20_fnt_end - terminus20_fnt_start;
     } else {
         return false;
     }

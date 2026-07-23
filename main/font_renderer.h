@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 
-// Font renderer: reads from embedded terminus28.fnt / terminus24.fnt blobs
+// Font renderer: reads from embedded terminus28.fnt / terminus22.fnt / terminus20.fnt blobs
 class FontRenderer {
 public:
     bool begin();
@@ -57,7 +57,8 @@ private:
     bool parseBlob(const uint8_t *blob, size_t sz);
 
     const uint8_t *blob_ = nullptr;
-    const uint8_t *blob_24_ = nullptr;
+    const uint8_t *blob_22_ = nullptr;
+    const uint8_t *blob_20_ = nullptr;
     const uint8_t *blob_28_ = nullptr;
     bool loaded_ = false;
     int font_size_ = 28;

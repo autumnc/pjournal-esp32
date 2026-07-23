@@ -96,5 +96,7 @@ bool SettingsManager::autoSave() { return get("auto_save") == "1"; }
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");
-    return v == "24" ? 24 : 28;
+    if (v == "22") return 22;
+    if (v == "20") return 20;
+    return 28;
 }

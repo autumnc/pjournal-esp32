@@ -23,7 +23,8 @@ idf_component_register(SRCS
         "ime/ime_table_pinyin.bin"
         "ime/liangfen.bin"
         "terminus28.fnt"
-        "terminus24.fnt"
+        "terminus22.fnt"
+        "terminus20.fnt"
     PRIV_REQUIRES
         spi_flash
         nvs_flash
