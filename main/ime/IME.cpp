@@ -1102,7 +1102,19 @@ bool IME::handleKey(int key, std::string &out) {
         return true;
     }
     if (key == '\b') {
-        if (_code.length() > 0) {
+        if (_prefix.length() > 0) {
+            _code = _codeOrig;
+            if (_code.length() > 0) {
+                _code.erase(_code.length() - 1);
+            }
+            _prefix.clear();
+            _remainder.clear();
+            _partialStart = 0;
+            _maxMatchLen = 0;
+            _displayCodeDirty = true;
+            if (_code.length() == 0) reset();
+            else lookup();
+        } else if (_code.length() > 0) {
             _code.erase(_code.length() - 1);
             _displayCodeDirty = true;
             if (_code.length() == 0) reset();
