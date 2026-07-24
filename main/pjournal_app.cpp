@@ -163,8 +163,8 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = FONT_H;
     ui_draw_text(4, y, "过往日记", false, true);
     u8g2_DrawHLine(g_u8g2, 0, y + 7, SCREEN_W);
-    y = y + 7 + FONT_H - 4;
-    int visible = (SCREEN_H - y + FONT_H - 1) / FONT_H;
+    y = y + 7 + LINE_SPACING - 4;
+    int visible = (SCREEN_H - y + LINE_SPACING - 1) / LINE_SPACING;
     if (g_browser.selection < g_browser.scroll) g_browser.scroll = g_browser.selection;
     if (g_browser.selection >= g_browser.scroll + visible)
         g_browser.scroll = g_browser.selection - visible + 1;
@@ -177,7 +177,7 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
         std::string preview = e.preview.empty() ? e.title : e.preview;
         char buf[80];
         snprintf(buf, sizeof(buf), "%s %s", dateDisplay.c_str(), preview.c_str());
-        ui_draw_text(8, y + i * FONT_H, buf, sel);
+        ui_draw_text(8, y + i * LINE_SPACING, buf, sel);
     }
     ui_commit();
     return APP_BROWSER;
@@ -254,7 +254,7 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     const int sepY = headerY + g_font.descent();
     const int contentY = sepY + 26;
     const int contentMaxY = STATUS_Y;
-    int visible = (contentMaxY - contentY + FONT_H - 1) / FONT_H;
+    int visible = (contentMaxY - contentY + LINE_SPACING - 1) / LINE_SPACING;
     if (visible < 1) visible = 1;
     int maxScroll = (int)vrows.size() - visible;
     if (maxScroll < 0) maxScroll = 0;
@@ -272,7 +272,7 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     for (int i = 0; i < visible && (g_viewer.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_viewer.scroll + i];
         std::string text = g_viewer.lines[vr.lineIdx].substr(vr.start, vr.end - vr.start);
-        ui_draw_text(4, contentY + i * FONT_H, text.c_str(), false);
+        ui_draw_text(4, contentY + i * LINE_SPACING, text.c_str(), false);
     }
 
     if (g_viewer.scroll > 0 && maxScroll > 0) {

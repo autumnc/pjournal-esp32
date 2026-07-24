@@ -88,17 +88,17 @@ static void drawEditor() {
             std::string line(rowStart, p - rowStart);
             if (!line.empty()) {
                 ui_draw_text(4, y, line.c_str(), false, true);
-                y += FONT_H;
+                y += LINE_SPACING;
             }
         }
         u8g2_DrawHLine(g_u8g2, 0, y, SCREEN_W);
-        y += FONT_H;
+        y += LINE_SPACING;
     }
 
     const auto& vrows = getVrows();
     bool composing = g_ime.composing();
     int contentEndY = composing ? IME_CODE_Y : STATUS_Y;
-    int visibleVrows = (contentEndY - y + FONT_H - 1) / FONT_H;
+    int visibleVrows = (contentEndY - y + LINE_SPACING - 1) / LINE_SPACING;
     if (visibleVrows < 1) visibleVrows = 1;
 
     int cursorVR = -1;
@@ -109,7 +109,7 @@ static void drawEditor() {
         }
     }
 
-    int normalVisibleVrows = (STATUS_Y - y + FONT_H - 1) / FONT_H;
+    int normalVisibleVrows = (STATUS_Y - y + LINE_SPACING - 1) / LINE_SPACING;
     int effectiveVisibleVrows = composing ? (normalVisibleVrows - 2) : normalVisibleVrows;
     if (effectiveVisibleVrows < 1) effectiveVisibleVrows = 1;
 
@@ -121,7 +121,7 @@ static void drawEditor() {
     for (int i = 0; i < visibleVrows && (g_editor.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_editor.scroll + i];
         std::string text = g_editor.lines[vr.lineIdx].substr(vr.start, vr.end - vr.start);
-        ui_draw_text(4, y + i * FONT_H, text.c_str());
+        ui_draw_text(4, y + i * LINE_SPACING, text.c_str());
     }
 
     if (cursorVR >= 0 && cursorVR >= g_editor.scroll && cursorVR < g_editor.scroll + visibleVrows) {
@@ -129,7 +129,7 @@ static void drawEditor() {
         const std::string &line = g_editor.lines[vr.lineIdx];
         std::string prefix = line.substr(vr.start, g_editor.cx - vr.start);
         int cx = 4 + g_font.textWidth(prefix.c_str());
-        int cy_draw = y + (cursorVR - g_editor.scroll) * FONT_H;
+        int cy_draw = y + (cursorVR - g_editor.scroll) * LINE_SPACING;
         int cw = g_font.halfAdvance();
         if (g_editor.cx < (int)line.length()) {
             const char *cp = line.c_str() + g_editor.cx;

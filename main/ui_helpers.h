@@ -17,7 +17,7 @@ struct VRow { int lineIdx; int start; int end; };
 #define FONT_H (g_font.lineHeight())
 #define STATUS_H (g_font.lineHeight())
 #define VISIBLE_LINES ((SCREEN_H - STATUS_H) / FONT_H)
-#define LINE_SPACING (g_font.lineHeight())
+#define LINE_SPACING (g_font.lineHeight() + 4)
 #define STATUS_Y (SCREEN_H - FONT_H - 2)
 
 // IME singleton (defined in ui_helpers.cpp)

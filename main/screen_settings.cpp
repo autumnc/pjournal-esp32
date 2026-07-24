@@ -87,12 +87,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ui_clear();
                 auto &f = SETTINGS_FIELDS[g_settingsState.selection];
                 ui_draw_text_centered(28, f.label, false, true);
-                u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
+                int sepY = 28 + g_font.descent() + 4;
+                u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
 
                 std::string display = g_settingsState.editBuffer;
                 if (f.masked) display = std::string(display.length(), '*');
                 if (display.empty()) display = " ";
-                int textY = FONT_H + 32;
+                int textY = sepY + 4 + g_font.ascent();
                 int cx = g_font.textWidth(display.substr(0, g_settingsState.editCursor).c_str());
                 ui_draw_text(4, textY, display.c_str());
 
@@ -209,12 +210,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         ui_clear();
         auto &f = SETTINGS_FIELDS[g_settingsState.selection];
         ui_draw_text_centered(28, f.label, false, true);
-        u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
+        int sepY = 28 + g_font.descent() + 4;
+        u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
 
         std::string display = g_settingsState.editBuffer;
         if (f.masked) display = std::string(display.length(), '*');
 
-        int textY = FONT_H + 32;
+        int textY = sepY + 4 + g_font.ascent();
         int maxW = SCREEN_W - 8;
         std::vector<std::pair<int,int>> lines;
         int lineStart = 0;
