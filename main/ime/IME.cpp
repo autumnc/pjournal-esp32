@@ -339,6 +339,7 @@ void IME::reset() {
     _code.clear();
     _displayCodeDirty = true;
     _all.clear();
+    _candLen.clear();
     if (_all.capacity() > 200) _all.shrink_to_fit();
     else if (_all.capacity() < 50) _all.reserve(50);
     _page.clear();
@@ -376,6 +377,7 @@ void IME::searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi) {
 
 void IME::lookup() {
     _all.clear();
+    _candLen.clear();
     _pageStart = 0;
     _maxMatchLen = 0;
     if (_prefix.length() == 0) _codeOrig = _code;
@@ -396,6 +398,7 @@ void IME::lookup() {
     // First char uppercase: treat as literal, use partial match for remainder
     if (pinyinLen == 0 && _code.length() > 0) {
         _all.push_back(_code.substr(0, 1));
+        _candLen.push_back(0);
         _partialStart = 0;
         _remainder = _code.substr(1);
         buildPage();
@@ -421,7 +424,10 @@ void IME::lookup() {
             std::string h(hz);
             bool dup = false;
             for (auto &e : _all) if (e == h) { dup = true; break; }
-            if (!dup) _all.push_back(h);
+            if (!dup) {
+                _all.push_back(h);
+                _candLen.push_back(0);
+            }
         }
         buildPage();
         return;
@@ -449,6 +455,7 @@ void IME::lookup() {
             });
         for (auto &m : userMatches) {
             _all.push_back(m.second);
+            _candLen.push_back(0);
             if (_all.size() >= 100) break;
         }
         buildPage();
@@ -478,6 +485,7 @@ void IME::lookup() {
             });
         for (auto &f : userSingleFreq) {
             _all.push_back(f.second);
+            _candLen.push_back(0);
             if (_all.size() >= 100) break;
         }
         if (_all.size() >= 100) { buildPage(); return; }
@@ -510,6 +518,7 @@ void IME::lookup() {
             for (auto &e : _all) if (e == h) { dup = true; break; }
             if (!dup) {
                 _all.push_back(h);
+                _candLen.push_back((int)strlen(code));
                 if ((int)strlen(code) > _maxMatchLen) _maxMatchLen = (int)strlen(code);
             }
         }
@@ -539,6 +548,7 @@ void IME::lookup() {
             });
         for (auto &f : userWordFreq) {
             _all.push_back(f.second);
+            _candLen.push_back(0);
             if (_all.size() >= 100) break;
         }
         if (_all.size() >= 100) { buildPage(); return; }
@@ -579,6 +589,7 @@ void IME::lookup() {
                     for (auto &e : _all) if (e == w) { dup = true; break; }
                     if (!dup) {
                         _all.push_back(w);
+                        _candLen.push_back(std::min((int)cl, qlen));
                         if ((int)cl > _maxMatchLen) _maxMatchLen = (int)cl;
                     }
                 }
@@ -590,6 +601,23 @@ void IME::lookup() {
                 }
             }
         }
+    }
+    // Sort candidates by consumed length descending (phrases first)
+    if (_all.size() > 1) {
+        std::vector<int> order(_all.size());
+        for (size_t i = 0; i < order.size(); i++) order[i] = (int)i;
+        std::stable_sort(order.begin(), order.end(),
+            [this](int a, int b) { return _candLen[a] > _candLen[b]; });
+        std::vector<std::string> sortedAll;
+        std::vector<int> sortedLen;
+        sortedAll.reserve(_all.size());
+        sortedLen.reserve(_candLen.size());
+        for (int i : order) {
+            sortedAll.push_back(std::move(_all[i]));
+            sortedLen.push_back(_candLen[i]);
+        }
+        _all.swap(sortedAll);
+        _candLen.swap(sortedLen);
     }
     if (_all.size() >= 100) { buildPage(); return; }
 
@@ -641,6 +669,7 @@ void IME::lookup() {
             });
         for (auto &f : userInitFreq) {
             _all.push_back(f.second);
+            _candLen.push_back(0);
             if (_all.size() >= 100) break;
         }
         if (_all.size() >= 100) { buildPage(); return; }
@@ -697,6 +726,7 @@ void IME::lookup() {
                         for (auto &e : _all) if (e == w) { dup = true; break; }
                         if (!dup) {
                             _all.push_back(w);
+                            _candLen.push_back((int)cl);
                             if ((int)cl > _maxMatchLen) _maxMatchLen = (int)cl;
                         }
                     }
@@ -821,6 +851,7 @@ void IME::lookup() {
                         for (auto &e : _all) if (e == w) { dup = true; break; }
                         if (!dup) {
                             _all.push_back(w);
+                            _candLen.push_back((int)cl);
                             if ((int)cl > _maxMatchLen) _maxMatchLen = (int)cl;
                         }
                     }
@@ -855,7 +886,10 @@ void IME::lookup() {
                 std::string h(hz);
                 bool dup = false;
                 for (auto &e : _all) if (e == h) { dup = true; break; }
-                if (!dup) _all.push_back(h);
+                if (!dup) {
+                    _all.push_back(h);
+                    _candLen.push_back(0);
+                }
             }
             if (_all.size() > (size_t)_partialStart) {
                 _remainder = _code.substr(tryLen);
@@ -889,6 +923,7 @@ void IME::beginPredict(const std::string &text) {
                 word.append((const char *)p, wl);
                 p += wl;
                 _all.push_back(word);
+                _candLen.push_back(0);
             }
             buildPage();
             return;
@@ -929,15 +964,15 @@ bool IME::commit(int idx, std::string &out) {
     bool partial = (_remainder.length() > 0 && idx >= partialRel);
     int pLen = pinyinPrefixLen(_code);
     bool hasUpperSuffix = (pLen < (int)_code.length());
-    // If matched the full pinyin prefix and remaining is uppercase suffix,
-    // append it directly instead of treating as partial match
-    bool fullWordContinue = (!partial && _maxMatchLen > 0
-                             && _maxMatchLen < (int)_code.length()
-                             && _maxMatchLen <= 17
-                             && !(_maxMatchLen == pLen && hasUpperSuffix));
-    if (partial || fullWordContinue) {
+    // Use per-candidate code length from _candLen for continuation
+    int candIdx = idx + _pageStart;
+    int consumedLen = (candIdx < (int)_candLen.size()) ? _candLen[candIdx] : 0;
+    bool candContinue = (!partial && consumedLen > 0
+                         && consumedLen < (int)_code.length()
+                         && consumedLen <= 17);
+    if (partial || candContinue) {
         if (!partial)
-            _remainder = _code.substr(_maxMatchLen);
+            _remainder = _code.substr(consumedLen);
         if (_remainder.length() == 0 || _remainder.length() >= _code.length()) {
             _prefix.clear();
             _displayCodeDirty = true;

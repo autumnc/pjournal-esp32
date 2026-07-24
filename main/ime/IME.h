@@ -119,6 +119,7 @@ private:
 
     std::string _code;
     std::vector<std::string> _all;
+    std::vector<int> _candLen;  // code length per candidate in _all
     std::vector<std::string> _page;
     int _pageStart = 0;
     int _pageSize = 9;
