@@ -563,10 +563,15 @@ void IME::lookup() {
             wpos += 1 + cl;
             if (wpos >= whi) break;
             uint8_t n = _wordData[wpos++];
-            if ((int)cl >= qlen && strncmp(wc, q, qlen) == 0) {
+            int matchLen = std::min((int)cl, qlen);
+            if (strncmp(wc, q, matchLen) == 0) {
                 for (uint8_t j = 0; j < n && wpos < whi; j++) {
                     uint8_t wl = _wordData[wpos++];
                     if (wl == 0 || wpos + wl > whi) break;
+                    if ((int)cl < qlen && wl <= 3) {
+                        wpos += wl;
+                        continue;
+                    }
                     std::string w;
                     w.append((const char *)_wordData + wpos, wl);
                     wpos += wl;
