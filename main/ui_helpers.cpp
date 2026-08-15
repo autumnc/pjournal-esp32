@@ -234,12 +234,15 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
                 int cc = charCellWidth(c);
                 if (cells + cc > cap) break;
                 cells += cc;
-                if (c == ' ' && end >= pe) lastBreak = end + 1;
-                if (c < 0x80) end++;
-                else if ((c & 0xE0) == 0xC0) end += 2;
-                else if ((c & 0xF0) == 0xE0) end += 3;
-                else if ((c & 0xF8) == 0xF0) end += 4;
-                else end++;
+                int clen = utf8CharLen(c);
+                if (c == ' ' && end >= pe) {
+                    lastBreak = end + 1;
+                } else if (c >= 0x80 && end >= pe) {
+                    // CJK: 每个汉字都允许折行。否则连续无空格中文被当作一个单词,
+                    // 英文+空格+汉字时会固定在空格处折行,英文行尾留大片空白。
+                    lastBreak = end + clen;
+                }
+                end += clen;
             }
             if (end >= len) {
                 vrows.push_back({li, pos, len});
