@@ -48,11 +48,25 @@ int battery_pct() {
     if (last_read_us != 0 && (now - last_read_us) < 5000000)
         return cached;
     last_read_us = now;
-    int raw;
-    if (adc_oneshot_read(s_adc_handle, ADC_CHANNEL_3, &raw) != ESP_OK) return cached;
-    int mv;
-    if (adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) != ESP_OK) return cached;
-    float v = mv * 0.001f * 3.0f;
+    // 每个 5s 采样点采 8 次取均值,降低单次 ADC 抖动
+    float sum = 0.0f;
+    int ok = 0;
+    for (int i = 0; i < 8; i++) {
+        int raw;
+        if (adc_oneshot_read(s_adc_handle, ADC_CHANNEL_3, &raw) != ESP_OK) continue;
+        int mv;
+        if (adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) != ESP_OK) continue;
+        sum += mv * 0.001f * 3.0f;
+        ok++;
+    }
+    if (ok == 0) return cached;
+    // 跨采样点 EMA 平滑,防止电量显示跳变(在电压域平滑,避免 LUT 折点处产生毛刺)
+    static float ema_voltage = 0.0f;
+    static bool ema_inited = false;
+    float v = sum / ok;
+    if (!ema_inited) { ema_voltage = v; ema_inited = true; }
+    else ema_voltage = 0.3f * v + 0.7f * ema_voltage;
+    v = ema_voltage;
     static const float lut[][2] = {
         {4.12f, 100}, {4.08f, 92}, {4.02f, 82},
         {3.96f, 70},  {3.90f, 58}, {3.84f, 47},
