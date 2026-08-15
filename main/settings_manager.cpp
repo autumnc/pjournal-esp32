@@ -124,3 +124,5 @@ int SettingsManager::fontSize() {
     if (v == "20") return 20;
     return 28;
 }
+
+std::string SettingsManager::appMode() { return getString("app_mode", "journal"); }

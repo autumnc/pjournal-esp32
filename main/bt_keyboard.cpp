@@ -37,6 +37,8 @@ static const char *TAG = "BtKeybrd";
 #define KEY_FULLWIDTH_TOGGLE 0x8B
 #define KEY_TRAD_TOGGLE 0x8C
 #define KEY_LSHIFT_TAP 0x8D
+// Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
+#define KEY_FILE_BASE 0x90
 
 // HID Usage ID → ASCII
 static const uint8_t s_asc_low[] = {
@@ -291,6 +293,13 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                     // Ctrl+letter → control character (0x01-0x1A)
                     uint8_t cc = kc - 3;
                     xQueueSendToBack(s_queue, &cc, 0);
+                    continue;
+                }
+                if (ctrl && kc >= 30 && kc <= 39) {
+                    // Ctrl+0-9 → 快捷编辑文件切换. HID usage: '1'=30 ... '9'=38, '0'=39
+                    int fileIdx = (kc == 39) ? 0 : (kc - 29);
+                    uint8_t fk = KEY_FILE_BASE + fileIdx;
+                    xQueueSendToBack(s_queue, &fk, 0);
                     continue;
                 }
 
@@ -730,6 +739,11 @@ void BtKeyboard::checkKeyRepeat() {
                 } else if (ctrl && kc >= 4 && kc <= 29) {
                     uint8_t cc = kc - 3;
                     xQueueSendToBack(s_queue, &cc, 0);
+                } else if (ctrl && kc >= 30 && kc <= 39) {
+                    // Ctrl+0-9 repeat → 文件切换码(编辑器对同文件 no-op)
+                    int fileIdx = (kc == 39) ? 0 : (kc - 29);
+                    uint8_t fk = KEY_FILE_BASE + fileIdx;
+                    xQueueSendToBack(s_queue, &fk, 0);
                 } else {
                     uint8_t ascii = hid_to_ascii(kc, s_last_mod);
                     if (ascii) xQueueSendToBack(s_queue, &ascii, 0);

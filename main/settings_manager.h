@@ -30,6 +30,7 @@ public:
     bool sleepScreen();
     bool markdownRender();
     int fontSize();
+    std::string appMode();  // "journal"(个人日记) 或 "quick"(快捷编辑)
 
     void setFlomoEmail(const std::string &v);
     void setFlomoPassword(const std::string &v);

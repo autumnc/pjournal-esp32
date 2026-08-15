@@ -1,6 +1,7 @@
 #include "screen_bt_manage.h"
 #include "bt_keyboard.h"
 #include "ui_helpers.h"
+#include "quick_edit.h"
 #include <cstdio>
 #include <esp_timer.h>
 
@@ -246,8 +247,8 @@ AppState screen_bt_manage_handle(int key, ScreenContext &ctx) {
     // ── 已配对设备管理模式(默认) ──
     if (key == 'q' || key == 'Q' || key == 0x1B) {
         if (g_btState.connecting) g_bt.disconnect();
-        ctx.nextState = APP_MAIN;
-        return APP_MAIN;
+        ctx.nextState = g_quickEdit ? APP_SETTINGS : APP_MAIN;
+        return ctx.nextState;
     } else if (key == 'a' || key == 'A') {
         g_btState.mode = BT_SCAN;
         g_btState.connecting = false;

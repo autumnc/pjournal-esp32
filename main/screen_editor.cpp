@@ -4,6 +4,7 @@
 #include "deepseek_client.h"
 #include "wifi_manager.h"
 #include "settings_manager.h"
+#include "quick_edit.h"
 #include "ui_helpers.h"
 #include "markdown_render.h"
 #include "ime/IME.h"
@@ -144,6 +145,59 @@ static int getWordCount() {
         g_editor.wordCountDirty = false;
     }
     return g_editor.cachedWordCount;
+}
+
+// ── Quick edit (快捷编辑) helpers ─────────────────────────────────────────
+static std::string currentEditorText() {
+    std::string text;
+    for (auto &l : g_editor.lines) { text += l; text += '\n'; }
+    while (!text.empty() && text.back() == '\n') text.pop_back();
+    return text;
+}
+
+static void loadLinesIntoEditor(const std::string &content) {
+    g_editor.lines.clear();
+    if (content.empty()) {
+        g_editor.lines.push_back("");
+        g_editor.cx = g_editor.cy = 0;
+        return;
+    }
+    size_t pos = 0;
+    while (pos < content.length()) {
+        size_t nl = content.find('\n', pos);
+        g_editor.lines.push_back((nl == std::string::npos) ? content.substr(pos) : content.substr(pos, nl - pos));
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+    }
+    while (g_editor.lines.size() > 1 && g_editor.lines.back().empty())
+        g_editor.lines.pop_back();
+    g_editor.cx = (int)g_editor.lines.back().length();
+    g_editor.cy = (int)g_editor.lines.size() - 1;
+}
+
+static void loadQuickEditFile() {
+    loadLinesIntoEditor(quickEditLoad(quickEditIndex()));
+    g_editor.scroll = 0;
+    g_editor.targetCx = -1;
+    g_editor.vrowsDirty = true;
+    g_editor.wordCountDirty = true;
+    g_editor.modifiedSinceSave = false;
+    g_editor.autoSaveTime = 0;
+}
+
+// 是否为快捷编辑主会话(直接编辑 /sdcard/{n}.txt)。g_quickEdit 模式下若正
+// 在编辑灵感/日记内容(savedFilename 非空),则不属于快捷文件会话。
+static bool inQuickFileSession() {
+    return g_quickEdit && g_editor.savedFilename.empty();
+}
+
+static void quickEditSwitchTo(int idx) {
+    if (idx < 0) idx = 0;
+    if (idx > 9) idx = 9;
+    if (idx == quickEditIndex()) return;
+    quickEditSave(quickEditIndex(), currentEditorText());
+    quickEditSetIndex(idx);
+    loadQuickEditFile();
 }
 
 // ── Editor drawing ────────────────────────────────────────────────────────
@@ -318,10 +372,14 @@ static void drawEditor() {
     }
 
     if (!s_skipStatusBarAndIme) {
-        const char *mode = g_editor.promptMode ? "提示写作" : "自由写作";
         int wc = getWordCount();
         char left[48];
-        snprintf(left, sizeof(left), "%s", mode);
+        if (inQuickFileSession()) {
+            snprintf(left, sizeof(left), "[%d]", quickEditIndex());
+        } else {
+            const char *mode = g_editor.promptMode ? "提示写作" : "自由写作";
+            snprintf(left, sizeof(left), "%s", mode);
+        }
         std::string imeLabel;
         if (!g_editor.imeActive) imeLabel = "EN";
         else if (g_ime.english()) imeLabel = "[英]";
@@ -362,9 +420,11 @@ static void drawConfirmDialog() {
 
 // ── Editor save helper ────────────────────────────────────────────────────
 static bool saveCurrentContent() {
-    std::string text;
-    for (auto &l : g_editor.lines) { text += l; text += '\n'; }
-    while (!text.empty() && text.back() == '\n') text.pop_back();
+    std::string text = currentEditorText();
+    if (inQuickFileSession()) {
+        // 快捷编辑: 直接写回 /sdcard/{n}.txt, 允许保存空文件
+        return quickEditSave(quickEditIndex(), text);
+    }
     if (text.empty()) return false;
 
     time_t now; time(&now); struct tm *tm = localtime(&now);
@@ -402,8 +462,13 @@ static AppState finishEditor(ScreenContext &ctx) {
 void screen_editor_init(ScreenContext &ctx) {
     g_editor.lines.clear();
     g_editor.autoSaveTime = 0;
+    g_editor.savedFilename = ctx.editFilename;
 
-    if (!ctx.editContent.empty()) {
+    // 快捷编辑主会话: 直接加载 /sdcard/{n}.txt; 有传入内容(灵感/日记编辑)时不走快捷文件
+    bool quickFile = g_quickEdit && ctx.editContent.empty() && g_editor.savedFilename.empty();
+    if (quickFile) {
+        loadQuickEditFile();
+    } else if (!ctx.editContent.empty()) {
         size_t pos = 0;
         while (pos < ctx.editContent.length()) {
             size_t nl = ctx.editContent.find('\n', pos);
@@ -431,8 +496,7 @@ void screen_editor_init(ScreenContext &ctx) {
     g_editor.modifiedSinceSave = false;
     g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     g_editor.promptText = ctx.promptText;
-    g_editor.promptMode = ctx.promptMode;
-    g_editor.savedFilename = ctx.editFilename;
+    g_editor.promptMode = ctx.promptMode && !quickFile;
     ctx.editFilename.clear();
 }
 
@@ -470,7 +534,19 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.modifiedSinceSave = true;
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
+    if (key == 0x0E) { // Ctrl+N → 下一个快捷编辑文件
+        if (inQuickFileSession()) {
+            quickEditNext();
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+    }
     if (key == 0x10) { // Ctrl+P
+        if (inQuickFileSession()) {  // 快捷编辑: 上一个文件
+            quickEditPrev();
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
         bool wifiWasConnected = g_wifi.isConnected();
         if (ensure_wifi_connected()) {
             g_editor.promptMode = true;
@@ -498,6 +574,13 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         return APP_EDITOR;
     }
     if (key == 0x1B) {
+        if (inQuickFileSession()) {
+            // 快捷编辑: 自动保存后跳到设置面板
+            quickEditSave(quickEditIndex(), currentEditorText());
+            g_editor.modifiedSinceSave = false;
+            ctx.nextState = APP_SETTINGS;
+            return APP_SETTINGS;
+        }
         bool hasContent = g_editor.lines.size() > 1 ||
             (g_editor.lines.size() == 1 && !g_editor.lines[0].empty());
         if (hasContent && g_editor.modifiedSinceSave) {
@@ -508,9 +591,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         ctx.nextState = ctx.prevState; return ctx.prevState;
     }
     if (key == 0x13) {
-        std::string text;
-        for (auto &l : g_editor.lines) { text += l; text += '\n'; }
-        while (!text.empty() && text.back() == '\n') text.pop_back();
+        std::string text = currentEditorText();
         if (!text.empty()) {
             if (saveCurrentContent()) ctx.statusMessage = "已保存";
             else ctx.statusMessage = "保存失败";
@@ -520,10 +601,25 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.modifiedSinceSave = false;
         return APP_EDITOR;
     }  // Ctrl+S
-    if (key == 0x11) { ctx.nextState = ctx.prevState; return ctx.prevState; }  // Ctrl+Q
+    if (key == 0x11) {
+        if (inQuickFileSession()) {
+            quickEditSave(quickEditIndex(), currentEditorText());
+            g_editor.modifiedSinceSave = false;
+            ctx.nextState = APP_SETTINGS;
+            return APP_SETTINGS;
+        }
+        ctx.nextState = ctx.prevState; return ctx.prevState;
+    }  // Ctrl+Q
     if (key == 0x06) {  // Ctrl+F
         ctx.nextState = APP_SYNC_SEND_FLOMO;
         return APP_SYNC_SEND_FLOMO;
+    }
+    if (key >= KEY_FILE_BASE && key <= KEY_FILE_BASE + 9) {  // Ctrl+0-9 直接切换文件
+        if (inQuickFileSession()) {
+            quickEditSwitchTo(key - KEY_FILE_BASE);
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
     }
 
     // ── Clipboard operations (Ctrl+C, Ctrl+X, Ctrl+V) ────────────────
@@ -765,10 +861,10 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
     }
 
-    // Auto-save on idle ticks
+    // Auto-save on idle ticks (快捷编辑始终自动保存)
     if (key == 0 && g_editor.autoSaveTime > 0 && esp_timer_get_time() > g_editor.autoSaveTime) {
         g_editor.autoSaveTime = 0;
-        if (g_settings.autoSave()) {
+        if (inQuickFileSession() || g_settings.autoSave()) {
             if (saveCurrentContent()) g_editor.modifiedSinceSave = false;
         }
     }
@@ -818,10 +914,7 @@ bool app_editor_needs_reinit() {
 }
 
 std::string app_get_editor_text() {
-    std::string text;
-    for (auto &l : g_editor.lines) { text += l; text += '\n'; }
-    while (!text.empty() && text.back() == '\n') text.pop_back();
-    return text;
+    return currentEditorText();
 }
 
 // Insert text at the cursor, shared by IME commit and voice dictation.

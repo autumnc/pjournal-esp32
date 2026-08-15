@@ -5,6 +5,7 @@
 #include "flomo_client.h"
 #include "ime/IME.h"
 #include "pcf85063.h"
+#include "quick_edit.h"
 #include "ui_helpers.h"
 #include <cstdio>
 #include <cstring>
@@ -23,6 +24,7 @@ extern "C" {
 // ── Settings state ────────────────────────────────────────────────────────
 struct SettingField { const char *key; const char *label; bool masked; bool action; };
 static const SettingField SETTINGS_FIELDS[] = {
+    {"_app_mode", "工作模式", false, true},
     {"_file_mgr", "文件管理", false, true},
     {"_bt_manage", "蓝牙设备管理", false, true},
     {"deepseek_key", "Deepseek Key", false, false},
@@ -336,7 +338,10 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     }
 
     // ── Browse mode ────────────────────────────────────────────────────
-    if (key == 'q' || key == 'Q' || key == 0x1B) { ctx.nextState = APP_MAIN; return APP_MAIN; }
+    if (key == 'q' || key == 'Q' || key == 0x1B) {
+        ctx.nextState = g_quickEdit ? APP_EDITOR : APP_MAIN;
+        return ctx.nextState;
+    }
     if (key == 'k' || key == KEY_UP) { if (g_settingsState.selection > 0) g_settingsState.selection--; }
     if (key == 'j' || key == KEY_DOWN) { if (g_settingsState.selection < NUM_SETTINGS-1) g_settingsState.selection++; }
     if (key == 'd' || key == 'D') {
@@ -346,6 +351,12 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     if (key == 0x0A || key == 0x0D) {
         auto &f = SETTINGS_FIELDS[g_settingsState.selection];
         if (f.action) {
+            if (strcmp(f.key, "_app_mode") == 0) {
+                std::string next = (g_settings.appMode() == "quick") ? "journal" : "quick";
+                g_settings.setString("app_mode", next);
+                ctx.statusMessage = "切换模式需重启生效";
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_flomo_token") == 0) {
                 std::string email = g_settings.flomoEmail();
                 std::string pass = g_settings.flomoPassword();
@@ -462,6 +473,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         if (f.action) {
             if (strcmp(f.key, "_font_size") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %dpt", f.label, g_settings.fontSize());
+            } else if (strcmp(f.key, "_app_mode") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         g_settings.appMode() == "quick" ? "快捷编辑" : "个人日记");
             } else {
                 snprintf(buf, sizeof(buf), "▶ %s", f.label);
             }

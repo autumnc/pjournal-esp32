@@ -50,6 +50,8 @@ struct ScreenContext {
 #define KEY_FULLWIDTH_TOGGLE 0x8B
 #define KEY_TRAD_TOGGLE 0x8C
 #define KEY_LSHIFT_TAP 0x8D
+// Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
+#define KEY_FILE_BASE 0x90
 
 // Screen entry points (screens that remain in pjournal_app.cpp)
 void screen_main_init();
