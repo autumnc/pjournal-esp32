@@ -928,3 +928,15 @@ void editorInsertText(const std::string &text) {
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
 }
+
+// Replace the entire editor text (AI polish confirm). Cursor moves to the end.
+void editorReplaceAllText(const std::string &text) {
+    loadLinesIntoEditor(text);
+    g_editor.scroll = 0;
+    g_editor.targetCx = -1;
+    g_editor.hasSelection = false;
+    g_editor.vrowsDirty = true;
+    g_editor.wordCountDirty = true;
+    g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+    g_editor.modifiedSinceSave = true;
+}

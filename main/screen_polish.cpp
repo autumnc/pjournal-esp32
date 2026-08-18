@@ -1,0 +1,316 @@
+#include "pjournal_app.h"
+#include "screen_polish.h"
+#include "screen_editor.h"
+#include "deepseek_client.h"
+#include "font_renderer.h"
+#include "ui_helpers.h"
+#include "ime/IME.h"
+#include "wifi_manager.h"
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+extern u8g2_t *g_u8g2;
+
+extern "C" {
+    extern void u8g2_SetDrawColor(void *u8g2, int color);
+    extern void u8g2_DrawHLine(void *u8g2, int x, int y, int w);
+    extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
+}
+
+// Work chain: DeepSeek polish, show result. The dialog (R key) edits the extra
+// instruction before re-running the chain.
+enum PolishPhase {
+    P_WORKING,
+    P_RESULT,
+    P_ERROR,
+    P_EDIT_INSTR,
+};
+
+static struct {
+    PolishPhase phase = P_WORKING;
+    bool requested = false;      // work chain has run
+    bool emptyContent = false;   // editor text was empty at entry
+    std::string original;        // captured editor text
+    std::string result;          // polished text
+    std::string resultSource;    // "DeepSeek"
+    std::string error;           // final error message
+    std::string customInstr;     // user's extra instruction (R dialog)
+    int scroll = 0;
+    std::vector<std::string> lines;   // result split by '\n'
+    std::vector<VRow> vrows;          // wrapped result rows
+    // instruction dialog
+    std::string instrBuf;
+    int instrCur = 0;
+    bool imeActive = false;
+} g;
+
+static bool isEmptyText(const std::string &s) {
+    for (char c : s)
+        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') return false;
+    return true;
+}
+
+static void prepareResult() {
+    g.lines.clear();
+    std::string cur;
+    size_t n = g.result.size();
+    if (n > 0 && g.result.back() == '\n') n--;
+    for (size_t i = 0; i < n; i++) {
+        char c = g.result[i];
+        if (c == '\n') { g.lines.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+    g.lines.push_back(cur);
+    g.vrows = buildVrows(g.lines);
+    g.scroll = 0;
+}
+
+// ── Drawing ──────────────────────────────────────────────────────────────
+
+static void drawWorking(const char *msg) {
+    ui_clear();
+    ui_draw_text(4, g_font.ascent(), "AI润色", false, true);
+    ui_draw_text_centered(SCREEN_H / 2, msg);
+    ui_commit();
+}
+
+static void drawResult() {
+    ui_clear();
+    char src[32];
+    snprintf(src, sizeof(src), "来源:%s", g.resultSource.c_str());
+    ui_draw_text(4, g_font.ascent(), "AI润色", false, true);
+    ui_draw_text(SCREEN_W - g_font.textWidth(src) - 4, g_font.ascent(), src);
+    u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
+
+    int y = FONT_H + 8 + LINE_SPACING;
+    int vis = (STATUS_Y - y + LINE_SPACING - 1) / LINE_SPACING;
+    if (vis < 1) vis = 1;
+    int maxScroll = (int)g.vrows.size() - vis;
+    if (maxScroll < 0) maxScroll = 0;
+    if (g.scroll > maxScroll) g.scroll = maxScroll;
+    if (g.scroll < 0) g.scroll = 0;
+
+    for (int i = 0; i < vis && (g.scroll + i) < (int)g.vrows.size(); i++) {
+        const VRow &vr = g.vrows[g.scroll + i];
+        std::string row = g.lines[vr.lineIdx].substr(vr.start, vr.end - vr.start);
+        ui_draw_text(8, y + i * LINE_SPACING, row.c_str());
+    }
+    if (g.vrows.empty()) ui_draw_text(8, y, "(无内容)");
+
+    ui_draw_status("Enter确认 R重润色 Esc取消", "");
+    ui_commit();
+}
+
+static void drawError() {
+    ui_clear();
+    ui_draw_text(4, g_font.ascent(), "润色失败", false, true);
+    u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
+    int y = FONT_H + 8 + LINE_SPACING;
+    std::vector<std::string> elines = { g.error };
+    auto evrows = buildVrows(elines);
+    int vis = (STATUS_Y - y + LINE_SPACING - 1) / LINE_SPACING;
+    if (vis < 1) vis = 1;
+    for (int i = 0; i < vis && i < (int)evrows.size(); i++) {
+        std::string row = g.error.substr(evrows[i].start, evrows[i].end - evrows[i].start);
+        ui_draw_text(8, y + i * LINE_SPACING, row.c_str());
+    }
+    ui_draw_status("任意键返回", "");
+    ui_commit();
+}
+
+static void drawInstrDialog() {
+    ui_clear();
+    ui_draw_text_centered(28, "优化指令", false, true);
+    u8g2_DrawHLine(g_u8g2, 0, 28 + g_font.descent() + 4, SCREEN_W);
+
+    int y = 28 + g_font.descent() + 12;
+    ui_draw_text(4, y + g_font.ascent(), "默认原则:轻度润色,保留原文风格与叙事,", false);
+    ui_draw_text(4, y + g_font.ascent() + LINE_SPACING, "以语义通顺为主,避免大幅修改。", false);
+
+    int inputBaseline = y + g_font.ascent() + 2 * LINE_SPACING + g_font.ascent();
+    ui_draw_text(4, inputBaseline, "补充指令:");
+    std::string display = g.instrBuf.empty() ? " " : g.instrBuf;
+    int inputX = 4 + g_font.textWidth("补充指令:");
+    g_font.drawText(inputX, inputBaseline, display.c_str());
+    int cx = inputX + g_font.textWidth(g.instrBuf.substr(0, g.instrCur).c_str());
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawBox(g_u8g2, cx, inputBaseline + 4, 8, 3);
+    u8g2_SetDrawColor(g_u8g2, 1);
+
+    if (g.imeActive && g_ime.composing()) {
+        drawIMEUI(SCREEN_H - 67 - 4);
+    } else {
+        ui_draw_status("Enter确认 Esc取消", "");
+    }
+    ui_commit();
+}
+
+// ── Work chain ───────────────────────────────────────────────────────────
+
+// Ensure WiFi, run DeepSeek polish, restore WiFi, land in RESULT/ERROR.
+static void runPolishChain() {
+    bool wasConnected = g_wifi.isConnected();
+    // Draw a working frame before any blocking call (WiFi connect can take
+    // seconds), so the panel responds immediately after entry.
+    g.phase = P_WORKING;
+    drawWorking("DeepSeek润色中...");
+    bool wifiOk = ensure_wifi_connected();
+    bool ok = false;
+
+    if (wifiOk) {
+        DeepseekResult dr = g_deepseek.polishText(g.original, g.customInstr);
+        if (dr.success) {
+            g.result = dr.content;
+            g.resultSource = "DeepSeek";
+            ok = true;
+        } else {
+            g.error = dr.content;
+        }
+    } else {
+        g.error = "WiFi连接失败";
+    }
+
+    restore_wifi_state(wasConnected);
+    g.phase = ok ? P_RESULT : P_ERROR;
+    if (ok) prepareResult();
+}
+
+// ── Init & Handle ────────────────────────────────────────────────────────
+
+void screen_polish_init() {
+    g.phase = P_WORKING;
+    g.requested = false;
+    g.scroll = 0;
+    g.customInstr.clear();
+    g.instrBuf.clear();
+    g.instrCur = 0;
+    g.imeActive = false;
+    g_ime.setActive(false);
+    IME::getInstance().setPageSize(7);
+
+    g.original = app_get_editor_text();
+    g.emptyContent = isEmptyText(g.original);
+}
+
+AppState screen_polish_handle(int key, ScreenContext &ctx) {
+    if (g.emptyContent) {
+        ctx.statusMessage = "编辑区内容为空";
+        ctx.statusDuration = 30;
+        return APP_EDITOR;
+    }
+
+    // ── instruction dialog (R key) ──
+    if (g.phase == P_EDIT_INSTR) {
+        if (g.imeActive && key != 0) {
+            std::string imeOut;
+            if (g_ime.handleKey(key, imeOut)) {
+                if (!imeOut.empty()) {
+                    g.instrBuf.insert(g.instrCur, imeOut);
+                    g.instrCur += (int)imeOut.length();
+                }
+                drawInstrDialog();
+                return APP_POLISH;
+            }
+        }
+        if (key == KEY_IME_TOGGLE) {
+            g.imeActive = !g.imeActive;
+            g_ime.setActive(g.imeActive);
+            drawInstrDialog();
+            return APP_POLISH;
+        }
+        if (key == KEY_FULLWIDTH_TOGGLE) {
+            g_ime.toggleFullwidth();
+            drawInstrDialog();
+            return APP_POLISH;
+        }
+        if (key == 0x1B) {
+            // Esc: cancel the dialog, back to the result page.
+            g.phase = P_RESULT;
+            g.imeActive = false;
+            g_ime.setActive(false);
+            drawResult();
+            return APP_POLISH;
+        }
+        if (key == 0x0A || key == 0x0D) {
+            // Enter: accept the instruction (empty → default polish) and re-run.
+            g.customInstr = g.instrBuf;
+            g.imeActive = false;
+            g_ime.setActive(false);
+            g.phase = P_WORKING;
+            g.requested = false;
+            return APP_POLISH;
+        }
+        if (key == 0x7F || key == 0x08) {
+            if (g.instrCur > 0) {
+                int prev = g.instrCur - 1;
+                while (prev > 0 && ((unsigned char)g.instrBuf[prev] & 0xC0) == 0x80) prev--;
+                g.instrBuf.erase(prev, g.instrCur - prev);
+                g.instrCur = prev;
+            }
+        } else if (key >= 0x20 && key <= 0x7E) {
+            g.instrBuf.insert(g.instrCur, 1, (char)key);
+            g.instrCur++;
+        }
+        drawInstrDialog();
+        return APP_POLISH;
+    }
+
+    // ── work phase: run the chain once (draws its own working frame) ──
+    if (g.phase == P_WORKING) {
+        if (!g.requested) {
+            g.requested = true;
+            runPolishChain();
+        }
+        if (g.phase == P_RESULT) {
+            drawResult();
+            return APP_POLISH;
+        }
+        drawError();
+        return APP_POLISH;
+    }
+
+    // ── result page ──
+    if (g.phase == P_RESULT) {
+        if (key == 0x0A || key == 0x0D) {
+            editorReplaceAllText(g.result);
+            g_ime.setActive(app_ime_active());
+            return APP_EDITOR;
+        }
+        if (key == 'r' || key == 'R') {
+            g.instrBuf = g.customInstr;   // pre-fill so the user can adjust
+            g.instrCur = (int)g.instrBuf.length();
+            g.imeActive = true;
+            g_ime.setActive(true);
+            g.phase = P_EDIT_INSTR;
+            drawInstrDialog();
+            return APP_POLISH;
+        }
+        if (key == 0x1B || key == 'q' || key == 'Q') {
+            g_ime.setActive(app_ime_active());
+            return APP_EDITOR;
+        }
+        if (key == KEY_UP) {
+            if (g.scroll > 0) g.scroll--;
+        } else if (key == KEY_DOWN) {
+            g.scroll++;
+        }
+        drawResult();
+        return APP_POLISH;
+    }
+
+    // ── error page: any key returns to the editor ──
+    if (g.phase == P_ERROR) {
+        if (key != 0) {
+            g_ime.setActive(app_ime_active());
+            return APP_EDITOR;
+        }
+        drawError();
+        return APP_POLISH;
+    }
+
+    drawResult();
+    return APP_POLISH;
+}

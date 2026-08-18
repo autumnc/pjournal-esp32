@@ -24,5 +24,8 @@ std::string app_get_editor_text();
 // Insert text at the cursor (shared by IME commit and voice dictation)
 void editorInsertText(const std::string &text);
 
+// Replace the entire editor text (used by AI polish confirm). Cursor → end.
+void editorReplaceAllText(const std::string &text);
+
 // Draw only the editor content as a transparent background (used by voice screen)
 void screen_editor_draw_voice_bg();

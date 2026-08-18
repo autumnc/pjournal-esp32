@@ -16,6 +16,7 @@
 #include "screen_bt_manage.h"
 #include "screen_file_manager.h"
 #include "screen_voice.h"
+#include "screen_polish.h"
 #include "voice_input.h"
 #include "u8g2_st7305.h"
 #include "pcf85063.h"
@@ -472,7 +473,8 @@ extern "C" void app_main() {
         if (s_pending_single.key != 0) {
             if (esp_timer_get_time() - s_pending_single.queued_us >= BTN_DOUBLE_WINDOW_US) {
                 if (currentState == APP_BT_MANAGE ||
-                    (currentState == APP_GTD && screen_gtd_accept_physical_buttons())) {
+                    (currentState == APP_GTD && screen_gtd_accept_physical_buttons()) ||
+                    currentState == APP_POLISH) {
                     key = s_pending_single.key;
                 }
                 s_pending_single.key = 0;
@@ -501,6 +503,9 @@ extern "C" void app_main() {
                     } else if (currentState == APP_GTD && screen_gtd_accept_physical_buttons()) {
                         // GTD任务管理: 长按→Tab 切换标签
                         key = '\t';
+                    } else if (currentState == APP_POLISH) {
+                        // 润色面板: 长按不动作,避免误进蓝牙管理
+                        key = 0;
                     } else {
                         currentState = APP_BT_MANAGE;
                         key = 0;
@@ -528,6 +533,13 @@ extern "C" void app_main() {
                         } else if (currentState == APP_VOICE && btn_user.is_double) {
                             // 语音听写双击: 注入ESC,由voice屏停止会话并返回编辑器
                             key = 0x1B;
+                        } else if (currentState == APP_POLISH && btn_user.is_double) {
+                            // 润色面板双击: 确认(Enter)
+                            key = 0x0A;
+                        } else if (currentState == APP_POLISH) {
+                            // 润色面板单击: 上滚
+                            s_pending_single.key = KEY_UP;
+                            s_pending_single.queued_us = now;
                         } else if (gtdBrowse && btn_user.is_double) {
                             // GTD任务管理双击: 项目列表→进入选中项目; 平铺/项目树→切换任务状态
                             key = gtdProjList ? 0x0A : ' ';
@@ -566,6 +578,10 @@ extern "C" void app_main() {
                         // GTD任务管理: BOOT 长按不动作,避免面板内误触发休眠
                         btn_boot.long_fired = true;
                         s_pending_single.key = 0;
+                    } else if (currentState == APP_POLISH) {
+                        // 润色面板: BOOT 长按不动作,避免误触发休眠
+                        btn_boot.long_fired = true;
+                        s_pending_single.key = 0;
                     }
                     // 其他界面: 长按 BOOT 在松开时进入休眠(单击不再休眠)
                 }
@@ -594,6 +610,19 @@ extern "C" void app_main() {
                                 screen_gtd_physical_double_boot();
                             } else {
                                 // GTD任务管理单击: 下移(不触发休眠)
+                                s_pending_single.key = KEY_DOWN;
+                                s_pending_single.queued_us = now;
+                            }
+                        } else if (currentState == APP_EDITOR && btn_boot.is_double) {
+                            // 编辑器双击: 进入AI润色面板
+                            currentState = APP_POLISH;
+                            key = 0;
+                        } else if (currentState == APP_POLISH) {
+                            if (btn_boot.is_double) {
+                                // 润色面板双击: 取消(Esc)
+                                key = 0x1B;
+                            } else {
+                                // 润色面板单击: 下滚
                                 s_pending_single.key = KEY_DOWN;
                                 s_pending_single.queued_us = now;
                             }
@@ -639,11 +668,11 @@ extern "C" void app_main() {
             if (!editorInited) { screen_editor_init(ctx); editorInited = true; }
             if (key > 0) currentState = screen_editor_handle(key, ctx);
             else { screen_editor_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(50)); }
-            // Preserve editorInited when going to inspiration via Ctrl+I (editor should resume)
+            // Preserve editorInited when going to inspiration/polish (editor should resume)
             // Reset editorInited when editor is opened FROM another screen (new content)
             if (currentState != APP_EDITOR && currentState != APP_SYNC_SEND_FLOMO) {
-                if (currentState == APP_INSPIRATION) {
-                    // Ctrl+I from editor → preserve editor state
+                if (currentState == APP_INSPIRATION || currentState == APP_POLISH) {
+                    // editor state preserved across the overlay panel
                 } else {
                     editorInited = false;
                 }
@@ -735,6 +764,20 @@ extern "C" void app_main() {
             if (key > 0) currentState = screen_inspiration_handle(key, ctx);
             else { screen_inspiration_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
             if (currentState != APP_INSPIRATION) inspInited = false;
+            break;
+        }
+
+        case APP_POLISH: {
+            g_font.setSize(22);
+            IME::getInstance().setPageSize(7);
+            static bool polishInited = false;
+            if (!polishInited) {
+                screen_polish_init();
+                polishInited = true;
+            }
+            if (key > 0) currentState = screen_polish_handle(key, ctx);
+            else { screen_polish_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            if (currentState != APP_POLISH) polishInited = false;
             break;
         }
 

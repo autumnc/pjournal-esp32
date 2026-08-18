@@ -19,6 +19,7 @@ enum AppState {
     APP_OUTLINE,
     APP_INSPIRATION,
     APP_VOICE,
+    APP_POLISH,
     APP_QUIT,
 };
 
