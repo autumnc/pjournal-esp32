@@ -25,6 +25,7 @@ idf_component_register(SRCS
     "screen_inspiration.cpp"
     "screen_voice.cpp"
     "screen_polish.cpp"
+    "screen_polish_prompt.cpp"
     "voice_input.cpp"
     "markdown_render.cpp"
     INCLUDE_DIRS "."
@@ -58,4 +59,4 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="3.7.0")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="3.8.0")

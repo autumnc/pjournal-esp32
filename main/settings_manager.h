@@ -17,6 +17,7 @@ public:
     std::string webdavUsername();
     std::string webdavPassword();
     std::string deepseekKey();
+    std::string polishPrompt();
     std::string personalExperience();
     std::string personalHobbies();
     std::string wifiSsid();
@@ -39,6 +40,7 @@ public:
     void setWebdavUsername(const std::string &v);
     void setWebdavPassword(const std::string &v);
     void setDeepseekKey(const std::string &v);
+    void setPolishPrompt(const std::string &v);
     void setPersonalExperience(const std::string &v);
     void setPersonalHobbies(const std::string &v);
     void setWifiSsid(const std::string &v);

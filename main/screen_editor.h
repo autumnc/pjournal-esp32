@@ -27,5 +27,12 @@ void editorInsertText(const std::string &text);
 // Replace the entire editor text (used by AI polish confirm). Cursor → end.
 void editorReplaceAllText(const std::string &text);
 
+// Currently selected text (empty when no selection).
+std::string app_get_selected_text();
+
+// Replace only the selected text (selection polish confirm). Cursor → end of
+// the inserted text; selection cleared.
+void editorReplaceSelection(const std::string &text);
+
 // Draw only the editor content as a transparent background (used by voice screen)
 void screen_editor_draw_voice_bg();

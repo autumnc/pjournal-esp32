@@ -47,6 +47,13 @@ static struct {
     bool imeActive = false;
 } g;
 
+// Set by the entry path (BOOT double-click = whole text, Ctrl+O = selection).
+static PolishScope g_scope = POLISH_WHOLE;
+
+void screen_polish_set_scope(PolishScope scope) {
+    g_scope = scope;
+}
+
 static bool isEmptyText(const std::string &s) {
     for (char c : s)
         if (c != ' ' && c != '\n' && c != '\r' && c != '\t') return false;
@@ -81,7 +88,7 @@ static void drawResult() {
     ui_clear();
     char src[32];
     snprintf(src, sizeof(src), "来源:%s", g.resultSource.c_str());
-    ui_draw_text(4, g_font.ascent(), "AI润色", false, true);
+    ui_draw_text(4, g_font.ascent(), g_scope == POLISH_SELECTION ? "AI润色(选区)" : "AI润色", false, true);
     ui_draw_text(SCREEN_W - g_font.textWidth(src) - 4, g_font.ascent(), src);
     u8g2_DrawHLine(g_u8g2, 0, FONT_H + 4, SCREEN_W);
 
@@ -191,7 +198,7 @@ void screen_polish_init() {
     g_ime.setActive(false);
     IME::getInstance().setPageSize(7);
 
-    g.original = app_get_editor_text();
+    g.original = (g_scope == POLISH_SELECTION) ? app_get_selected_text() : app_get_editor_text();
     g.emptyContent = isEmptyText(g.original);
 }
 
@@ -275,7 +282,8 @@ AppState screen_polish_handle(int key, ScreenContext &ctx) {
     // ── result page ──
     if (g.phase == P_RESULT) {
         if (key == 0x0A || key == 0x0D) {
-            editorReplaceAllText(g.result);
+            if (g_scope == POLISH_SELECTION) editorReplaceSelection(g.result);
+            else editorReplaceAllText(g.result);
             g_ime.setActive(app_ime_active());
             return APP_EDITOR;
         }

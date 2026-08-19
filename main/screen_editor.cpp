@@ -1,4 +1,5 @@
 #include "screen_editor.h"
+#include "screen_polish.h"
 #include "font_renderer.h"
 #include "journal_storage.h"
 #include "deepseek_client.h"
@@ -517,6 +518,18 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         return APP_EDITOR;
     }
 
+    // Ctrl+O → 选区润色(需先用Shift+方向键选择文字)
+    if (key == 0x0F) {
+        if (!g_editor.hasSelection) {
+            ctx.statusMessage = "请先用Shift+方向键选择文字";
+            ctx.statusDuration = 30;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        screen_polish_set_scope(POLISH_SELECTION);
+        return APP_POLISH;
+    }
+
     if (g_editor.imeActive && key != 0) {
         std::string imeOut;
         if (g_ime.handleKey(key, imeOut)) {
@@ -937,6 +950,50 @@ void editorReplaceAllText(const std::string &text) {
     g_editor.hasSelection = false;
     g_editor.vrowsDirty = true;
     g_editor.wordCountDirty = true;
+    g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+    g_editor.modifiedSinceSave = true;
+}
+
+// Currently selected text (empty when no selection).
+std::string app_get_selected_text() {
+    return getSelectedText();
+}
+
+// Replace only the selected text (selection polish confirm). Cursor ends at
+// the end of the inserted text; the selection is cleared.
+void editorReplaceSelection(const std::string &text) {
+    // deleteSelection() removes the selection, joins its lines and puts the
+    // cursor at the selection start — the natural insertion point.
+    if (g_editor.hasSelection) deleteSelection();
+    if (!text.empty()) {
+        // Split on '\n' (drop a trailing empty segment, like loadLinesIntoEditor)
+        // so a multi-line polish result splits cleanly across lines.
+        std::vector<std::string> ins;
+        size_t pos = 0;
+        while (pos < text.length()) {
+            size_t nl = text.find('\n', pos);
+            ins.push_back(nl == std::string::npos ? text.substr(pos) : text.substr(pos, nl - pos));
+            if (nl == std::string::npos) break;
+            pos = nl + 1;
+        }
+        if (ins.size() > 1 && ins.back().empty()) ins.pop_back();
+
+        std::string tail = g_editor.lines[g_editor.cy].substr(g_editor.cx);
+        g_editor.lines[g_editor.cy] = g_editor.lines[g_editor.cy].substr(0, g_editor.cx) + ins[0];
+        if (ins.size() == 1) {
+            g_editor.lines[g_editor.cy] += tail;
+            g_editor.cx = (int)g_editor.lines[g_editor.cy].length() - (int)tail.length();
+        } else {
+            int insertAt = g_editor.cy + 1;
+            for (size_t i = 1; i < ins.size() - 1; i++)
+                g_editor.lines.insert(g_editor.lines.begin() + insertAt++, ins[i]);
+            g_editor.lines.insert(g_editor.lines.begin() + insertAt, ins.back() + tail);
+            g_editor.cy = insertAt;
+            g_editor.cx = (int)ins.back().length();
+        }
+    }
+    g_editor.targetCx = -1;
+    g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
 }

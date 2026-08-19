@@ -17,6 +17,7 @@
 #include "screen_file_manager.h"
 #include "screen_voice.h"
 #include "screen_polish.h"
+#include "screen_polish_prompt.h"
 #include "voice_input.h"
 #include "u8g2_st7305.h"
 #include "pcf85063.h"
@@ -474,7 +475,8 @@ extern "C" void app_main() {
             if (esp_timer_get_time() - s_pending_single.queued_us >= BTN_DOUBLE_WINDOW_US) {
                 if (currentState == APP_BT_MANAGE ||
                     (currentState == APP_GTD && screen_gtd_accept_physical_buttons()) ||
-                    currentState == APP_POLISH) {
+                    currentState == APP_POLISH ||
+                    currentState == APP_POLISH_PROMPT) {
                     key = s_pending_single.key;
                 }
                 s_pending_single.key = 0;
@@ -503,8 +505,9 @@ extern "C" void app_main() {
                     } else if (currentState == APP_GTD && screen_gtd_accept_physical_buttons()) {
                         // GTD任务管理: 长按→Tab 切换标签
                         key = '\t';
-                    } else if (currentState == APP_POLISH) {
-                        // 润色面板: 长按不动作,避免误进蓝牙管理
+                    } else if (currentState == APP_POLISH ||
+                               currentState == APP_POLISH_PROMPT) {
+                        // 润色面板/提示词编辑: 长按不动作,避免误进蓝牙管理
                         key = 0;
                     } else {
                         currentState = APP_BT_MANAGE;
@@ -538,6 +541,13 @@ extern "C" void app_main() {
                             key = 0x0A;
                         } else if (currentState == APP_POLISH) {
                             // 润色面板单击: 上滚
+                            s_pending_single.key = KEY_UP;
+                            s_pending_single.queued_us = now;
+                        } else if (currentState == APP_POLISH_PROMPT && btn_user.is_double) {
+                            // 提示词编辑双击: 确认(Enter=换行)
+                            key = 0x0A;
+                        } else if (currentState == APP_POLISH_PROMPT) {
+                            // 提示词编辑单击: 上移
                             s_pending_single.key = KEY_UP;
                             s_pending_single.queued_us = now;
                         } else if (gtdBrowse && btn_user.is_double) {
@@ -578,8 +588,9 @@ extern "C" void app_main() {
                         // GTD任务管理: BOOT 长按不动作,避免面板内误触发休眠
                         btn_boot.long_fired = true;
                         s_pending_single.key = 0;
-                    } else if (currentState == APP_POLISH) {
-                        // 润色面板: BOOT 长按不动作,避免误触发休眠
+                    } else if (currentState == APP_POLISH ||
+                               currentState == APP_POLISH_PROMPT) {
+                        // 润色面板/提示词编辑: BOOT 长按不动作,避免误触发休眠
                         btn_boot.long_fired = true;
                         s_pending_single.key = 0;
                     }
@@ -614,7 +625,8 @@ extern "C" void app_main() {
                                 s_pending_single.queued_us = now;
                             }
                         } else if (currentState == APP_EDITOR && btn_boot.is_double) {
-                            // 编辑器双击: 进入AI润色面板
+                            // 编辑器双击: 进入AI润色面板(全文润色)
+                            screen_polish_set_scope(POLISH_WHOLE);
                             currentState = APP_POLISH;
                             key = 0;
                         } else if (currentState == APP_POLISH) {
@@ -623,6 +635,15 @@ extern "C" void app_main() {
                                 key = 0x1B;
                             } else {
                                 // 润色面板单击: 下滚
+                                s_pending_single.key = KEY_DOWN;
+                                s_pending_single.queued_us = now;
+                            }
+                        } else if (currentState == APP_POLISH_PROMPT) {
+                            if (btn_boot.is_double) {
+                                // 提示词编辑双击: 取消(Esc)
+                                key = 0x1B;
+                            } else {
+                                // 提示词编辑单击: 下移
                                 s_pending_single.key = KEY_DOWN;
                                 s_pending_single.queued_us = now;
                             }
@@ -778,6 +799,20 @@ extern "C" void app_main() {
             if (key > 0) currentState = screen_polish_handle(key, ctx);
             else { screen_polish_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
             if (currentState != APP_POLISH) polishInited = false;
+            break;
+        }
+
+        case APP_POLISH_PROMPT: {
+            g_font.setSize(22);
+            IME::getInstance().setPageSize(7);
+            static bool ppInited = false;
+            if (!ppInited) {
+                screen_polish_prompt_init();
+                ppInited = true;
+            }
+            if (key > 0) currentState = screen_polish_prompt_handle(key, ctx);
+            else { screen_polish_prompt_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            if (currentState != APP_POLISH_PROMPT) ppInited = false;
             break;
         }
 

@@ -28,6 +28,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_file_mgr", "文件管理", false, true},
     {"_bt_manage", "蓝牙设备管理", false, true},
     {"deepseek_key", "Deepseek Key", false, false},
+    {"_polish_prompt", "润色提示词", false, true},
     {"flomo_email", "Flomo 邮箱", false, false},
     {"flomo_pass", "Flomo 密码", false, false},
     {"_flomo_token", "生成Flomo Token", false, true},
@@ -442,6 +443,10 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.nextState = APP_BT_MANAGE;
                 return APP_BT_MANAGE;
             }
+            if (strcmp(f.key, "_polish_prompt") == 0) {
+                ctx.nextState = APP_POLISH_PROMPT;
+                return APP_POLISH_PROMPT;
+            }
             if (strcmp(f.key, "_font_size") == 0) {
                 int curSize = g_settings.fontSize();
                 int newSize = (curSize == 28) ? 22 : 28;
@@ -473,6 +478,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         if (f.action) {
             if (strcmp(f.key, "_font_size") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %dpt", f.label, g_settings.fontSize());
+            } else if (strcmp(f.key, "_polish_prompt") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         g_settings.polishPrompt().empty() ? "(未设置)" : "(已设置)");
             } else if (strcmp(f.key, "_app_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.appMode() == "quick" ? "快捷编辑" : "个人日记");

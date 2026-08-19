@@ -152,12 +152,14 @@ DeepseekResult DeepseekClient::polishText(const std::string &text, const std::st
         return {false, "文本过长,请分段润色"};
     }
 
-    static const char *SYSTEM =
+    static const char *DEFAULT_SYSTEM =
         "你是一个中文文本润色助手。请对用户提供的文本做轻度润色：主要修正语义不通顺、"
         "断句不合理之处；尽量避免大幅改动，保留原文的行文风格和叙事内容，不增删事实信息；"
         "去除明显口语化的表达，使文句通顺自然；保持原文段落结构。只输出润色后的文本，"
         "不要任何解释、称呼或前后缀。";
-    std::string system = SYSTEM;
+    // 用户可在设置里自定义润色提示词;未设置时用内置默认原则。
+    std::string system = g_settings.polishPrompt();
+    if (system.empty()) system = DEFAULT_SYSTEM;
     if (!customInstr.empty()) {
         system += "。另外，用户额外要求：";
         system += customInstr;

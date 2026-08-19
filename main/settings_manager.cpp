@@ -73,6 +73,7 @@ std::string SettingsManager::webdavUrl() { return get("webdav_url"); }
 std::string SettingsManager::webdavUsername() { return get("webdav_user"); }
 std::string SettingsManager::webdavPassword() { return get("webdav_pass"); }
 std::string SettingsManager::deepseekKey() { return get("deepseek_key"); }
+std::string SettingsManager::polishPrompt() { return get("polish_prompt"); }
 std::string SettingsManager::personalExperience() { return get("personal_exp"); }
 std::string SettingsManager::personalHobbies() { return get("personal_hob"); }
 std::string SettingsManager::wifiSsid() { return get("wifi_ssid"); }
@@ -105,6 +106,7 @@ void SettingsManager::setWebdavUrl(const std::string &v) { set("webdav_url", v);
 void SettingsManager::setWebdavUsername(const std::string &v) { set("webdav_user", v); }
 void SettingsManager::setWebdavPassword(const std::string &v) { set("webdav_pass", v); }
 void SettingsManager::setDeepseekKey(const std::string &v) { set("deepseek_key", v); }
+void SettingsManager::setPolishPrompt(const std::string &v) { set("polish_prompt", v); }
 void SettingsManager::setPersonalExperience(const std::string &v) { set("personal_exp", v); }
 void SettingsManager::setPersonalHobbies(const std::string &v) { set("personal_hob", v); }
 void SettingsManager::setWifiSsid(const std::string &v) { set("wifi_ssid", v); }
