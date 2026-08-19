@@ -2653,6 +2653,7 @@ static void drawPicker() {
 static int daysInMonth(int year, int month) {
 
     static const int dim[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+    if (month < 1 || month > 12) return 30;
 
     int d = dim[month];
 
@@ -2714,6 +2715,14 @@ static void openCalendar() {
 
     }
 
+    g.calSelDay = g.calDay;
+
+    // 防御 due 字段里非法月份/日期(如 13 月 32 日)导致的越界访问。
+    if (g.calMonth < 1) g.calMonth = 1;
+    if (g.calMonth > 12) g.calMonth = 12;
+    if (g.calDay < 1) g.calDay = 1;
+    int dim = daysInMonth(g.calYear, g.calMonth);
+    if (g.calDay > dim) g.calDay = dim;
     g.calSelDay = g.calDay;
 
     g.mode = M_CALENDAR;

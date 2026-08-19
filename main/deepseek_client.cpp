@@ -7,6 +7,7 @@
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
+#include <esp_timer.h>
 
 static const char *TAG = "Deepseek";
 DeepseekClient g_deepseek;
@@ -59,7 +60,7 @@ static std::string extractContent(const std::string &response) {
 
 // POST the already-built request body to the DeepSeek chat API and return the
 // assistant content. Shared by generatePrompt and polishText.
-static DeepseekResult runChat(const std::string &body) {
+static DeepseekResult runChat(const std::string &body, volatile bool *cancel = nullptr) {
     esp_http_client_config_t cfg = {};
     cfg.url = DEEPSEEK_API_URL;
     cfg.method = HTTP_METHOD_POST;
@@ -77,8 +78,11 @@ static DeepseekResult runChat(const std::string &body) {
 
     std::string response;
     DeepseekResult result = {false, "API请求失败"};
+    bool cancelled = (cancel && *cancel);
+    bool timedOut = false;
 
-    esp_err_t err = esp_http_client_open(client, (int)body.size());
+    esp_err_t err = cancelled ? ESP_ERR_INVALID_STATE
+                              : esp_http_client_open(client, (int)body.size());
     ESP_LOGI(TAG, "Request body: %d bytes", (int)body.size());
     if (err == ESP_OK) {
         esp_http_client_write(client, body.c_str(), (int)body.size());
@@ -86,16 +90,34 @@ static DeepseekResult runChat(const std::string &body) {
         int status = esp_http_client_get_status_code(client);
         if (status == 200) {
             char buf[512];
-            int len;
-            while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
-                buf[len] = 0;
-                response += buf;
-                if (response.size() > 32768) break;
+            // Cancellable read: shorten the per-read timeout so the loop can
+            // poll the flag every second; the 30s overall deadline still bounds
+            // a hung server. Reads return -ESP_ERR_HTTP_EAGAIN on a per-read
+            // timeout, 0/negative on end-of-body or error.
+            if (cancel) esp_http_client_set_timeout_ms(client, 1000);
+            int64_t deadline = esp_timer_get_time() + 30000000;
+            while (true) {
+                if (cancel && *cancel) { cancelled = true; break; }
+                if (esp_timer_get_time() > deadline) { timedOut = true; break; }
+                int len = esp_http_client_read(client, buf, sizeof(buf) - 1);
+                if (len > 0) {
+                    buf[len] = 0;
+                    response += buf;
+                    if (response.size() > 32768) break;
+                } else if (len == -ESP_ERR_HTTP_EAGAIN) {
+                    continue;   // no data yet, retry
+                } else {
+                    break;      // 0 = body complete; <0 = transport error
+                }
             }
-            std::string content = extractContent(response);
-            if (!content.empty()) {
-                result.success = true;
-                result.content = content;
+            if (!timedOut) {
+                std::string content = extractContent(response);
+                if (!content.empty()) {
+                    result.success = true;
+                    result.content = content;
+                }
+            } else {
+                result.content = "API响应超时";
             }
         } else {
             // Read error response body for debugging
@@ -116,6 +138,7 @@ static DeepseekResult runChat(const std::string &body) {
     }
 
     esp_http_client_cleanup(client);
+    if (cancelled) result.content = "已取消";
     return result;
 }
 
@@ -143,7 +166,8 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
     return runChat(body);
 }
 
-DeepseekResult DeepseekClient::polishText(const std::string &text, const std::string &customInstr) {
+DeepseekResult DeepseekClient::polishText(const std::string &text, const std::string &customInstr,
+                                          volatile bool *cancel) {
     std::string apiKey = g_settings.deepseekKey();
     if (apiKey.empty()) {
         return {false, "请先在设置中配置Deepseek Key"};
@@ -171,5 +195,5 @@ DeepseekResult DeepseekClient::polishText(const std::string &text, const std::st
         "{\"role\":\"system\",\"content\":\"" + escSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escText + "\"}],"
         "\"max_tokens\":2000,\"temperature\":0.3}";
-    return runChat(body);
+    return runChat(body, cancel);
 }

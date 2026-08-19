@@ -123,7 +123,6 @@ bool SettingsManager::markdownRender() { return get("md_render") != "0"; }  // d
 int SettingsManager::fontSize() {
     std::string v = get("font_size");
     if (v == "22") return 22;
-    if (v == "20") return 20;
     return 28;
 }
 

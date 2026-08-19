@@ -25,10 +25,15 @@ extern "C" {
 }
 
 // ── Screen state ─────────────────────────────────────────────────────────
-static struct { int selection = 0; int scroll = 0; } g_browser;
+static struct {
+    int selection = 0; int scroll = 0;
+    std::vector<JournalEntry> entries;   // cached listing, avoid full SD rescan each frame
+} g_browser;
 static struct { std::vector<std::string> lines; int scroll = 0; std::string filename;
     std::string dateStr;
-    std::vector<VRow> cachedVrows; bool vrowsDirty = true; } g_viewer;
+    std::vector<VRow> cachedVrows; bool vrowsDirty = true;
+    std::vector<MdLineInfo> cachedMdInfo; bool mdInfoDirty = true; bool mdCachedOn = false;
+} g_viewer;
 
 static const std::vector<VRow>& getViewerVrows() {
     if (g_viewer.vrowsDirty) {
@@ -37,6 +42,20 @@ static const std::vector<VRow>& getViewerVrows() {
     }
     return g_viewer.cachedVrows;
 }
+
+// Markdown classification is only re-run when content changes or the render
+// toggle flips, mirroring the editor's md cache.
+static const std::vector<MdLineInfo>& getViewerMdInfo(bool mdOn) {
+    if (g_viewer.mdInfoDirty || g_viewer.mdCachedOn != mdOn) {
+        if (mdOn) g_viewer.cachedMdInfo = mdClassifyLines(g_viewer.lines);
+        else g_viewer.cachedMdInfo.assign(g_viewer.lines.size(), MdLineInfo{});
+        g_viewer.mdInfoDirty = false;
+        g_viewer.mdCachedOn = mdOn;
+    }
+    return g_viewer.cachedMdInfo;
+}
+
+static void refreshBrowserCache() { g_browser.entries = g_journal.listEntries(); }
 
 // ── Main Screen ────────────────────────────────────────────────────────
 void screen_main_init() {
@@ -108,10 +127,13 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
 }
 
 // ── Browser Screen ─────────────────────────────────────────────────────
-void screen_browser_init() { g_browser.selection = g_browser.scroll = 0; }
+void screen_browser_init() {
+    g_browser.selection = g_browser.scroll = 0;
+    refreshBrowserCache();
+}
 
 AppState screen_browser_handle(int key, ScreenContext &ctx) {
-    auto entries = g_journal.listEntries();
+    auto &entries = g_browser.entries;
     if (entries.empty()) { ctx.nextState = APP_MAIN; return APP_MAIN; }
     if (g_browser.selection >= (int)entries.size()) g_browser.selection = (int)entries.size() - 1;
 
@@ -121,7 +143,7 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
     if (key == 0x0A || key == 0x0D) { ctx.selectedEntry = entries[g_browser.selection].filename; ctx.nextState = APP_VIEWER; return APP_VIEWER; }
     if (key == 'd' || key == 'D') {
         g_journal.deleteEntry(entries[g_browser.selection].filename);
-        entries = g_journal.listEntries();
+        refreshBrowserCache();
         if (entries.empty()) { ctx.nextState=APP_MAIN; return APP_MAIN; }
         if (g_browser.selection>=(int)entries.size()) g_browser.selection=(int)entries.size()-1;
     }
@@ -177,6 +199,7 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
 void screen_viewer_init(const std::string &filename) {
     g_viewer.filename = filename; g_viewer.scroll = 0; g_viewer.lines.clear();
     g_viewer.vrowsDirty = true;
+    g_viewer.mdInfoDirty = true;
     if (filename.length() >= 15)
         g_viewer.dateStr = filename.substr(0,10) + " " + filename.substr(11,2) + ":" + filename.substr(13,2);
     else g_viewer.dateStr = filename;
@@ -244,12 +267,7 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
 
     bool mdOn = g_settings.markdownRender();
     mdSetRenderEnabled(mdOn);
-    std::vector<MdLineInfo> mdInfo;
-    if (mdOn) {
-        mdInfo = mdClassifyLines(g_viewer.lines);
-    } else {
-        mdInfo.assign(g_viewer.lines.size(), MdLineInfo{});
-    }
+    const auto& mdInfo = getViewerMdInfo(mdOn);
     for (int i = 0; i < visible && (g_viewer.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_viewer.scroll + i];
         mdDrawVrow(4, contentY + i * LINE_SPACING, g_viewer.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx]);

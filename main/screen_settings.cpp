@@ -26,6 +26,7 @@ struct SettingField { const char *key; const char *label; bool masked; bool acti
 static const SettingField SETTINGS_FIELDS[] = {
     {"_app_mode", "工作模式", false, true},
     {"_file_mgr", "文件管理", false, true},
+    {"file_mgr_token", "文件管理密码", true, false},
     {"_bt_manage", "蓝牙设备管理", false, true},
     {"deepseek_key", "Deepseek Key", false, false},
     {"_polish_prompt", "润色提示词", false, true},

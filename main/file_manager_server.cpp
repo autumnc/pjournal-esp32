@@ -1,5 +1,6 @@
 #include "file_manager_server.h"
 #include "journal_storage.h"
+#include "settings_manager.h"
 #include <esp_log.h>
 #include <esp_http_server.h>
 #include <dirent.h>
@@ -9,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <algorithm>
 
 static const char *TAG = "FileMgr";
 static httpd_handle_t s_server = nullptr;
@@ -35,7 +37,11 @@ static std::string urlDecode(const char *src) {
 
 static bool isSafePath(const std::string &path) {
     if (path.find("..") != std::string::npos) return false;
-    return path.compare(0, 7, "/sdcard") == 0;
+    // /sdcard must be the mount root itself or followed by '/', otherwise
+    // "/sdcard2/..." would bypass the check.
+    if (path.compare(0, 7, "/sdcard") != 0) return false;
+    if (path.size() > 7 && path[7] != '/') return false;
+    return true;
 }
 
 static std::string formatSize(off_t size) {
@@ -66,6 +72,25 @@ static std::string getQueryParam(httpd_req_t *req, const char *key) {
     char val[512] = {};
     if (httpd_query_key_value(query.data(), key, val, sizeof(val)) != ESP_OK) return "";
     return urlDecode(val);
+}
+
+// Optional access token. When a "文件管理密码" is set in settings, every
+// request must carry it via the X-Auth-Token header or the ?token= query
+// param. Empty setting keeps the old open access.
+static bool authOk(httpd_req_t *req) {
+    std::string expected = g_settings.getString("file_mgr_token");
+    if (expected.empty()) return true;
+    char buf[128] = {};
+    if (httpd_req_get_hdr_value_str(req, "X-Auth-Token", buf, sizeof(buf)) == ESP_OK &&
+        expected == buf) return true;
+    std::string q = getQueryParam(req, "token");
+    return !q.empty() && q == expected;
+}
+
+static esp_err_t sendAuthError(httpd_req_t *req) {
+    httpd_resp_set_status(req, "401 Unauthorized");
+    sendJsonError(req, "unauthorized");
+    return ESP_OK;
 }
 
 // ── ZIP helpers (store mode, no compression) ────────────────────────────
@@ -160,16 +185,20 @@ th{background:#f5f5f5;font-weight:600}
 <button onclick="upload()">上传</button>
 <input type="text" id="dirName" placeholder="文件夹名">
 <button onclick="mkdir()">新建</button>
+<button onclick="setToken()">密码</button>
 </div>
 <div id="msg"></div>
 <table><thead><tr><th>名称</th><th>大小</th><th>操作</th></tr></thead>
 <tbody id="list"></tbody></table>
 <script>
 var curPath='/sdcard';
+var token='';try{token=localStorage.getItem('pjournal_token')||''}catch(e){}
+function hd(){return token?{'X-Auth-Token':token}:{}}
+function setToken(){var t=prompt('文件管理密码(留空则不设)',token);if(t!==null){token=t.trim();try{localStorage.setItem('pjournal_token',token)}catch(e){}}}
 function showMsg(t,ok){var e=document.getElementById('msg');e.textContent=t;e.className=ok?'ok':'err';e.style.display='block';setTimeout(function(){e.style.display='none'},3000)}
 function loadDir(p){
   curPath=p;
-  fetch('/api/list?path='+encodeURIComponent(p)).then(r=>r.json()).then(d=>{
+  fetch('/api/list?path='+encodeURIComponent(p),{headers:hd()}).then(r=>r.json()).then(d=>{
     document.getElementById('breadcrumb').textContent=d.path;
     var h='';
     if(d.path!=='/sdcard') h+='<tr><td class="dir" onclick="loadDir(\''+esc(p.replace(/\/[^/]+$/,''))+'\')">..</td><td></td><td></td></tr>';
@@ -185,21 +214,21 @@ function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
 function upload(){
   var f=document.getElementById('fileInput').files[0];if(!f)return;
   var fd=new FormData();fd.append('file',f);
-  fetch('/api/upload?path='+encodeURIComponent(curPath)+'&name='+encodeURIComponent(f.name),{method:'POST',body:fd})
+  fetch('/api/upload?path='+encodeURIComponent(curPath)+'&name='+encodeURIComponent(f.name),{method:'POST',body:fd,headers:hd()})
   .then(r=>r.json()).then(d=>{showMsg(d.ok?'上传成功':'上传失败: '+d.error,d.ok);loadDir(curPath)})
   .catch(()=>showMsg('上传失败',false));
 }
-function dl(p){window.open('/api/download?path='+encodeURIComponent(p))}
-function dlDir(p){window.open('/api/download_dir?path='+encodeURIComponent(p))}
+function dl(p){window.open('/api/download?path='+encodeURIComponent(p)+'&token='+encodeURIComponent(token))}
+function dlDir(p){window.open('/api/download_dir?path='+encodeURIComponent(p)+'&token='+encodeURIComponent(token))}
 function del(p,isDir){
   if(!confirm('确认删除?'))return;
-  fetch('/api/delete?path='+encodeURIComponent(p)+'&dir='+isDir,{method:'POST'})
+  fetch('/api/delete?path='+encodeURIComponent(p)+'&dir='+isDir,{method:'POST',headers:hd()})
   .then(r=>r.json()).then(d=>{showMsg(d.ok?'删除成功':'删除失败: '+d.error,d.ok);loadDir(curPath)})
   .catch(()=>showMsg('删除失败',false));
 }
 function mkdir(){
   var n=document.getElementById('dirName').value.trim();if(!n)return;
-  fetch('/api/mkdir?path='+encodeURIComponent(curPath+'/'+n),{method:'POST'})
+  fetch('/api/mkdir?path='+encodeURIComponent(curPath+'/'+n),{method:'POST',headers:hd()})
   .then(r=>r.json()).then(d=>{showMsg(d.ok?'创建成功':'创建失败: '+d.error,d.ok);if(d.ok){document.getElementById('dirName').value='';loadDir(curPath)}})
   .catch(()=>showMsg('创建失败',false));
 }
@@ -215,6 +244,7 @@ static esp_err_t __attribute__((unused)) handler_index(httpd_req_t *req) {
 }
 
 static esp_err_t __attribute__((unused)) handler_list(httpd_req_t *req) {
+    if (!authOk(req)) return sendAuthError(req);
     std::string path = getQueryParam(req, "path");
     if (path.empty()) path = "/sdcard";
     if (!isSafePath(path)) {
@@ -272,6 +302,7 @@ static esp_err_t __attribute__((unused)) handler_list(httpd_req_t *req) {
 }
 
 static esp_err_t __attribute__((unused)) handler_download(httpd_req_t *req) {
+    if (!authOk(req)) return sendAuthError(req);
     std::string path = getQueryParam(req, "path");
     if (!isSafePath(path)) {
         httpd_resp_send_404(req);
@@ -317,6 +348,7 @@ static esp_err_t __attribute__((unused)) handler_download(httpd_req_t *req) {
 }
 
 static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) {
+    if (!authOk(req)) return sendAuthError(req);
     std::string path = getQueryParam(req, "path");
     if (!isSafePath(path)) {
         httpd_resp_send_404(req);
@@ -476,6 +508,7 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
 }
 
 static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
+    if (!authOk(req)) return sendAuthError(req);
     std::string dir = getQueryParam(req, "path");
     std::string name = getQueryParam(req, "name");
     if (!isSafePath(dir) || name.empty()) {
@@ -491,10 +524,15 @@ static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
 
     std::string fullpath = dir + "/" + name;
 
-    // parse multipart/form-data
+    // Cap uploads so an oversized body can't exhaust heap or fill the card.
+    const size_t MAX_UPLOAD = 8 * 1024 * 1024;
     size_t content_len = req->content_len;
     if (content_len == 0) {
         sendJsonError(req, "empty body");
+        return ESP_OK;
+    }
+    if (content_len > MAX_UPLOAD) {
+        sendJsonError(req, "file too large");
         return ESP_OK;
     }
 
@@ -524,70 +562,75 @@ static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
         return ESP_OK;
     }
 
-    // read body in chunks, skip multipart headers, write file data
-    std::vector<char> body(content_len + 1);
-    size_t total_read = 0;
-    while (total_read < content_len) {
-        int r = httpd_req_recv(req, body.data() + total_read, content_len - total_read);
-        if (r <= 0) break;
-        total_read += r;
-    }
-    body[total_read] = '\0';
+    // Stream the multipart body to disk with a sliding window so only a few KB
+    // are buffered instead of the whole upload. The file part's data ends at
+    // "\r\n--boundary", which also consumes the trailing CRLF.
+    const size_t CHUNK = 2048;
+    const std::string hdrSep = "\r\n\r\n";
+    const std::string marker = "\r\n--" + boundary;
+    const size_t keep = marker.size() - 1;   // tail kept as a possible partial marker
+    std::string window;
+    size_t remaining = content_len;
+    bool inHeader = true;
+    bool done = false;
+    bool ok = true;
+    size_t written = 0;
 
-    // find start of file data (after \r\n\r\n following filename header)
-    char *data_start = nullptr;
-    char *search = body.data();
-    while (search < body.data() + total_read) {
-        char *hdr_end = strstr(search, "\r\n\r\n");
-        if (!hdr_end) break;
-        // check if this part has a filename
-        char *part_start = search;
-        if (strstr(part_start, "filename=") || strstr(part_start, "name=\"file\"")) {
-            data_start = hdr_end + 4;
-            break;
+    while (remaining > 0 && !done && ok) {
+        char raw[CHUNK];
+        size_t want = remaining < CHUNK ? remaining : CHUNK;
+        int r = httpd_req_recv(req, raw, want);
+        if (r <= 0) { ok = false; break; }
+        remaining -= (size_t)r;
+        window.append(raw, (size_t)r);
+
+        if (inHeader) {
+            auto it = std::search(window.begin(), window.end(), hdrSep.begin(), hdrSep.end());
+            if (it == window.end()) {
+                if (window.size() > 8192) ok = false;   // malformed: no header end
+                continue;
+            }
+            window.erase(window.begin(), it + (int)hdrSep.size());
+            inHeader = false;
         }
-        // skip to next boundary
-        char *next = strstr(hdr_end + 4, boundary.c_str());
-        if (!next) break;
-        search = next + boundary.length();
-        if (*search == '\r') search += 2;
+
+        while (!done && !window.empty()) {
+            auto it = std::search(window.begin(), window.end(), marker.begin(), marker.end());
+            if (it != window.end()) {
+                size_t n = (size_t)(it - window.begin());
+                if (n > 0) { fwrite(window.data(), 1, n, f); written += n; }
+                window.clear();
+                done = true;
+                break;
+            }
+            if (window.size() <= keep) break;   // need more data before deciding
+            size_t writeNow = window.size() - keep;
+            fwrite(window.data(), 1, writeNow, f);
+            written += writeNow;
+            window.erase(0, writeNow);
+        }
     }
-
-    if (!data_start) {
-        // fallback: treat entire body as file data
-        data_start = body.data();
+    // Body ended without the closing boundary — flush whatever is buffered.
+    if (ok && !inHeader && !done && !window.empty()) {
+        fwrite(window.data(), 1, window.size(), f);
+        written += window.size();
+        window.clear();
     }
-
-    // find end of file data (before closing boundary)
-    char *data_end = body.data() + total_read;
-    // search backwards for boundary marker
-    std::string end_marker = "\r\n" + boundary;
-    char *marker = (char*)memmem(data_start, data_end - data_start, end_marker.c_str(), end_marker.length());
-    if (marker) data_end = marker;
-
-    // also check for --boundary at very start (no preceding \r\n)
-    if (!marker) {
-        std::string start_marker = boundary;
-        char *m2 = (char*)memmem(data_start, data_end - data_start, start_marker.c_str(), start_marker.length());
-        if (m2) data_end = m2;
-    }
-
-    size_t write_len = data_end - data_start;
-    // strip trailing \r\n before boundary
-    if (write_len >= 2 && data_end[-2] == '\r' && data_end[-1] == '\n') {
-        write_len -= 2;
-    }
-
-    fwrite(data_start, 1, write_len, f);
     fclose(f);
     if (mtx) xSemaphoreGiveRecursive(mtx);
 
-    ESP_LOGI(TAG, "Uploaded: %s (%d bytes)", fullpath.c_str(), (int)write_len);
+    if (!ok) {
+        remove(fullpath.c_str());   // discard the partial file
+        sendJsonError(req, "upload failed");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "Uploaded: %s (%d bytes)", fullpath.c_str(), (int)written);
     sendJsonOK(req);
     return ESP_OK;
 }
 
 static esp_err_t __attribute__((unused)) handler_delete(httpd_req_t *req) {
+    if (!authOk(req)) return sendAuthError(req);
     std::string path = getQueryParam(req, "path");
     std::string dirFlag = getQueryParam(req, "dir");
     if (!isSafePath(path)) {
@@ -616,6 +659,7 @@ static esp_err_t __attribute__((unused)) handler_delete(httpd_req_t *req) {
 }
 
 static esp_err_t __attribute__((unused)) handler_mkdir(httpd_req_t *req) {
+    if (!authOk(req)) return sendAuthError(req);
     std::string path = getQueryParam(req, "path");
     if (!isSafePath(path)) {
         sendJsonError(req, "invalid path");
