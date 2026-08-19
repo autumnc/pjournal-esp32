@@ -179,10 +179,13 @@ static void loadOutline() {
     }
     nodes.elements.resize(write);
 
-    // Ensure bookmarks before taking address of nodes.elements,
-    // since set() may reallocate memberValues and invalidate the pointer.
+    // Ensure bookmarks/tags before taking address of nodes.elements,
+    // since any new root key inserted later (set or operator[] on a missing
+    // key) reallocates memberValues and invalidates the pointer.
     if (!g.outlineData.has("bookmarks") || !g.outlineData["bookmarks"].isArray())
         g.outlineData.set("bookmarks", JsonValue::array());
+    if (!g.outlineData.has("tags") || !g.outlineData["tags"].isArray())
+        g.outlineData.set("tags", JsonValue::array());
 
     g.nodes = &g.outlineData["nodes"].elements;
     g.nodeCount = g.outlineData["nodes"].size();
@@ -1908,6 +1911,7 @@ AppState screen_outline_handle(int key, ScreenContext &ctx) {
                 g.outlineData = JsonValue::object();
                 g.outlineData.set("nodes", JsonValue::array());
                 g.outlineData.set("bookmarks", JsonValue::array());
+                g.outlineData.set("tags", JsonValue::array());
                 g.nodes = &g.outlineData["nodes"].elements;
                 g.nodeCount = 0;
             }
@@ -1936,6 +1940,7 @@ AppState screen_outline_handle(int key, ScreenContext &ctx) {
                     g.outlineData = JsonValue::object();
                     g.outlineData.set("nodes", JsonValue::array());
                     g.outlineData.set("bookmarks", JsonValue::array());
+                    g.outlineData.set("tags", JsonValue::array());
                     g.nodes = &g.outlineData["nodes"].elements;
                     g.nodeCount = 0;
                 }
@@ -2171,6 +2176,7 @@ AppState screen_outline_handle(int key, ScreenContext &ctx) {
                     g.outlineData = JsonValue::object();
                     g.outlineData.set("nodes", JsonValue::array());
                     g.outlineData.set("bookmarks", JsonValue::array());
+                    g.outlineData.set("tags", JsonValue::array());
                     g.nodes = &g.outlineData["nodes"].elements;
                     g.nodeCount = 0;
                 }

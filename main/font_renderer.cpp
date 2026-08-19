@@ -180,6 +180,10 @@ extern "C" {
     extern void u8g2_DrawPixel(void *u8g2, int x, int y);
     extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
     extern void u8g2_DrawHLine(void *u8g2, int x, int y, int w);
+    // DrawBitmap is MSB-first (bit 7 = leftmost column), matching our glyph
+    // data. u8g2_DrawXBM is LSB-first and would mirror every 8px block.
+    extern void u8g2_SetBitmapMode(void *u8g2, uint8_t is_transparent);
+    extern void u8g2_DrawBitmap(void *u8g2, int x, int y, int cnt, int h, const uint8_t *bitmap);
     extern void *u8g2_st7305_get_u8g2(void *dev);
 }
 struct u8g2_struct;
@@ -235,21 +239,29 @@ void FontRenderer::drawGlyph(int x, int y, const GlyphMeta *meta, bool invert) {
 
     int bw = meta->width;
     int bh = meta->height;
-    int xo = meta->x_off;
-    int yo = meta->y_off;
     int row_bytes = (bw + 7) / 8;
     const uint8_t *bits = bitmap_data_ + meta->bitmap_offset;
 
-    int draw_x = x + xo;
-    int draw_y = y - yo - bh;
+    int draw_x = x + meta->x_off;
+    int draw_y = y - meta->y_off - bh;
 
+    // 常规绘制:整块位图写入,替代逐像素 DrawPixel(结果逐位一致)。
+    // DrawBitmap 按 MSB 优先读位,与字形数据一致;必须先开透明模式,
+    // 否则 0 位会被反色填充。开启透明对全工程安全(仅此处用到位图绘制)。
+    if (!invert) {
+        u8g2_SetBitmapMode(g_u8g2, 1);
+        u8g2_DrawBitmap(g_u8g2, draw_x, draw_y, row_bytes, bh, bits);
+        return;
+    }
+
+    // 反色绘制仅 GTD 优先级徽标等少量场合使用,保持原逐像素语义。
+    // 当前位图绘制只描 ink 位,无法表达"描反色"语义,故此处不变。
     for (int row = 0; row < bh; row++) {
         for (int col = 0; col < bw; col++) {
             int byte_idx = row * row_bytes + col / 8;
             int bit = 7 - (col % 8);
             bool on = (bits[byte_idx] >> bit) & 1;
-            if (invert) on = !on;
-            if (on) {
+            if (!on) {
                 u8g2_DrawPixel(g_u8g2, draw_x + col, draw_y + row);
             }
         }
@@ -260,21 +272,24 @@ void FontRenderer::drawSymbolGlyph(int x, int y, const SymbolGlyph *sym, bool in
     if (!g_u8g2 || !sym) return;
     int bw = sym->width;
     int bh = sym->height;
-    int xo = sym->x_off;
-    int yo = sym->y_off;
     int row_bytes = (bw + 7) / 8;
     const uint8_t *bits = sym->bitmap;
 
-    int draw_x = x + xo;
-    int draw_y = y - yo;
+    int draw_x = x + sym->x_off;
+    int draw_y = y - sym->y_off;
+
+    if (!invert) {
+        u8g2_SetBitmapMode(g_u8g2, 1);
+        u8g2_DrawBitmap(g_u8g2, draw_x, draw_y, row_bytes, bh, bits);
+        return;
+    }
 
     for (int row = 0; row < bh; row++) {
         for (int col = 0; col < bw; col++) {
             int byte_idx = row * row_bytes + col / 8;
             int bit = 7 - (col % 8);
             bool on = (bits[byte_idx] >> bit) & 1;
-            if (invert) on = !on;
-            if (on) {
+            if (!on) {
                 u8g2_DrawPixel(g_u8g2, draw_x + col, draw_y + row);
             }
         }

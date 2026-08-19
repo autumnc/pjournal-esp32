@@ -79,7 +79,7 @@ static DeepseekResult runChat(const std::string &body) {
     DeepseekResult result = {false, "API请求失败"};
 
     esp_err_t err = esp_http_client_open(client, (int)body.size());
-    ESP_LOGI(TAG, "Request body: %s", body.c_str());
+    ESP_LOGI(TAG, "Request body: %d bytes", (int)body.size());
     if (err == ESP_OK) {
         esp_http_client_write(client, body.c_str(), (int)body.size());
         esp_http_client_fetch_headers(client);

@@ -46,6 +46,9 @@ static struct {
     std::vector<VRow> cachedVrows;
     int cachedWordCount = 0;
     bool wordCountDirty = true;
+    bool mdInfoDirty = true;
+    std::vector<MdLineInfo> cachedMdInfo;
+    bool cachedMdOn = false;
     int64_t autoSaveTime = 0;
     bool modifiedSinceSave = false;
     std::string savedFilename;
@@ -53,7 +56,17 @@ static struct {
     // Selection
     bool hasSelection = false;
     int selAnchorCy = 0, selAnchorCx = 0;
+    // Whether the editor content is currently on screen. Idle ticks skip the
+    // full redraw once it is; reset when another screen paints over it.
+    bool drawnOnce = false;
 } g_editor;
+
+// Mark every line-derived cache (vrows, word count, markdown info) stale.
+static void markDirty() {
+    g_editor.vrowsDirty = true;
+    g_editor.wordCountDirty = true;
+    g_editor.mdInfoDirty = true;
+}
 
 // ── Selection helpers ────────────────────────────────────────────────────
 // Selection is defined by anchor (selAnchorCy, selAnchorCx) and cursor (cy, cx).
@@ -109,8 +122,7 @@ static void deleteSelection() {
     g_editor.cx = start.cx;
     g_editor.hasSelection = false;
     g_editor.targetCx = -1;
-    g_editor.vrowsDirty = true;
-    g_editor.wordCountDirty = true;
+    markDirty();
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
 }
@@ -133,6 +145,20 @@ static const std::vector<VRow>& getVrows() {
         g_editor.vrowsDirty = false;
     }
     return g_editor.cachedVrows;
+}
+
+static const std::vector<MdLineInfo>& getMdInfo(bool mdOn) {
+    // Recompute when lines changed OR when the markdown toggle changed.
+    if (g_editor.mdInfoDirty || g_editor.cachedMdOn != mdOn) {
+        g_editor.cachedMdOn = mdOn;
+        if (mdOn) {
+            g_editor.cachedMdInfo = mdClassifyLines(g_editor.lines);
+        } else {
+            g_editor.cachedMdInfo.assign(g_editor.lines.size(), MdLineInfo{});
+        }
+        g_editor.mdInfoDirty = false;
+    }
+    return g_editor.cachedMdInfo;
 }
 
 static int getWordCount() {
@@ -180,8 +206,7 @@ static void loadQuickEditFile() {
     loadLinesIntoEditor(quickEditLoad(quickEditIndex()));
     g_editor.scroll = 0;
     g_editor.targetCx = -1;
-    g_editor.vrowsDirty = true;
-    g_editor.wordCountDirty = true;
+    markDirty();
     g_editor.modifiedSinceSave = false;
     g_editor.autoSaveTime = 0;
 }
@@ -207,6 +232,7 @@ static void quickEditSwitchTo(int idx) {
 static bool s_skipStatusBarAndIme = false;
 
 static void drawEditor() {
+    g_editor.drawnOnce = true;
     int y = FONT_H;
 
     if (g_editor.promptMode && !g_editor.promptText.empty()) {
@@ -259,12 +285,7 @@ static void drawEditor() {
 
     bool mdOn = g_settings.markdownRender();
     mdSetRenderEnabled(mdOn);
-    std::vector<MdLineInfo> mdInfo;
-    if (mdOn) {
-        mdInfo = mdClassifyLines(g_editor.lines);
-    } else {
-        mdInfo.assign(g_editor.lines.size(), MdLineInfo{});
-    }
+    const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
     for (int i = 0; i < visibleVrows && (g_editor.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_editor.scroll + i];
         mdDrawVrow(4, y + i * LINE_SPACING, g_editor.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx]);
@@ -495,7 +516,8 @@ void screen_editor_init(ScreenContext &ctx) {
     g_ime.setEnglish(false);
     g_editor.confirmSave = false;
     g_editor.modifiedSinceSave = false;
-    g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+    g_editor.drawnOnce = false;
+    markDirty();
     g_editor.promptText = ctx.promptText;
     g_editor.promptMode = ctx.promptMode && !quickFile;
     ctx.editFilename.clear();
@@ -542,7 +564,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 4, ' ');
         g_editor.cx += 4;
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        markDirty();
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
@@ -658,7 +680,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.lines[g_editor.cy].insert(g_editor.cx, g_clipboard);
             g_editor.cx += (int)g_clipboard.length();
             g_editor.targetCx = -1;
-            g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+            markDirty();
             g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
             g_editor.modifiedSinceSave = true;
         }
@@ -677,7 +699,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
         }
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true;
+        markDirty();
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == KEY_SHIFT_RIGHT) {
@@ -691,7 +713,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cx = 0;
         }
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true;
+        markDirty();
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == KEY_SHIFT_UP) {
@@ -714,7 +736,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             int targetCells = vrowStartCells + visualCol;
             g_editor.cx = cellsToByte(g_editor.lines[g_editor.cy], prev.start, prev.end, targetCells);
         }
-        g_editor.vrowsDirty = true;
+        markDirty();
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
     if (key == KEY_SHIFT_DOWN) {
@@ -738,7 +760,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cx = std::min(cellsToByte(g_editor.lines[g_editor.cy], next.start, next.end, targetCells),
                                    (int)g_editor.lines[g_editor.cy].length());
         }
-        g_editor.vrowsDirty = true;
+        markDirty();
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }
 
@@ -786,7 +808,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines.insert(g_editor.lines.begin() + g_editor.cy, prefix + rest);
         g_editor.cx = (int)prefix.length();  // 光标落在续行标记之后
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        markDirty();
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
     } else if (key == 0x7F || key == 0x08) { // Backspace
@@ -804,7 +826,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cy--;
         }
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        markDirty();
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
     } else if (key >= 0x20 && key <= 0x7E) { // ASCII printable
@@ -812,7 +834,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 1, (char)key);
         g_editor.cx++;
         g_editor.targetCx = -1;
-        g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+        markDirty();
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
     } else if (key == KEY_LEFT) {
@@ -874,16 +896,32 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
     }
 
+    ui_clear(); drawEditor(); ui_commit();
+    return APP_EDITOR;
+}
+
+// ── Idle tick (no key) ────────────────────────────────────────────────────
+// main loop calls this instead of screen_editor_handle(0, ctx). Runs the
+// auto-save schedule and only repaints when the screen may be stale, avoiding
+// a full redraw every 50ms idle tick.
+bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
+    (void)ctx;
     // Auto-save on idle ticks (快捷编辑始终自动保存)
-    if (key == 0 && g_editor.autoSaveTime > 0 && esp_timer_get_time() > g_editor.autoSaveTime) {
+    if (g_editor.autoSaveTime > 0 && esp_timer_get_time() > g_editor.autoSaveTime) {
         g_editor.autoSaveTime = 0;
         if (inQuickFileSession() || g_settings.autoSave()) {
             if (saveCurrentContent()) g_editor.modifiedSinceSave = false;
         }
     }
+    if (forceRedraw || !g_editor.drawnOnce) {
+        ui_clear(); drawEditor(); ui_commit();
+        return true;
+    }
+    return false;
+}
 
-    ui_clear(); drawEditor(); ui_commit();
-    return APP_EDITOR;
+void screen_editor_reset_drawn() {
+    g_editor.drawnOnce = false;
 }
 
 // ── App-level helpers ────────────────────────────────────────────────────
@@ -937,7 +975,7 @@ void editorInsertText(const std::string &text) {
     g_editor.lines[g_editor.cy].insert(g_editor.cx, text);
     g_editor.cx += (int)text.length();
     g_editor.targetCx = -1;
-    g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+    markDirty();
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
 }
@@ -948,8 +986,7 @@ void editorReplaceAllText(const std::string &text) {
     g_editor.scroll = 0;
     g_editor.targetCx = -1;
     g_editor.hasSelection = false;
-    g_editor.vrowsDirty = true;
-    g_editor.wordCountDirty = true;
+    markDirty();
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
 }
@@ -993,7 +1030,7 @@ void editorReplaceSelection(const std::string &text) {
         }
     }
     g_editor.targetCx = -1;
-    g_editor.vrowsDirty = true; g_editor.wordCountDirty = true;
+    markDirty();
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
 }

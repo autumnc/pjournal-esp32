@@ -6,6 +6,14 @@
 void screen_editor_init(ScreenContext &ctx);
 AppState screen_editor_handle(int key, ScreenContext &ctx);
 
+// Idle tick (no key): runs auto-save, repaints only if the screen is stale or
+// forceRedraw is set. Returns true if a repaint happened.
+bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw);
+
+// Mark the on-screen editor content stale (call when another screen painted
+// over it, e.g. returning from inspiration/polish/voice).
+void screen_editor_reset_drawn();
+
 // IME state for global Ctrl+Space toggle
 bool app_ime_active();
 void app_toggle_ime();

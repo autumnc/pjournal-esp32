@@ -671,6 +671,7 @@ extern "C" void app_main() {
             key = 0;
         }
 
+        AppState prevState = currentState;  // before the switch, to detect transitions
         switch (currentState) {
         case APP_MAIN:
             g_font.setSize(22);
@@ -688,7 +689,7 @@ extern "C" void app_main() {
             if (app_editor_needs_reinit()) editorInited = false;
             if (!editorInited) { screen_editor_init(ctx); editorInited = true; }
             if (key > 0) currentState = screen_editor_handle(key, ctx);
-            else { screen_editor_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(50)); }
+            else { screen_editor_idle(ctx, false); vTaskDelay(pdMS_TO_TICKS(50)); }
             // Preserve editorInited when going to inspiration/polish (editor should resume)
             // Reset editorInited when editor is opened FROM another screen (new content)
             if (currentState != APP_EDITOR && currentState != APP_SYNC_SEND_FLOMO) {
@@ -960,11 +961,16 @@ extern "C" void app_main() {
             break;
         }
 
+        // 状态在本轮切换进编辑器时,屏幕已被上一界面盖过,置脏以便下轮重绘
+        if (currentState != prevState && currentState == APP_EDITOR) screen_editor_reset_drawn();
+
         if (!ctx.statusMessage.empty()) {
             ui_clear();
             ui_show_message_centered(ctx.statusMessage.c_str());
             ctx.statusMessage.clear();
             vTaskDelay(pdMS_TO_TICKS(1500));
+            // 编辑器空闲 tick 会跳过重绘,消息遮罩需在此手动刷掉
+            if (currentState == APP_EDITOR) screen_editor_idle(ctx, true);
         }
 
         // Voice session WiFi idle: 5 min after the session ends, shut the radio.
