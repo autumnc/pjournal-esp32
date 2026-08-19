@@ -37,6 +37,10 @@ static const char *TAG = "BtKeybrd";
 #define KEY_FULLWIDTH_TOGGLE 0x8B
 #define KEY_TRAD_TOGGLE 0x8C
 #define KEY_LSHIFT_TAP 0x8D
+#define KEY_HOME       0x8E
+#define KEY_END        0x8F
+#define KEY_PAGE_UP    0xA0
+#define KEY_PAGE_DOWN  0xA1
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 
@@ -63,6 +67,10 @@ static uint8_t hid_to_ascii(uint8_t kc, uint8_t mod) {
     if (kc == 81) return (mod & 0x22) ? KEY_SHIFT_DOWN : KEY_DOWN;
     if (kc == 80) return (mod & 0x22) ? KEY_SHIFT_LEFT : KEY_LEFT;
     if (kc == 79) return (mod & 0x22) ? KEY_SHIFT_RIGHT : KEY_RIGHT;
+    if (kc == 74) return KEY_HOME;       // Home
+    if (kc == 75) return KEY_PAGE_UP;    // PageUp
+    if (kc == 77) return KEY_END;        // End
+    if (kc == 78) return KEY_PAGE_DOWN;  // PageDown
     if (kc < 4 || kc > 103) return 0;
     uint8_t i = kc - 4;
     if (i >= sizeof(s_asc_low)) return 0;

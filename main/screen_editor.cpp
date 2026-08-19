@@ -139,6 +139,38 @@ static void extendSelection() {
     }
 }
 
+// Move cursor vertically by `step` visual rows (negative = up, positive = down),
+// preserving the target visual column. Returns true if the cursor moved.
+static bool moveCursorVertical(int step, const std::vector<VRow> &vrows) {
+    int curVR = -1;
+    for (int vi = 0; vi < (int)vrows.size(); vi++) {
+        if (vrows[vi].lineIdx == g_editor.cy && vrows[vi].start <= g_editor.cx && g_editor.cx <= vrows[vi].end) {
+            curVR = vi; break;
+        }
+    }
+    if (curVR < 0) return false;
+    int targetVR = curVR + step;
+    if (targetVR < 0) targetVR = 0;
+    if (targetVR > (int)vrows.size() - 1) targetVR = (int)vrows.size() - 1;
+    if (targetVR == curVR) return false;
+    auto &dst = vrows[targetVR];
+    if (g_editor.targetCx < 0)
+        g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
+    int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
+    g_editor.cy = dst.lineIdx;
+    int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], dst.start);
+    int targetCells = vrowStartCells + visualCol;
+    g_editor.cx = cellsToByte(g_editor.lines[g_editor.cy], dst.start, dst.end, targetCells);
+    return true;
+}
+
+// 一屏可显示的行数(减去状态栏并留一行上下文), 作为 PageUp/PageDown 的翻页步长。
+static int editorPageRows() {
+    int rows = (STATUS_Y - FONT_H + LINE_SPACING - 1) / LINE_SPACING - 1;
+    if (rows < 1) rows = 1;
+    return rows;
+}
+
 static const std::vector<VRow>& getVrows() {
     if (g_editor.vrowsDirty) {
         g_editor.cachedVrows = buildVrows(g_editor.lines);
@@ -552,6 +584,24 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         return APP_POLISH;
     }
 
+    // Ctrl+A → 全选
+    if (key == 0x01) {
+        if (g_editor.lines.size() == 1 && g_editor.lines[0].empty()) {
+            // 空文档不建立空选区
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        g_editor.selAnchorCy = 0;
+        g_editor.selAnchorCx = 0;
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+        g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
+        g_editor.hasSelection = true;
+        g_editor.targetCx = -1;
+        markDirty();
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+
     if (g_editor.imeActive && key != 0) {
         std::string imeOut;
         if (g_ime.handleKey(key, imeOut)) {
@@ -894,6 +944,20 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cx = std::min(cellsToByte(g_editor.lines[g_editor.cy], next.start, next.end, targetCells),
                                    (int)g_editor.lines[g_editor.cy].length());
         }
+    } else if (key == KEY_HOME) {
+        clearSelection();
+        g_editor.cx = 0;
+        g_editor.targetCx = -1;
+    } else if (key == KEY_END) {
+        clearSelection();
+        g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
+        g_editor.targetCx = -1;
+    } else if (key == KEY_PAGE_UP) {
+        clearSelection();
+        moveCursorVertical(-editorPageRows(), vrows);
+    } else if (key == KEY_PAGE_DOWN) {
+        clearSelection();
+        moveCursorVertical(editorPageRows(), vrows);
     }
 
     ui_clear(); drawEditor(); ui_commit();

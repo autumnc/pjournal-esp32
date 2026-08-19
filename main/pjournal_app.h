@@ -52,6 +52,10 @@ struct ScreenContext {
 #define KEY_FULLWIDTH_TOGGLE 0x8B
 #define KEY_TRAD_TOGGLE 0x8C
 #define KEY_LSHIFT_TAP 0x8D
+#define KEY_HOME       0x8E
+#define KEY_END        0x8F
+#define KEY_PAGE_UP    0xA0
+#define KEY_PAGE_DOWN  0xA1
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 

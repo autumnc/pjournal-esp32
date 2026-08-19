@@ -59,4 +59,4 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="3.8.1")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="3.8.2")
