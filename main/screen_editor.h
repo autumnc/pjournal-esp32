@@ -26,6 +26,12 @@ void app_toggle_english();
 void app_editor_request_reinit();
 bool app_editor_needs_reinit();
 
+// 查找/替换对话框是否打开(供 main.cpp 屏蔽全局按键/物理按键)
+bool app_editor_search_active();
+
+// 快捷键帮助对话框是否打开(供 main.cpp 屏蔽全局按键/物理按键)
+bool app_editor_help_active();
+
 // Get editor text for Flomo sending
 std::string app_get_editor_text();
 

@@ -56,6 +56,8 @@ struct ScreenContext {
 #define KEY_END        0x8F
 #define KEY_PAGE_UP    0xA0
 #define KEY_PAGE_DOWN  0xA1
+#define KEY_SEARCH     0xA2
+#define KEY_HELP       0xA3
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 

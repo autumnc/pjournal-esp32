@@ -387,22 +387,22 @@ extern "C" void app_main() {
         g_bt.checkKeyRepeat();
 
         // Global Ctrl+Space IME toggle (only for editor)
-        if (key == KEY_IME_TOGGLE && currentState == APP_EDITOR) {
+        if (key == KEY_IME_TOGGLE && currentState == APP_EDITOR && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_ime();
             key = 0;
         }
         // Shift+Space fullwidth toggle (only when IME active in editor)
-        if (key == KEY_FULLWIDTH_TOGGLE && currentState == APP_EDITOR && app_ime_active()) {
+        if (key == KEY_FULLWIDTH_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_fullwidth();
             key = 0;
         }
         // Ctrl+Shift+F simplified/traditional toggle (only when IME active in editor)
-        if (key == KEY_TRAD_TOGGLE && currentState == APP_EDITOR && app_ime_active()) {
+        if (key == KEY_TRAD_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_trad();
             key = 0;
         }
         // Left Shift tap → temp English mode toggle (only when IME active in editor)
-        if (key == KEY_LSHIFT_TAP && currentState == APP_EDITOR && app_ime_active()) {
+        if (key == KEY_LSHIFT_TAP && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_english();
             key = 0;
         }
@@ -529,7 +529,7 @@ extern "C" void app_main() {
                             // 单击: 上移,等待双击窗口确认非双击后生效
                             s_pending_single.key = KEY_UP;
                             s_pending_single.queued_us = now;
-                        } else if (currentState == APP_EDITOR && btn_user.is_double) {
+                        } else if (currentState == APP_EDITOR && btn_user.is_double && !app_editor_search_active() && !app_editor_help_active()) {
                             // 编辑器双击: 进入语音听写(会话在screen_voice_init启动)
                             currentState = APP_VOICE;
                             key = 0;
@@ -624,7 +624,7 @@ extern "C" void app_main() {
                                 s_pending_single.key = KEY_DOWN;
                                 s_pending_single.queued_us = now;
                             }
-                        } else if (currentState == APP_EDITOR && btn_boot.is_double) {
+                        } else if (currentState == APP_EDITOR && btn_boot.is_double && !app_editor_search_active() && !app_editor_help_active()) {
                             // 编辑器双击: 进入AI润色面板(全文润色)
                             screen_polish_set_scope(POLISH_WHOLE);
                             currentState = APP_POLISH;
@@ -665,7 +665,7 @@ extern "C" void app_main() {
         }
 
         // Global Ctrl+I → inspiration panel (works from any screen including editor)
-        if (key == KEY_CTRL_I && currentState != APP_INSPIRATION) {
+        if (key == KEY_CTRL_I && currentState != APP_INSPIRATION && !app_editor_search_active() && !app_editor_help_active()) {
             inspReturnTo = currentState;
             currentState = APP_INSPIRATION;
             key = 0;
