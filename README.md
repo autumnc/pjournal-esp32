@@ -304,7 +304,7 @@ idf.py -p /dev/ttyUSB0 flash
 
 ## 版本
 
-当前版本: v3.9.0
+当前版本: v3.9.1
 
 ## License
 
