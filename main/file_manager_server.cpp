@@ -143,6 +143,10 @@ static void collectFiles(const std::string &dirPath, const std::string &basePath
         if (S_ISDIR(st.st_mode)) {
             collectFiles(full, rel, entries);
         } else {
+            if (rel.length() > 0xFFFF) {
+                ESP_LOGW(TAG, "Skipping path too long for ZIP (%d bytes): %s", (int)rel.length(), rel.c_str());
+                continue;
+            }
             ZipEntry e;
             e.relPath = rel;
             e.crc32 = 0;
@@ -385,28 +389,28 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
     httpd_resp_set_hdr(req, "Content-Disposition", hdr);
 
     // Write zip: local file headers + file data, then central directory, then end record
-    uint8_t lfh[30 + 256];  // local file header buffer
     uint8_t buf[4096];      // file read buffer
     uint32_t offset = 0;
 
     // Pass 1: write local file headers + data
     for (auto &e : entries) {
         e.offset = offset;
-        uint16_t nameLen = (uint16_t)e.relPath.length();
+        size_t nameLen = e.relPath.length();
+        std::vector<uint8_t> lfh(30 + nameLen);
 
         // Local file header (30 + nameLen bytes)
-        putU32(lfh + 0, 0x04034b50);   // signature
-        putU16(lfh + 4, 20);           // version needed
-        putU16(lfh + 6, 0);            // flags
-        putU16(lfh + 8, 0);            // compression: store
-        putU16(lfh + 10, 0);           // mod time
-        putU16(lfh + 12, 0);           // mod date
-        putU32(lfh + 14, 0);           // crc32 (placeholder, fill after reading)
-        putU32(lfh + 18, 0);           // compressed size (placeholder)
-        putU32(lfh + 22, 0);           // uncompressed size (placeholder)
-        putU16(lfh + 26, nameLen);     // filename length
-        putU16(lfh + 28, 0);           // extra field length
-        memcpy(lfh + 30, e.relPath.c_str(), nameLen);
+        putU32(lfh.data() + 0, 0x04034b50);   // signature
+        putU16(lfh.data() + 4, 20);           // version needed
+        putU16(lfh.data() + 6, 0);            // flags
+        putU16(lfh.data() + 8, 0);            // compression: store
+        putU16(lfh.data() + 10, 0);           // mod time
+        putU16(lfh.data() + 12, 0);           // mod date
+        putU32(lfh.data() + 14, 0);           // crc32 (placeholder, fill after reading)
+        putU32(lfh.data() + 18, 0);           // compressed size (placeholder)
+        putU32(lfh.data() + 22, 0);           // uncompressed size (placeholder)
+        putU16(lfh.data() + 26, (uint16_t)nameLen);  // filename length
+        putU16(lfh.data() + 28, 0);           // extra field length
+        memcpy(lfh.data() + 30, e.relPath.c_str(), nameLen);
 
         // Read file, compute CRC32 incrementally
         std::string fullPath = path + "/" + e.relPath.substr(dirName.length() + 1);
@@ -424,14 +428,14 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
         crc = crc32Finish(crc);
 
         // Fill in CRC and sizes
-        putU32(lfh + 14, crc);
-        putU32(lfh + 18, fsize);
-        putU32(lfh + 22, fsize);
+        putU32(lfh.data() + 14, crc);
+        putU32(lfh.data() + 18, fsize);
+        putU32(lfh.data() + 22, fsize);
         e.crc32 = crc;
         e.size = fsize;
 
         // Send local file header
-        if (httpd_resp_send_chunk(req, (const char*)lfh, 30 + nameLen) != ESP_OK) {
+        if (httpd_resp_send_chunk(req, (const char*)lfh.data(), 30 + nameLen) != ESP_OK) {
             if (f) fclose(f);
             if (mtx) xSemaphoreGiveRecursive(mtx);
             return ESP_OK;
@@ -454,32 +458,33 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
     }
 
     // Pass 2: central directory
-    uint8_t cdh[46 + 256];  // central directory header buffer
+    std::vector<uint8_t> cdh;  // central directory header buffer
     uint32_t cdOffset = offset;
 
     for (auto &e : entries) {
-        uint16_t nameLen = (uint16_t)e.relPath.length();
+        size_t nameLen = e.relPath.length();
+        cdh.resize(46 + nameLen);
 
-        putU32(cdh + 0, 0x02014b50);   // signature
-        putU16(cdh + 4, 20);           // version made by
-        putU16(cdh + 6, 20);           // version needed
-        putU16(cdh + 8, 0);            // flags
-        putU16(cdh + 10, 0);           // compression: store
-        putU16(cdh + 12, 0);           // mod time
-        putU16(cdh + 14, 0);           // mod date
-        putU32(cdh + 16, e.crc32);     // crc32
-        putU32(cdh + 20, e.size);      // compressed size
-        putU32(cdh + 24, e.size);      // uncompressed size
-        putU16(cdh + 28, nameLen);     // filename length
-        putU16(cdh + 30, 0);           // extra field length
-        putU16(cdh + 32, 0);           // file comment length
-        putU16(cdh + 34, 0);           // disk number start
-        putU16(cdh + 36, 0);           // internal file attributes
-        putU32(cdh + 38, 0);           // external file attributes
-        putU32(cdh + 42, e.offset);    // relative offset of local header
-        memcpy(cdh + 46, e.relPath.c_str(), nameLen);
+        putU32(cdh.data() + 0, 0x02014b50);   // signature
+        putU16(cdh.data() + 4, 20);           // version made by
+        putU16(cdh.data() + 6, 20);           // version needed
+        putU16(cdh.data() + 8, 0);            // flags
+        putU16(cdh.data() + 10, 0);           // compression: store
+        putU16(cdh.data() + 12, 0);           // mod time
+        putU16(cdh.data() + 14, 0);           // mod date
+        putU32(cdh.data() + 16, e.crc32);     // crc32
+        putU32(cdh.data() + 20, e.size);      // compressed size
+        putU32(cdh.data() + 24, e.size);      // uncompressed size
+        putU16(cdh.data() + 28, (uint16_t)nameLen);  // filename length
+        putU16(cdh.data() + 30, 0);           // extra field length
+        putU16(cdh.data() + 32, 0);           // file comment length
+        putU16(cdh.data() + 34, 0);           // disk number start
+        putU16(cdh.data() + 36, 0);           // internal file attributes
+        putU32(cdh.data() + 38, 0);           // external file attributes
+        putU32(cdh.data() + 42, e.offset);    // relative offset of local header
+        memcpy(cdh.data() + 46, e.relPath.c_str(), nameLen);
 
-        if (httpd_resp_send_chunk(req, (const char*)cdh, 46 + nameLen) != ESP_OK) {
+        if (httpd_resp_send_chunk(req, (const char*)cdh.data(), 46 + nameLen) != ESP_OK) {
             if (mtx) xSemaphoreGiveRecursive(mtx);
             return ESP_OK;
         }
@@ -567,7 +572,9 @@ static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
     // "\r\n--boundary", which also consumes the trailing CRLF.
     const size_t CHUNK = 2048;
     const std::string hdrSep = "\r\n\r\n";
-    const std::string marker = "\r\n--" + boundary;
+    // boundary already carries the leading "--", so the part separator in the
+    // body is "\r\n--<value>", i.e. "\r\n" + boundary.
+    const std::string marker = "\r\n" + boundary;
     const size_t keep = marker.size() - 1;   // tail kept as a possible partial marker
     std::string window;
     size_t remaining = content_len;

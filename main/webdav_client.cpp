@@ -214,14 +214,28 @@ bool WebDavClient::upload(const std::string &remotePath, const std::string &cont
     return (status == 200 || status == 201 || status == 204);
 }
 
-std::string WebDavClient::download(const std::string &remotePath) {
+std::string WebDavClient::download(const std::string &remotePath, int *outStatus) {
+    if (outStatus) *outStatus = 0;
     if (!isConfigured()) return "";
     std::string url = buildUrl(remotePath);
     std::string auth = authHeader();
     int status = 0;
     auto body = httpRequest(url, "GET", auth, "", "", "", &status);
+    if (outStatus) *outStatus = status;
     if (status == 200 || status == 203) return body;
     return "";
+}
+
+// A journal file name must be a plain basename: no path separators, no "..",
+// and not a dotfile. Otherwise a malicious remote href (e.g. "%2E%2E%2F...")
+// could escape the journal directory after URL decoding.
+static bool isSafeJournalName(const std::string &name) {
+    if (name.empty()) return false;
+    if (name[0] == '.') return false;
+    if (name.find('/') != std::string::npos) return false;
+    if (name.find('\\') != std::string::npos) return false;
+    if (name.find("..") != std::string::npos) return false;
+    return true;
 }
 
 std::vector<std::pair<std::string, std::string>> WebDavClient::listFiles(const std::string &dirPath) {
@@ -275,7 +289,7 @@ std::vector<std::pair<std::string, std::string>> WebDavClient::listFiles(const s
             }
         }
 
-        if (decoded.empty() || decoded.size() < 10) continue; // skip dir entries
+        if (!isSafeJournalName(decoded)) continue;
         result.push_back({decoded, e.lastModified});
     }
     return result;
@@ -453,8 +467,10 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
             } else {
                 // Remote new → download
                 ESP_LOGI(TAG, "Downloading remote file: %s", fname.c_str());
-                std::string content = download(remoteDir + fname);
-                if (!content.empty() && g_journal.saveEntryRaw(fname, content)) {
+                int dlStatus = 0;
+                std::string content = download(remoteDir + fname, &dlStatus);
+                if ((dlStatus == 200 || dlStatus == 203) &&
+                    g_journal.saveEntryRaw(fname, content)) {
                     downloaded++;
                     newState[fname] = remoteMtime;
                     std::string localPath = "/sdcard/pjournal/" + fname;
@@ -472,7 +488,7 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
             } else {
                 // Local new → upload
                 std::string content = g_journal.readEntry(fname);
-                if (!content.empty() && upload(remoteDir + fname, content)) {
+                if (upload(remoteDir + fname, content)) {
                     uploaded++;
                     newState[fname] = localMtime;
                 } else {
@@ -500,7 +516,7 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
                 newState[fname] = lm ? lm : rm;
             } else if (lm > rm) {
                 std::string content = g_journal.readEntry(fname);
-                if (!content.empty() && upload(remoteDir + fname, content)) {
+                if (upload(remoteDir + fname, content)) {
                     uploaded++;
                     newState[fname] = lm;
                 } else {
@@ -508,8 +524,10 @@ SyncResult WebDavClient::sync(const std::string &localDir) {
                     newState[fname] = prevState.count(fname) ? prevState[fname] : lm;
                 }
             } else {
-                std::string content = download(remoteDir + fname);
-                if (!content.empty() && g_journal.saveEntryRaw(fname, content)) {
+                int dlStatus = 0;
+                std::string content = download(remoteDir + fname, &dlStatus);
+                if ((dlStatus == 200 || dlStatus == 203) &&
+                    g_journal.saveEntryRaw(fname, content)) {
                     downloaded++;
                     newState[fname] = rm;
                     std::string localPath = "/sdcard/pjournal/" + fname;

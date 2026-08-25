@@ -22,8 +22,10 @@ public:
     // Upload a file (PUT)
     bool upload(const std::string &remotePath, const std::string &content);
 
-    // Download a file (GET), returns content or empty on failure
-    std::string download(const std::string &remotePath);
+    // Download a file (GET), returns content or empty on failure.
+    // *outStatus receives the HTTP status so callers can distinguish an
+    // empty file (200/203) from a failed request (0 or non-2xx).
+    std::string download(const std::string &remotePath, int *outStatus = nullptr);
 
     // List files with mtime (PROPFIND)
     // Returns {filename: iso_timestamp}
