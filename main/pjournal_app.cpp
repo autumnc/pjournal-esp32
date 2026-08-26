@@ -5,6 +5,7 @@
 #include "builtin_prompts.h"
 #include "settings_manager.h"
 #include "markdown_render.h"
+#include "main_menu_icons.h"
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
@@ -20,7 +21,10 @@ AppState g_flomoReturnTo = APP_EDITOR;
 
 extern "C" {
     extern void u8g2_SetDrawColor(void *g_u8g2, int color);
+    extern void u8g2_DrawBox(void *g_u8g2, int x, int y, int w, int h);
     extern void u8g2_DrawHLine(void *g_u8g2, int x, int y, int w);
+    extern void u8g2_SetBitmapMode(void *g_u8g2, uint8_t is_transparent);
+    extern void u8g2_DrawBitmap(void *g_u8g2, int x, int y, int cnt, int h, const uint8_t *bitmap);
     extern void u8g2_SendBuffer(void *g_u8g2);
 }
 
@@ -58,6 +62,97 @@ static const std::vector<MdLineInfo>& getViewerMdInfo(bool mdOn) {
 static void refreshBrowserCache() { g_browser.entries = g_journal.listEntries(); }
 
 // ── Main Screen ────────────────────────────────────────────────────────
+static struct {
+    int selection = 0;
+} g_mainMenu;
+
+struct MainMenuAction {
+    char key;
+    const char *name;
+    const MainMenuIconGlyph *icon;
+};
+
+static const MainMenuAction kMainActions[] = {
+    {'p', "提示写作", &MAIN_ICON_PROMPT},
+    {'f', "自由写作", &MAIN_ICON_FREE},
+    {'v', "查看过往日记", &MAIN_ICON_VIEW},
+    {'w', "同步WebDAV", &MAIN_ICON_SYNC},
+    {'t', "GTD任务管理", &MAIN_ICON_GTD},
+    {'o', "大纲写作", &MAIN_ICON_OUTLINE},
+    {'s', "设置", &MAIN_ICON_SETTINGS},
+};
+
+static int mainMenuVisibleCount(bool hasEntries) {
+    return hasEntries ? 7 : 6;
+}
+
+static int mainMenuActionIndex(int visibleIndex, bool hasEntries) {
+    if (hasEntries || visibleIndex < 2) return visibleIndex;
+    return visibleIndex + 1;
+}
+
+static int mainMenuVisibleIndexForKey(char key, bool hasEntries) {
+    for (int i = 0; i < mainMenuVisibleCount(hasEntries); i++) {
+        int actionIndex = mainMenuActionIndex(i, hasEntries);
+        if (kMainActions[actionIndex].key == key) return i;
+    }
+    return -1;
+}
+
+static void mainMenuActivate(const MainMenuAction &action, ScreenContext &ctx) {
+    switch (action.key) {
+    case 'p':
+        ctx.promptMode = true;
+        ctx.promptText = BUILTIN_PROMPTS[rand() % BUILTIN_PROMPT_COUNT];
+        ctx.prevState = APP_MAIN;
+        ctx.nextState = APP_EDITOR;
+        break;
+    case 'f':
+        ctx.promptMode = false;
+        ctx.promptText = "";
+        ctx.prevState = APP_MAIN;
+        ctx.nextState = APP_EDITOR;
+        break;
+    case 'v':
+        ctx.nextState = APP_BROWSER;
+        break;
+    case 'w':
+        ctx.nextState = APP_SYNC_WEBDAV;
+        break;
+    case 't':
+        ctx.nextState = APP_GTD;
+        break;
+    case 'o':
+        ctx.nextState = APP_OUTLINE;
+        break;
+    case 's':
+        ctx.nextState = APP_SETTINGS;
+        break;
+    default:
+        break;
+    }
+}
+
+static void drawMainMenuIcon(int centerX, int topY, const MainMenuIconGlyph *icon, bool selected) {
+    if (!g_u8g2 || !icon) return;
+    const int boxSize = 48;
+    int boxX = centerX - boxSize / 2;
+    int glyphX = centerX - icon->width / 2;
+    int glyphY = topY + (boxSize - icon->height) / 2;
+
+    u8g2_SetBitmapMode(g_u8g2, 1);
+    if (selected) {
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawBox(g_u8g2, boxX, topY, boxSize, boxSize);
+        u8g2_SetDrawColor(g_u8g2, 1);
+        u8g2_DrawBitmap(g_u8g2, glyphX, glyphY, icon->row_bytes, icon->height, icon->bitmap);
+        u8g2_SetDrawColor(g_u8g2, 0);
+    } else {
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawBitmap(g_u8g2, glyphX, glyphY, icon->row_bytes, icon->height, icon->bitmap);
+    }
+}
+
 void screen_main_init() {
     static bool seeded = false;
     if (!seeded) {
@@ -68,11 +163,26 @@ void screen_main_init() {
 
 AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = FONT_H;
+    bool hasEntries = g_journal.totalEntries() > 0;
+    int actionCount = mainMenuVisibleCount(hasEntries);
+    if (g_mainMenu.selection >= actionCount) g_mainMenu.selection = actionCount - 1;
+    if (g_mainMenu.selection < 0) g_mainMenu.selection = 0;
+
+    if (key == KEY_LEFT || key == KEY_UP || key == 'h' || key == 'k') {
+        g_mainMenu.selection = (g_mainMenu.selection + actionCount - 1) % actionCount;
+        key = 0;
+    } else if (key == KEY_RIGHT || key == KEY_DOWN || key == 'l' || key == 'j') {
+        g_mainMenu.selection = (g_mainMenu.selection + 1) % actionCount;
+        key = 0;
+    } else {
+        char lowerKey = (key >= 'A' && key <= 'Z') ? (char)(key + ('a' - 'A')) : (char)key;
+        int idx = mainMenuVisibleIndexForKey(lowerKey, hasEntries);
+        if (idx >= 0) g_mainMenu.selection = idx;
+    }
 
     time_t now_t; time(&now_t); struct tm *tm = localtime(&now_t);
     char dateStr[32]; strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm);
-    char title[64]; snprintf(title, sizeof(title), "个人日记 %s", dateStr);
-    ui_draw_text_centered(y, title, false, true); y += FONT_H;
+    y += FONT_H;
     int daysSinceMon = (tm->tm_wday == 0) ? 6 : tm->tm_wday - 1;
     time_t monday = now_t - daysSinceMon * 86400;
     const char *dnames[7] = {"一","二","三","四","五","六","日"};
@@ -97,32 +207,44 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     char buf[48]; snprintf(buf, sizeof(buf), "连续:%d天 总计:%d篇", g_journal.getStreak(), g_journal.totalEntries());
     ui_draw_text_centered(y, buf); y += FONT_H;
     int tc = g_journal.countToday();
+    int todayBaseline = y;
     if (tc > 0) { snprintf(buf, sizeof(buf), "✓ 今日已写%d篇", tc); ui_draw_text_centered(y, buf, false, true); }
     else ui_draw_text_centered(y, "今日尚未写日记");
+
+    int dividerY = todayBaseline + g_font.descent() + 14;
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 24, dividerY, SCREEN_W - 48);
+
+    int slotW = SCREEN_W / actionCount;
+    int iconTop = dividerY + 14;
+    for (int i = 0; i < actionCount; i++) {
+        const MainMenuAction &action = kMainActions[mainMenuActionIndex(i, hasEntries)];
+        int cx = i * slotW + slotW / 2;
+        drawMainMenuIcon(cx, iconTop, action.icon, i == g_mainMenu.selection);
+    }
+    y = iconTop + 48 + FONT_H;
+
+    const MainMenuAction &selected = kMainActions[mainMenuActionIndex(g_mainMenu.selection, hasEntries)];
+    char selectedText[48];
+    snprintf(selectedText, sizeof(selectedText), "[%c] %s", selected.key, selected.name);
+    ui_draw_text_centered(y, selectedText, false, true);
     y += FONT_H;
-    ui_draw_text_centered(y, "[p] 提示写作"); y += FONT_H;
-    ui_draw_text_centered(y, "[f] 自由写作"); y += FONT_H;
-    if (g_journal.totalEntries() > 0) { ui_draw_text_centered(y, "[v] 查看过往日记"); y += FONT_H; }
-    ui_draw_text_centered(y, "[w] 同步WebDAV"); y += FONT_H;
-    ui_draw_text_centered(y, "[t] GTD任务管理"); y += FONT_H;
-    ui_draw_text_centered(y, "[o] 大纲写作"); y += FONT_H;
-    ui_draw_text_centered(y, "[s] 设置"); y += FONT_H;
 
     std::string batteryGroup = battery_status_text();
+    g_font.drawText(4, STATUS_Y + g_font.ascent(), dateStr, false);
     if (!batteryGroup.empty()) {
         int pw = g_font.textWidth(batteryGroup.c_str());
         g_font.drawText(SCREEN_W - pw - 4, STATUS_Y + g_font.ascent(), batteryGroup.c_str(), false);
     }
     ui_commit();
 
-    if (key == 'p'||key=='P') { ctx.promptMode=true; ctx.promptText=BUILTIN_PROMPTS[rand()%BUILTIN_PROMPT_COUNT]; ctx.prevState=APP_MAIN; ctx.nextState=APP_EDITOR; }
-    else if (key == 'f'||key=='F') { ctx.promptMode=false; ctx.promptText=""; ctx.prevState=APP_MAIN; ctx.nextState=APP_EDITOR; }
-    else if ((key=='v'||key=='V') && g_journal.totalEntries()>0) ctx.nextState=APP_BROWSER;
-    else if (key=='w'||key=='W') ctx.nextState=APP_SYNC_WEBDAV;
-    else if (key=='s'||key=='S') ctx.nextState=APP_SETTINGS;
-    else if (key=='t'||key=='T') ctx.nextState=APP_GTD;
-    else if (key=='o'||key=='O') ctx.nextState=APP_OUTLINE;
-    else if (key=='q'||key=='Q') ctx.nextState=APP_QUIT;
+    char lowerKey = (key >= 'A' && key <= 'Z') ? (char)(key + ('a' - 'A')) : (char)key;
+    int directIdx = mainMenuVisibleIndexForKey(lowerKey, hasEntries);
+    if (directIdx >= 0) {
+        mainMenuActivate(kMainActions[mainMenuActionIndex(directIdx, hasEntries)], ctx);
+    } else if (key == 0x0A || key == 0x0D) {
+        mainMenuActivate(selected, ctx);
+    } else if (key=='q'||key=='Q') ctx.nextState=APP_QUIT;
     return ctx.nextState;
 }
 
