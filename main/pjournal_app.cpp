@@ -163,6 +163,7 @@ void screen_main_init() {
 
 AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = FONT_H;
+    const int rowH = LINE_SPACING;
     bool hasEntries = g_journal.totalEntries() > 0;
     int actionCount = mainMenuVisibleCount(hasEntries);
     if (g_mainMenu.selection >= actionCount) g_mainMenu.selection = actionCount - 1;
@@ -182,7 +183,7 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
 
     time_t now_t; time(&now_t); struct tm *tm = localtime(&now_t);
     char dateStr[32]; strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm);
-    y += FONT_H;
+    y += rowH;
     int daysSinceMon = (tm->tm_wday == 0) ? 6 : tm->tm_wday - 1;
     time_t monday = now_t - daysSinceMon * 86400;
     const char *dnames[7] = {"一","二","三","四","五","六","日"};
@@ -200,12 +201,12 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
         g_font.drawText(cx, y, dayStr, false);
         const char *mark = has ? "✓" : (d <= now_t ? "·" : " ");
         int mx = colStartX + i * colWidth + (colWidth - g_font.textWidth(mark)) / 2;
-        g_font.drawText(mx, y + FONT_H, mark, false);
+        g_font.drawText(mx, y + rowH, mark, false);
     }
-    y += FONT_H * 2;
+    y += rowH * 2;
 
     char buf[48]; snprintf(buf, sizeof(buf), "连续:%d天 总计:%d篇", g_journal.getStreak(), g_journal.totalEntries());
-    ui_draw_text_centered(y, buf); y += FONT_H;
+    ui_draw_text_centered(y, buf); y += rowH;
     int tc = g_journal.countToday();
     int todayBaseline = y;
     if (tc > 0) { snprintf(buf, sizeof(buf), "✓ 今日已写%d篇", tc); ui_draw_text_centered(y, buf, false, true); }
@@ -222,13 +223,13 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
         int cx = i * slotW + slotW / 2;
         drawMainMenuIcon(cx, iconTop, action.icon, i == g_mainMenu.selection);
     }
-    y = iconTop + 48 + FONT_H;
+    y = iconTop + 48 + rowH;
 
     const MainMenuAction &selected = kMainActions[mainMenuActionIndex(g_mainMenu.selection, hasEntries)];
     char selectedText[48];
     snprintf(selectedText, sizeof(selectedText), "[%c] %s", selected.key, selected.name);
     ui_draw_text_centered(y, selectedText, false, true);
-    y += FONT_H;
+    y += rowH;
 
     std::string batteryGroup = battery_status_text();
     g_font.drawText(4, STATUS_Y + g_font.ascent(), dateStr, false);
