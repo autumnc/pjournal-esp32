@@ -11,6 +11,7 @@
 #include <vector>
 #include <ctime>
 #include <algorithm>
+#include <cstdint>
 
 static const char *TAG = "FileMgr";
 static httpd_handle_t s_server = nullptr;
@@ -104,6 +105,8 @@ struct ZipEntry {
 
 static uint32_t crc32Table[256];
 static bool crc32TableInit = false;
+static const size_t MAX_ZIP_FILES = 512;
+static const uint64_t MAX_ZIP_TOTAL_SIZE = 16ULL * 1024 * 1024;
 
 static void initCRC32Table() {
     if (crc32TableInit) return;
@@ -130,21 +133,26 @@ static void putU32(uint8_t *buf, uint32_t v) { buf[0]=v; buf[1]=v>>8; buf[2]=v>>
 
 // Recursively collect files under dirPath, storing relative paths from basePath
 static void collectFiles(const std::string &dirPath, const std::string &basePath,
-                         std::vector<ZipEntry> &entries) {
+                         std::vector<ZipEntry> &entries, uint64_t &totalSize) {
     DIR *dir = opendir(dirPath.c_str());
     if (!dir) return;
     struct dirent *ent;
     while ((ent = readdir(dir)) != nullptr) {
+        if (entries.size() >= MAX_ZIP_FILES || totalSize >= MAX_ZIP_TOTAL_SIZE) break;
         if (ent->d_name[0] == '.') continue;
         std::string full = dirPath + "/" + ent->d_name;
         std::string rel = basePath.empty() ? ent->d_name : basePath + "/" + ent->d_name;
         struct stat st;
         if (stat(full.c_str(), &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
-            collectFiles(full, rel, entries);
+            collectFiles(full, rel, entries, totalSize);
         } else {
             if (rel.length() > 0xFFFF) {
                 ESP_LOGW(TAG, "Skipping path too long for ZIP (%d bytes): %s", (int)rel.length(), rel.c_str());
+                continue;
+            }
+            if (totalSize + (uint64_t)st.st_size > MAX_ZIP_TOTAL_SIZE) {
+                ESP_LOGW(TAG, "Skipping ZIP file beyond size cap: %s", rel.c_str());
                 continue;
             }
             ZipEntry e;
@@ -153,6 +161,7 @@ static void collectFiles(const std::string &dirPath, const std::string &basePath
             e.size = (uint32_t)st.st_size;
             e.offset = 0;
             entries.push_back(e);
+            totalSize += (uint64_t)st.st_size;
         }
     }
     closedir(dir);
@@ -313,16 +322,14 @@ static esp_err_t __attribute__((unused)) handler_download(httpd_req_t *req) {
         return ESP_OK;
     }
 
-    auto mtx = JournalStorage::sdMutex();
-    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
-
     struct stat st;
     if (stat(path.c_str(), &st) != 0 || S_ISDIR(st.st_mode)) {
-        if (mtx) xSemaphoreGiveRecursive(mtx);
         httpd_resp_send_404(req);
         return ESP_OK;
     }
 
+    auto mtx = JournalStorage::sdMutex();
+    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
     FILE *f = fopen(path.c_str(), "rb");
     if (!f) {
         if (mtx) xSemaphoreGiveRecursive(mtx);
@@ -342,12 +349,15 @@ static esp_err_t __attribute__((unused)) handler_download(httpd_req_t *req) {
 
     char buf[4096];
     size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+    while (true) {
+        n = fread(buf, 1, sizeof(buf), f);
+        if (mtx) xSemaphoreGiveRecursive(mtx);
+        if (n == 0) break;
         if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) break;
+        if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
     }
     httpd_resp_send_chunk(req, nullptr, 0);
     fclose(f);
-    if (mtx) xSemaphoreGiveRecursive(mtx);
     return ESP_OK;
 }
 
@@ -359,12 +369,8 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
         return ESP_OK;
     }
 
-    auto mtx = JournalStorage::sdMutex();
-    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
-
     struct stat st;
     if (stat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-        if (mtx) xSemaphoreGiveRecursive(mtx);
         httpd_resp_send_404(req);
         return ESP_OK;
     }
@@ -374,10 +380,13 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
     std::string dirName = path;
     auto slash = dirName.rfind('/');
     if (slash != std::string::npos) dirName = dirName.substr(slash + 1);
-    collectFiles(path, dirName, entries);
+    uint64_t totalSize = 0;
+    auto mtx = JournalStorage::sdMutex();
+    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+    collectFiles(path, dirName, entries, totalSize);
+    if (mtx) xSemaphoreGiveRecursive(mtx);
 
     if (entries.empty()) {
-        if (mtx) xSemaphoreGiveRecursive(mtx);
         sendJsonError(req, "empty directory");
         return ESP_OK;
     }
@@ -414,6 +423,7 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
 
         // Read file, compute CRC32 incrementally
         std::string fullPath = path + "/" + e.relPath.substr(dirName.length() + 1);
+        if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
         FILE *f = fopen(fullPath.c_str(), "rb");
         uint32_t crc = 0xFFFFFFFF;
         uint32_t fsize = 0;
@@ -425,6 +435,7 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
             }
             rewind(f);
         }
+        if (mtx) xSemaphoreGiveRecursive(mtx);
         crc = crc32Finish(crc);
 
         // Fill in CRC and sizes
@@ -437,7 +448,6 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
         // Send local file header
         if (httpd_resp_send_chunk(req, (const char*)lfh.data(), 30 + nameLen) != ESP_OK) {
             if (f) fclose(f);
-            if (mtx) xSemaphoreGiveRecursive(mtx);
             return ESP_OK;
         }
         offset += 30 + nameLen;
@@ -445,10 +455,13 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
         // Send file data
         if (f) {
             size_t n;
-            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+            while (true) {
+                if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+                n = fread(buf, 1, sizeof(buf), f);
+                if (mtx) xSemaphoreGiveRecursive(mtx);
+                if (n == 0) break;
                 if (httpd_resp_send_chunk(req, (const char*)buf, n) != ESP_OK) {
                     fclose(f);
-                    if (mtx) xSemaphoreGiveRecursive(mtx);
                     return ESP_OK;
                 }
             }
@@ -485,7 +498,6 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
         memcpy(cdh.data() + 46, e.relPath.c_str(), nameLen);
 
         if (httpd_resp_send_chunk(req, (const char*)cdh.data(), 46 + nameLen) != ESP_OK) {
-            if (mtx) xSemaphoreGiveRecursive(mtx);
             return ESP_OK;
         }
         offset += 46 + nameLen;
@@ -507,7 +519,6 @@ static esp_err_t __attribute__((unused)) handler_download_dir(httpd_req_t *req) 
     httpd_resp_send_chunk(req, (const char*)eocd, 22);
     httpd_resp_send_chunk(req, nullptr, 0);
 
-    if (mtx) xSemaphoreGiveRecursive(mtx);
     ESP_LOGI(TAG, "ZIP download: %s (%d files)", path.c_str(), (int)entries.size());
     return ESP_OK;
 }
@@ -528,6 +539,7 @@ static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
     }
 
     std::string fullpath = dir + "/" + name;
+    std::string tmpPath = dir + "/." + name + ".upload";
 
     // Cap uploads so an oversized body can't exhaust heap or fill the card.
     const size_t MAX_UPLOAD = 8 * 1024 * 1024;
@@ -560,12 +572,13 @@ static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
     auto mtx = JournalStorage::sdMutex();
     if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
 
-    FILE *f = fopen(fullpath.c_str(), "wb");
+    FILE *f = fopen(tmpPath.c_str(), "wb");
     if (!f) {
         if (mtx) xSemaphoreGiveRecursive(mtx);
         sendJsonError(req, "cannot create file");
         return ESP_OK;
     }
+    if (mtx) xSemaphoreGiveRecursive(mtx);
 
     // Stream the multipart body to disk with a sliding window so only a few KB
     // are buffered instead of the whole upload. The file part's data ends at
@@ -605,29 +618,50 @@ static esp_err_t __attribute__((unused)) handler_upload(httpd_req_t *req) {
             auto it = std::search(window.begin(), window.end(), marker.begin(), marker.end());
             if (it != window.end()) {
                 size_t n = (size_t)(it - window.begin());
-                if (n > 0) { fwrite(window.data(), 1, n, f); written += n; }
+                if (n > 0) {
+                    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+                    if (fwrite(window.data(), 1, n, f) != n) ok = false;
+                    if (mtx) xSemaphoreGiveRecursive(mtx);
+                    written += n;
+                }
                 window.clear();
                 done = true;
                 break;
             }
             if (window.size() <= keep) break;   // need more data before deciding
             size_t writeNow = window.size() - keep;
-            fwrite(window.data(), 1, writeNow, f);
+            if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+            if (fwrite(window.data(), 1, writeNow, f) != writeNow) ok = false;
+            if (mtx) xSemaphoreGiveRecursive(mtx);
             written += writeNow;
             window.erase(0, writeNow);
         }
     }
     // Body ended without the closing boundary — flush whatever is buffered.
     if (ok && !inHeader && !done && !window.empty()) {
-        fwrite(window.data(), 1, window.size(), f);
+        if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+        if (fwrite(window.data(), 1, window.size(), f) != window.size()) ok = false;
+        if (mtx) xSemaphoreGiveRecursive(mtx);
         written += window.size();
         window.clear();
     }
+    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+    fflush(f);
+    fsync(fileno(f));
     fclose(f);
     if (mtx) xSemaphoreGiveRecursive(mtx);
 
     if (!ok) {
-        remove(fullpath.c_str());   // discard the partial file
+        remove(tmpPath.c_str());   // discard the partial file
+        sendJsonError(req, "upload failed");
+        return ESP_OK;
+    }
+    if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+    remove(fullpath.c_str());
+    bool renamed = rename(tmpPath.c_str(), fullpath.c_str()) == 0;
+    if (mtx) xSemaphoreGiveRecursive(mtx);
+    if (!renamed) {
+        remove(tmpPath.c_str());
         sendJsonError(req, "upload failed");
         return ESP_OK;
     }

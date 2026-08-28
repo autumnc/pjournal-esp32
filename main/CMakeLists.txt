@@ -2,6 +2,7 @@ idf_component_register(SRCS
     "main.cpp"
     "pjournal_app.cpp"
     "ui_helpers.cpp"
+    "safe_file.cpp"
     "screen_editor.cpp"
     "screen_settings.cpp"
     "quick_edit.cpp"
@@ -59,4 +60,4 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.0.0")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.1.0")

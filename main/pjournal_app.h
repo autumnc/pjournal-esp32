@@ -9,6 +9,7 @@ enum AppState {
     APP_EDITOR,
     APP_BROWSER,
     APP_VIEWER,
+    APP_HISTORY,
     APP_SETTINGS,
     APP_PROMPT_SEL,
     APP_SYNC_WEBDAV,
@@ -58,6 +59,7 @@ struct ScreenContext {
 #define KEY_PAGE_DOWN  0xA1
 #define KEY_SEARCH     0xA2
 #define KEY_HELP       0xA3
+#define KEY_REDO       0xA4
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 
@@ -70,6 +72,9 @@ AppState screen_browser_handle(int key, ScreenContext &ctx);
 
 void screen_viewer_init(const std::string &filename);
 AppState screen_viewer_handle(int key, ScreenContext &ctx);
+
+void screen_history_init(const std::string &filename, AppState returnTo);
+AppState screen_history_handle(int key, ScreenContext &ctx);
 
 // GTD / Outline screens
 void screen_gtd_init();

@@ -1,4 +1,5 @@
 #include "settings_manager.h"
+#include "safe_file.h"
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -23,6 +24,7 @@ std::string SettingsManager::get(const std::string &key) {
     auto it = s_cache.find(key);
     if (it != s_cache.end()) return it->second;
     std::string path = std::string(BASE_DIR) + "/" + key;
+    repairSafeWriteFile(path);
     FILE *f = fopen(path.c_str(), "r");
     if (!f) return "";
     std::string val;
@@ -40,13 +42,10 @@ std::string SettingsManager::get(const std::string &key) {
 void SettingsManager::set(const std::string &key, const std::string &val) {
     mkdir(BASE_DIR, 0777);
     std::string path = std::string(BASE_DIR) + "/" + key;
-    FILE *f = fopen(path.c_str(), "w");
-    if (!f) {
+    if (!safeWriteFile(path, val)) {
         ESP_LOGE(TAG, "Failed to write %s", path.c_str());
         return;
     }
-    fwrite(val.data(), 1, val.size(), f);
-    fclose(f);
     s_cache[key] = val;
 }
 
@@ -119,6 +118,7 @@ bool SettingsManager::autoSave() { return get("auto_save") == "1"; }
 bool SettingsManager::autoSleep() { return get("auto_sleep") != "0"; }  // default on
 bool SettingsManager::sleepScreen() { return get("sleep_screen") == "1"; }  // default off(白屏)
 bool SettingsManager::markdownRender() { return get("md_render") != "0"; }  // default on
+bool SettingsManager::versionHistory() { return get("version_history") == "1"; }  // default off
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");

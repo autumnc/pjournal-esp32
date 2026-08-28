@@ -13,4 +13,4 @@ void quickEditNext();                 // 循环 +1 (9 -> 0)
 void quickEditPrev();                 // 循环 -1 (0 -> 9)
 std::string quickEditFilePath(int idx);
 std::string quickEditLoad(int idx);
-bool quickEditSave(int idx, const std::string &text);
+bool quickEditSave(int idx, const std::string &text, bool createHistory = true);

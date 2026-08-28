@@ -30,6 +30,7 @@ public:
     bool autoSleep();
     bool sleepScreen();
     bool markdownRender();
+    bool versionHistory();
     int fontSize();
     std::string appMode();  // "journal"(个人日记) 或 "quick"(快捷编辑)
 

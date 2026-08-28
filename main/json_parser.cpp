@@ -1,9 +1,12 @@
 #include "json_parser.h"
+#include "safe_file.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
 #include <unistd.h>
+
+static const long MAX_JSON_FILE_SIZE = 256 * 1024;
 
 // ── Value accessors ──────────────────────────────────────────────────────────
 
@@ -314,6 +317,10 @@ JsonValue JsonValue::loadFromFile(const std::string &path) {
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (sz <= 0) { fclose(f); return JsonValue(nullptr); }
+    if (sz > MAX_JSON_FILE_SIZE) {
+        fclose(f);
+        return JsonValue(nullptr);
+    }
     std::string buf(static_cast<size_t>(sz), '\0');
     if (fread(&buf[0], 1, static_cast<size_t>(sz), f) != static_cast<size_t>(sz)) {
         fclose(f);
@@ -325,11 +332,5 @@ JsonValue JsonValue::loadFromFile(const std::string &path) {
 
 bool JsonValue::saveToFile(const std::string &path, const JsonValue &val) {
     std::string json = val.serialize();
-    FILE *f = fopen(path.c_str(), "wb");
-    if (!f) return false;
-    bool ok = fwrite(json.data(), 1, json.size(), f) == json.size();
-    fflush(f);
-    fsync(fileno(f));
-    fclose(f);
-    return ok;
+    return safeWriteFile(path, json);
 }

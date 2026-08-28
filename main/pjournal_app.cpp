@@ -6,6 +6,7 @@
 #include "settings_manager.h"
 #include "markdown_render.h"
 #include "main_menu_icons.h"
+#include "screen_editor.h"
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
@@ -38,6 +39,23 @@ static struct { std::vector<std::string> lines; int scroll = 0; std::string file
     std::vector<VRow> cachedVrows; bool vrowsDirty = true;
     std::vector<MdLineInfo> cachedMdInfo; bool mdInfoDirty = true; bool mdCachedOn = false;
 } g_viewer;
+static struct {
+    std::string filename;
+    AppState returnTo = APP_BROWSER;
+    std::vector<JournalHistoryVersion> versions;
+    int selection = 0;
+    int scroll = 0;
+    bool preview = false;
+    bool confirmRestore = false;
+    bool confirmDelete = false;
+    std::vector<std::string> lines;
+    int previewScroll = 0;
+    std::vector<VRow> cachedVrows;
+    bool vrowsDirty = true;
+    std::vector<MdLineInfo> cachedMdInfo;
+    bool mdInfoDirty = true;
+    bool mdCachedOn = false;
+} g_history;
 
 static const std::vector<VRow>& getViewerVrows() {
     if (g_viewer.vrowsDirty) {
@@ -60,6 +78,44 @@ static const std::vector<MdLineInfo>& getViewerMdInfo(bool mdOn) {
 }
 
 static void refreshBrowserCache() { g_browser.entries = g_journal.listEntries(); }
+
+static const std::vector<VRow>& getHistoryVrows() {
+    if (g_history.vrowsDirty) {
+        g_history.cachedVrows = buildVrows(g_history.lines);
+        g_history.vrowsDirty = false;
+    }
+    return g_history.cachedVrows;
+}
+
+static const std::vector<MdLineInfo>& getHistoryMdInfo(bool mdOn) {
+    if (g_history.mdInfoDirty || g_history.mdCachedOn != mdOn) {
+        if (mdOn) g_history.cachedMdInfo = mdClassifyLines(g_history.lines);
+        else g_history.cachedMdInfo.assign(g_history.lines.size(), MdLineInfo{});
+        g_history.mdInfoDirty = false;
+        g_history.mdCachedOn = mdOn;
+    }
+    return g_history.cachedMdInfo;
+}
+
+static void loadHistoryPreviewText(const std::string &content) {
+    g_history.lines.clear();
+    size_t pos = 0;
+    while (pos < content.length()) {
+        size_t nl = content.find('\n', pos);
+        g_history.lines.push_back((nl == std::string::npos) ? content.substr(pos) : content.substr(pos, nl - pos));
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+    }
+    if (g_history.lines.empty()) g_history.lines.push_back("");
+    g_history.previewScroll = 0;
+    g_history.vrowsDirty = true;
+    g_history.mdInfoDirty = true;
+}
+
+static std::string historyTimeLabel(const std::string &fn) {
+    if (fn.size() >= 17) return fn.substr(0, 10) + " " + fn.substr(11, 2) + ":" + fn.substr(13, 2);
+    return fn;
+}
 
 // ── Main Screen ────────────────────────────────────────────────────────
 static struct {
@@ -264,6 +320,12 @@ AppState screen_browser_handle(int key, ScreenContext &ctx) {
     if (key == 'j' || key == KEY_DOWN) { g_browser.selection++; if (g_browser.selection>=(int)entries.size()) g_browser.selection=(int)entries.size()-1; }
     if (key == 'k' || key == KEY_UP) { g_browser.selection--; if (g_browser.selection<0) g_browser.selection=0; }
     if (key == 0x0A || key == 0x0D) { ctx.selectedEntry = entries[g_browser.selection].filename; ctx.nextState = APP_VIEWER; return APP_VIEWER; }
+    if (key == 'h' || key == 'H') {
+        ctx.selectedEntry = entries[g_browser.selection].filename;
+        ctx.prevState = APP_BROWSER;
+        ctx.nextState = APP_HISTORY;
+        return APP_HISTORY;
+    }
     if (key == 'd' || key == 'D') {
         g_journal.deleteEntry(entries[g_browser.selection].filename);
         refreshBrowserCache();
@@ -354,6 +416,12 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
             return APP_EDITOR;
         }
     }
+    if (key == 'h' || key == 'H') {
+        ctx.selectedEntry = g_viewer.filename;
+        ctx.prevState = APP_VIEWER;
+        ctx.nextState = APP_HISTORY;
+        return APP_HISTORY;
+    }
     if (key == 'f' || key == 'F') {
         std::string content = g_journal.readEntry(g_viewer.filename);
         if (!content.empty()) {
@@ -409,4 +477,215 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
 
     ui_commit();
     return APP_VIEWER;
+}
+
+// ── History Screen ─────────────────────────────────────────────────────
+void screen_history_init(const std::string &filename, AppState returnTo) {
+    g_history.filename = filename;
+    g_history.returnTo = returnTo;
+    g_history.versions = g_journal.listHistoryVersions(filename);
+    g_history.selection = 0;
+    g_history.scroll = 0;
+    g_history.preview = false;
+    g_history.confirmRestore = false;
+    g_history.confirmDelete = false;
+    g_history.lines.clear();
+    g_history.previewScroll = 0;
+    g_history.vrowsDirty = true;
+    g_history.mdInfoDirty = true;
+}
+
+static AppState historyReturn(ScreenContext &ctx) {
+    ctx.selectedEntry = g_history.filename;
+    ctx.nextState = g_history.returnTo;
+    return g_history.returnTo;
+}
+
+static void drawHistoryConfirm(const char *title, const char *action) {
+    int bw = 300, bh = 120;
+    int bx = (SCREEN_W - bw) / 2, by = (SCREEN_H - bh) / 2 - 20;
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, bx, by, bw, bh);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, bx, by, bw);
+    u8g2_DrawHLine(g_u8g2, bx, by + bh - 1, bw);
+    u8g2_DrawBox(g_u8g2, bx, by, 1, bh);
+    u8g2_DrawBox(g_u8g2, bx + bw - 1, by, 1, bh);
+    ui_draw_text_centered(by + 28, title);
+    ui_draw_text_centered(by + 58, action);
+    ui_draw_text_centered(by + 88, "ESC=取消");
+    u8g2_SetDrawColor(g_u8g2, 1);
+}
+
+static void drawHistoryList() {
+    ui_clear();
+    const int rowH = LINE_SPACING;
+    ui_draw_text(4, FONT_H, "历史版本", false, true);
+    std::string count = std::to_string((int)g_history.versions.size());
+    ui_draw_text(SCREEN_W - 4 - g_font.textWidth(count.c_str()), FONT_H, count.c_str());
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 4, FONT_H + g_font.descent(), SCREEN_W - 8);
+
+    int y = FONT_H + rowH;
+    int visible = (STATUS_Y - y + rowH - 1) / rowH;
+    if (visible < 1) visible = 1;
+    int total = (int)g_history.versions.size();
+    if (g_history.selection >= total) g_history.selection = total - 1;
+    if (g_history.selection < 0) g_history.selection = 0;
+    if (g_history.selection < g_history.scroll) g_history.scroll = g_history.selection;
+    if (g_history.selection >= g_history.scroll + visible)
+        g_history.scroll = g_history.selection - visible + 1;
+
+    if (total == 0) {
+        ui_draw_text_centered(SCREEN_H / 2, "暂无历史版本");
+    } else {
+        for (int i = 0; i < visible && (g_history.scroll + i) < total; i++) {
+            int idx = g_history.scroll + i;
+            const auto &v = g_history.versions[idx];
+            char buf[80];
+            snprintf(buf, sizeof(buf), "%s %uB", historyTimeLabel(v.filename).c_str(), (unsigned)v.size);
+            ui_draw_text(8, y + i * rowH, buf, idx == g_history.selection);
+        }
+    }
+
+    ui_draw_status("Enter查看 r恢复 d删除 q返回", "");
+    ui_commit();
+}
+
+static void drawHistoryPreview() {
+    const auto& vrows = getHistoryVrows();
+    const int headerY = FONT_H;
+    const int sepY = headerY + g_font.descent();
+    const int contentY = sepY + 26;
+    const int contentMaxY = STATUS_Y;
+    int visible = (contentMaxY - contentY + LINE_SPACING - 1) / LINE_SPACING;
+    if (visible < 1) visible = 1;
+    int maxScroll = (int)vrows.size() - visible;
+    if (maxScroll < 0) maxScroll = 0;
+    if (g_history.previewScroll > maxScroll) g_history.previewScroll = maxScroll;
+
+    ui_clear();
+    std::string header = "历史";
+    if (!g_history.versions.empty()) header = historyTimeLabel(g_history.versions[g_history.selection].filename);
+    ui_draw_text(4, headerY, header.c_str(), true);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
+
+    bool mdOn = g_settings.markdownRender();
+    mdSetRenderEnabled(mdOn);
+    const auto& mdInfo = getHistoryMdInfo(mdOn);
+    for (int i = 0; i < visible && (g_history.previewScroll + i) < (int)vrows.size(); i++) {
+        auto &vr = vrows[g_history.previewScroll + i];
+        mdDrawVrow(4, contentY + i * LINE_SPACING, g_history.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx]);
+    }
+    ui_draw_status("r恢复 d删除 q返回", "");
+    ui_commit();
+}
+
+AppState screen_history_handle(int key, ScreenContext &ctx) {
+    if (g_history.confirmRestore) {
+        if (key == 0x0A || key == 0x0D || key == 'y' || key == 'Y') {
+            if (!g_history.versions.empty()) {
+                ui_clear(); ui_show_message_centered("正在恢复..."); ui_commit();
+                std::string hist = g_history.versions[g_history.selection].filename;
+                bool ok = g_journal.restoreHistoryVersion(g_history.filename, hist);
+                if (ok) {
+                    std::string content = g_journal.readEntry(g_history.filename);
+                    if (g_history.returnTo == APP_EDITOR) {
+                        ctx.editFilename = g_history.filename;
+                        ctx.editContent = extractBody(content);
+                        ctx.promptMode = false;
+                        ctx.promptText = "";
+                        app_editor_request_reinit();
+                    }
+                    ctx.statusMessage = "已恢复历史版本";
+                    g_history.confirmRestore = false;
+                    return historyReturn(ctx);
+                }
+                ctx.statusMessage = "恢复失败";
+            }
+            g_history.confirmRestore = false;
+            return APP_HISTORY;
+        }
+        if (key == 0x1B || key == 'q' || key == 'Q' || key == 'n' || key == 'N') {
+            g_history.confirmRestore = false;
+            if (g_history.preview) drawHistoryPreview(); else drawHistoryList();
+            return APP_HISTORY;
+        }
+        if (g_history.preview) drawHistoryPreview(); else drawHistoryList();
+        drawHistoryConfirm("恢复此历史版本？", "Enter=恢复");
+        ui_commit();
+        return APP_HISTORY;
+    }
+
+    if (g_history.confirmDelete) {
+        if (key == 0x0A || key == 0x0D || key == 'y' || key == 'Y') {
+            if (!g_history.versions.empty()) {
+                std::string hist = g_history.versions[g_history.selection].filename;
+                bool ok = g_journal.deleteHistoryVersion(g_history.filename, hist);
+                g_history.versions = g_journal.listHistoryVersions(g_history.filename);
+                if (g_history.selection >= (int)g_history.versions.size())
+                    g_history.selection = (int)g_history.versions.size() - 1;
+                if (g_history.selection < 0) g_history.selection = 0;
+                g_history.preview = false;
+                ctx.statusMessage = ok ? "已删除历史版本" : "删除失败";
+            }
+            g_history.confirmDelete = false;
+            drawHistoryList();
+            return APP_HISTORY;
+        }
+        if (key == 0x1B || key == 'q' || key == 'Q' || key == 'n' || key == 'N') {
+            g_history.confirmDelete = false;
+            if (g_history.preview) drawHistoryPreview(); else drawHistoryList();
+            return APP_HISTORY;
+        }
+        if (g_history.preview) drawHistoryPreview(); else drawHistoryList();
+        drawHistoryConfirm("删除此历史版本？", "Enter=删除");
+        ui_commit();
+        return APP_HISTORY;
+    }
+
+    if (g_history.preview) {
+        const auto& vrows = getHistoryVrows();
+        int visible = (STATUS_Y - (FONT_H + g_font.descent() + 26) + LINE_SPACING - 1) / LINE_SPACING;
+        if (visible < 1) visible = 1;
+        int maxScroll = (int)vrows.size() - visible;
+        if (maxScroll < 0) maxScroll = 0;
+        if (key == 'q' || key == 'Q' || key == 0x1B) {
+            g_history.preview = false;
+            drawHistoryList();
+            return APP_HISTORY;
+        }
+        if (key == 'j' || key == KEY_DOWN) { if (g_history.previewScroll < maxScroll) g_history.previewScroll++; }
+        if (key == 'k' || key == KEY_UP) { if (g_history.previewScroll > 0) g_history.previewScroll--; }
+        if (key == KEY_PAGE_DOWN) { g_history.previewScroll += visible; if (g_history.previewScroll > maxScroll) g_history.previewScroll = maxScroll; }
+        if (key == KEY_PAGE_UP) { g_history.previewScroll -= visible; if (g_history.previewScroll < 0) g_history.previewScroll = 0; }
+        if (key == 'r' || key == 'R') g_history.confirmRestore = true;
+        if (key == 'd' || key == 'D') g_history.confirmDelete = true;
+        drawHistoryPreview();
+        if (g_history.confirmRestore) drawHistoryConfirm("恢复此历史版本？", "Enter=恢复");
+        if (g_history.confirmDelete) drawHistoryConfirm("删除此历史版本？", "Enter=删除");
+        ui_commit();
+        return APP_HISTORY;
+    }
+
+    int total = (int)g_history.versions.size();
+    if (key == 'q' || key == 'Q' || key == 0x1B) return historyReturn(ctx);
+    if (key == 'j' || key == KEY_DOWN) { if (g_history.selection < total - 1) g_history.selection++; }
+    if (key == 'k' || key == KEY_UP) { if (g_history.selection > 0) g_history.selection--; }
+    if ((key == 0x0A || key == 0x0D) && total > 0) {
+        ui_clear(); ui_show_message_centered("正在读取..."); ui_commit();
+        std::string content = g_journal.readHistoryVersion(g_history.filename, g_history.versions[g_history.selection].filename);
+        loadHistoryPreviewText(content);
+        g_history.preview = true;
+        drawHistoryPreview();
+        return APP_HISTORY;
+    }
+    if ((key == 'r' || key == 'R') && total > 0) g_history.confirmRestore = true;
+    if ((key == 'd' || key == 'D') && total > 0) g_history.confirmDelete = true;
+    drawHistoryList();
+    if (g_history.confirmRestore) drawHistoryConfirm("恢复此历史版本？", "Enter=恢复");
+    if (g_history.confirmDelete) drawHistoryConfirm("删除此历史版本？", "Enter=删除");
+    ui_commit();
+    return APP_HISTORY;
 }

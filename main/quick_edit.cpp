@@ -1,8 +1,13 @@
 #include "quick_edit.h"
 #include "settings_manager.h"
+#include "safe_file.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <ctime>
+#include <dirent.h>
+#include <vector>
 #include <esp_log.h>
 
 static const char *TAG = "QuickEdit";
@@ -48,7 +53,9 @@ std::string quickEditFilePath(int idx) {
 }
 
 std::string quickEditLoad(int idx) {
-    FILE *f = fopen(quickEditFilePath(idx).c_str(), "r");
+    std::string path = quickEditFilePath(idx);
+    repairSafeWriteFile(path);
+    FILE *f = fopen(path.c_str(), "r");
     if (!f) return "";
     std::string result;
     char buf[256];
@@ -61,13 +68,50 @@ std::string quickEditLoad(int idx) {
     return result;
 }
 
-bool quickEditSave(int idx, const std::string &text) {
-    FILE *f = fopen(quickEditFilePath(idx).c_str(), "w");
-    if (!f) {
-        ESP_LOGE(TAG, "Cannot write %s", quickEditFilePath(idx).c_str());
+static void cleanupQuickHistory(const std::string &dir, int keep) {
+    DIR *d = opendir(dir.c_str());
+    if (!d) return;
+    std::vector<std::string> files;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (!fn.empty() && fn[0] != '.') files.push_back(fn);
+    }
+    closedir(d);
+    if ((int)files.size() <= keep) return;
+    std::sort(files.begin(), files.end());
+    for (int i = 0; i < (int)files.size() - keep; i++) {
+        remove((dir + "/" + files[i]).c_str());
+    }
+}
+
+static void saveQuickHistoryVersion(int idx, const std::string &oldContent) {
+    std::string dir = "/sdcard/.quick_history/" + std::to_string(idx);
+    if (!ensureDirPath(dir)) return;
+    time_t now;
+    time(&now);
+    struct tm *tm = localtime(&now);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%d_%H%M%S", tm);
+    std::string path = dir + "/" + std::string(ts) + ".txt";
+    for (int i = 1; fileExists(path) && i < 100; i++) {
+        path = dir + "/" + std::string(ts) + "_" + std::to_string(i) + ".txt";
+    }
+    if (safeWriteFile(path, oldContent)) {
+        cleanupQuickHistory(dir, 10);
+    }
+}
+
+bool quickEditSave(int idx, const std::string &text, bool createHistory) {
+    std::string path = quickEditFilePath(idx);
+    if (createHistory && g_settings.versionHistory() && fileExists(path)) {
+        std::string old = readWholeFile(path);
+        if (old != text) saveQuickHistoryVersion(idx, old);
+    }
+    if (!safeWriteFile(path, text)) {
+        ESP_LOGE(TAG, "Cannot write %s", path.c_str());
         return false;
     }
-    fwrite(text.data(), 1, text.size(), f);
-    fclose(f);
     return true;
 }

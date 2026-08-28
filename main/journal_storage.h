@@ -16,6 +16,12 @@ struct JournalEntry {
     std::string full_text;  // full file content
 };
 
+struct JournalHistoryVersion {
+    std::string filename;   // history snapshot filename
+    time_t mtime = 0;
+    size_t size = 0;
+};
+
 class JournalStorage {
 public:
     bool begin();
@@ -25,7 +31,17 @@ public:
     bool saveEntry(const std::string &text);
 
     // Save entry with explicit filename (for sync downloads)
-    bool saveEntryRaw(const std::string &filename, const std::string &content);
+    bool saveEntryRaw(const std::string &filename, const std::string &content, bool createHistory = true);
+
+    // Write a recovery draft outside the normal journal index.
+    bool saveRecoveryDraft(const std::string &content, const std::string &meta);
+    bool loadRecoveryDraft(std::string &content, std::string &meta);
+    void clearRecoveryDraft();
+
+    std::vector<JournalHistoryVersion> listHistoryVersions(const std::string &filename);
+    std::string readHistoryVersion(const std::string &filename, const std::string &historyFilename);
+    bool restoreHistoryVersion(const std::string &filename, const std::string &historyFilename);
+    bool deleteHistoryVersion(const std::string &filename, const std::string &historyFilename);
 
     // List all entries, newest first
     std::vector<JournalEntry> listEntries();

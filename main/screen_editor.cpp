@@ -15,6 +15,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 extern u8g2_t *g_u8g2;
 
@@ -33,6 +34,20 @@ extern "C" {
 
 // ── Editor state ─────────────────────────────────────────────────────────
 
+struct EditorSnapshot {
+    std::string text;
+    int cx = 0;
+    int cy = 0;
+    int scroll = 0;
+};
+
+enum class UndoGroup {
+    None,
+    Typing,
+    Delete,
+    Structural,
+};
+
 static struct {
     std::vector<std::string> lines;
     int cx = 0, cy = 0;
@@ -49,9 +64,20 @@ static struct {
     bool mdInfoDirty = true;
     std::vector<MdLineInfo> cachedMdInfo;
     bool cachedMdOn = false;
+    std::vector<EditorSnapshot> undoStack;
+    std::vector<EditorSnapshot> redoStack;
+    size_t undoBytes = 0;
+    size_t redoBytes = 0;
+    UndoGroup lastUndoGroup = UndoGroup::None;
+    int64_t lastUndoTime = 0;
     int64_t autoSaveTime = 0;
     bool modifiedSinceSave = false;
     std::string savedFilename;
+    bool recoveryPrompt = false;
+    std::string recoveryContent;
+    std::string recoveryMeta;
+    uint32_t lastRecoveryHash = 0;
+    bool promptGenerating = false;
 
     // Selection
     bool hasSelection = false;
@@ -77,11 +103,47 @@ static struct {
     int helpScroll = 0;
 } g_editor;
 
+static volatile bool s_promptTaskDone = false;
+static DeepseekResult s_promptTaskResult = {false, ""};
+static std::string s_promptTaskContext;
+static SemaphoreHandle_t s_promptResultMutex = nullptr;
+
+static void ensurePromptResultMutex() {
+    if (!s_promptResultMutex) s_promptResultMutex = xSemaphoreCreateMutex();
+}
+
+static void lockPromptResult() {
+    ensurePromptResultMutex();
+    if (s_promptResultMutex) xSemaphoreTake(s_promptResultMutex, portMAX_DELAY);
+}
+
+static void unlockPromptResult() {
+    if (s_promptResultMutex) xSemaphoreGive(s_promptResultMutex);
+}
+
 // Mark every line-derived cache (vrows, word count, markdown info) stale.
 static void markDirty() {
     g_editor.vrowsDirty = true;
     g_editor.wordCountDirty = true;
     g_editor.mdInfoDirty = true;
+}
+
+static uint32_t fnv1a(const std::string &s) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : s) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h ? h : 1;
+}
+
+static std::string metaValue(const std::string &meta, const char *key) {
+    std::string prefix = std::string(key) + "=";
+    size_t pos = meta.find(prefix);
+    if (pos == std::string::npos) return "";
+    pos += prefix.size();
+    size_t end = meta.find('\n', pos);
+    return meta.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
 }
 
 // ── Selection helpers ────────────────────────────────────────────────────
@@ -250,6 +312,118 @@ static void loadLinesIntoEditor(const std::string &content) {
     g_editor.cy = (int)g_editor.lines.size() - 1;
 }
 
+static EditorSnapshot makeSnapshot() {
+    EditorSnapshot s;
+    s.text = currentEditorText();
+    s.cx = g_editor.cx;
+    s.cy = g_editor.cy;
+    s.scroll = g_editor.scroll;
+    return s;
+}
+
+static void restoreSnapshot(const EditorSnapshot &s) {
+    loadLinesIntoEditor(s.text);
+    g_editor.cy = s.cy;
+    if (g_editor.cy < 0) g_editor.cy = 0;
+    if (g_editor.cy >= (int)g_editor.lines.size()) g_editor.cy = (int)g_editor.lines.size() - 1;
+    g_editor.cx = s.cx;
+    if (g_editor.cx < 0) g_editor.cx = 0;
+    if (g_editor.cx > (int)g_editor.lines[g_editor.cy].length())
+        g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
+    g_editor.scroll = s.scroll;
+    g_editor.targetCx = -1;
+    g_editor.hasSelection = false;
+    markDirty();
+}
+
+static void trimUndoStack(std::vector<EditorSnapshot> &stack, size_t &bytes) {
+    const size_t maxBytes = 192 * 1024;
+    const size_t maxItems = 32;
+    while (stack.size() > maxItems || bytes > maxBytes) {
+        if (stack.empty()) break;
+        size_t sz = stack.front().text.size();
+        bytes = (bytes >= sz) ? (bytes - sz) : 0;
+        stack.erase(stack.begin());
+    }
+}
+
+static void clearRedoHistory() {
+    g_editor.redoStack.clear();
+    g_editor.redoBytes = 0;
+}
+
+static void recordUndoSnapshot(UndoGroup group = UndoGroup::Structural) {
+    int64_t now = esp_timer_get_time();
+    bool mergeable = group == UndoGroup::Typing || group == UndoGroup::Delete;
+    if (mergeable && g_editor.lastUndoGroup == group &&
+        now - g_editor.lastUndoTime < 1000000) {
+        g_editor.lastUndoTime = now;
+        clearRedoHistory();
+        return;
+    }
+    EditorSnapshot s = makeSnapshot();
+    if (!g_editor.undoStack.empty() && g_editor.undoStack.back().text == s.text) return;
+    if (s.text.size() > 96 * 1024) {
+        g_editor.undoStack.clear();
+        g_editor.undoBytes = 0;
+        clearRedoHistory();
+        g_editor.lastUndoGroup = UndoGroup::None;
+        return;
+    }
+    size_t sz = s.text.size();
+    g_editor.undoStack.push_back(std::move(s));
+    g_editor.undoBytes += sz;
+    trimUndoStack(g_editor.undoStack, g_editor.undoBytes);
+    clearRedoHistory();
+    g_editor.lastUndoGroup = group;
+    g_editor.lastUndoTime = now;
+}
+
+static bool undoEditor() {
+    if (g_editor.undoStack.empty()) return false;
+    EditorSnapshot cur = makeSnapshot();
+    size_t curSize = cur.text.size();
+    g_editor.redoStack.push_back(std::move(cur));
+    g_editor.redoBytes += curSize;
+    trimUndoStack(g_editor.redoStack, g_editor.redoBytes);
+    EditorSnapshot s = std::move(g_editor.undoStack.back());
+    size_t sz = s.text.size();
+    g_editor.undoBytes = (g_editor.undoBytes >= sz) ? (g_editor.undoBytes - sz) : 0;
+    g_editor.undoStack.pop_back();
+    restoreSnapshot(s);
+    g_editor.lastUndoGroup = UndoGroup::None;
+    g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+    g_editor.modifiedSinceSave = true;
+    return true;
+}
+
+static bool redoEditor() {
+    if (g_editor.redoStack.empty()) return false;
+    EditorSnapshot cur = makeSnapshot();
+    size_t curSize = cur.text.size();
+    g_editor.undoStack.push_back(std::move(cur));
+    g_editor.undoBytes += curSize;
+    trimUndoStack(g_editor.undoStack, g_editor.undoBytes);
+    EditorSnapshot s = std::move(g_editor.redoStack.back());
+    size_t sz = s.text.size();
+    g_editor.redoBytes = (g_editor.redoBytes >= sz) ? (g_editor.redoBytes - sz) : 0;
+    g_editor.redoStack.pop_back();
+    restoreSnapshot(s);
+    g_editor.lastUndoGroup = UndoGroup::None;
+    g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+    g_editor.modifiedSinceSave = true;
+    return true;
+}
+
+static void clearUndoHistory() {
+    g_editor.undoStack.clear();
+    g_editor.redoStack.clear();
+    g_editor.undoBytes = 0;
+    g_editor.redoBytes = 0;
+    g_editor.lastUndoGroup = UndoGroup::None;
+    g_editor.lastUndoTime = 0;
+}
+
 static void loadQuickEditFile() {
     loadLinesIntoEditor(quickEditLoad(quickEditIndex()));
     g_editor.scroll = 0;
@@ -257,6 +431,7 @@ static void loadQuickEditFile() {
     markDirty();
     g_editor.modifiedSinceSave = false;
     g_editor.autoSaveTime = 0;
+    clearUndoHistory();
 }
 
 // 是否为快捷编辑主会话(直接编辑 /sdcard/{n}.txt)。g_quickEdit 模式下若正
@@ -265,11 +440,29 @@ static bool inQuickFileSession() {
     return g_quickEdit && g_editor.savedFilename.empty();
 }
 
+static bool saveRecoveryDraftIfChanged() {
+    std::string text = currentEditorText();
+    std::string meta;
+    meta += std::string("mode=") + (inQuickFileSession() ? "quick" : "journal") + "\n";
+    meta += "filename=" + g_editor.savedFilename + "\n";
+    meta += "quick_index=" + std::to_string(quickEditIndex()) + "\n";
+    time_t now;
+    time(&now);
+    meta += "timestamp=" + std::to_string((long long)now) + "\n";
+    uint32_t hash = fnv1a(text + "\n" + metaValue(meta, "mode") + "\n" +
+                          metaValue(meta, "filename") + "\n" +
+                          metaValue(meta, "quick_index"));
+    if (hash == g_editor.lastRecoveryHash) return true;
+    if (!g_journal.saveRecoveryDraft(text, meta)) return false;
+    g_editor.lastRecoveryHash = hash;
+    return true;
+}
+
 static void quickEditSwitchTo(int idx) {
     if (idx < 0) idx = 0;
     if (idx > 9) idx = 9;
     if (idx == quickEditIndex()) return;
-    quickEditSave(quickEditIndex(), currentEditorText());
+    if (quickEditSave(quickEditIndex(), currentEditorText())) g_journal.clearRecoveryDraft();
     quickEditSetIndex(idx);
     loadQuickEditFile();
 }
@@ -378,6 +571,7 @@ static void searchPrevMatch() {
 
 // 用 replacement 替换文档 [start,end) 字节区间,光标移到替换文本之后。
 static void applyDocReplace(int start, int end, const std::string &repl) {
+    recordUndoSnapshot(UndoGroup::Structural);
     std::string doc = currentEditorText();
     std::string newDoc = doc.substr(0, start) + repl + doc.substr(end);
     loadLinesIntoEditor(newDoc);
@@ -424,6 +618,7 @@ static int searchReplaceAll() {
         searchRefindFrom(posToDocOffset(g_editor.cy, g_editor.cx));
         return 0;
     }
+    recordUndoSnapshot(UndoGroup::Structural);
     loadLinesIntoEditor(out);
     g_editor.hasSelection = false;
     g_editor.targetCx = -1;
@@ -748,10 +943,12 @@ static const char *HELP_LINES[] = {
     "  Ctrl+A全部替换",
     "Ctrl+A全选  Ctrl+C复制",
     "Ctrl+X剪切  Ctrl+V粘贴",
+    "Ctrl+Z撤销  Ctrl+R重做",
     "Ctrl+S保存  Ctrl+Q退出",
     "Ctrl+O润色选区",
     "Ctrl+I灵感面板",
     "Ctrl+F发送Flomo",
+    "Ctrl+Y历史版本",
     "Ctrl+N/P快捷编辑文件",
     "Ctrl+Space输入法开关",
     "Shift+Space全半角切换",
@@ -1031,12 +1228,51 @@ static void drawConfirmDialog() {
     u8g2_SetDrawColor(g_u8g2, 1);
 }
 
+static void drawRecoveryDialog() {
+    int bw = 310, bh = 120;
+    int bx = (SCREEN_W - bw) / 2, by = (SCREEN_H - bh) / 2 - 20;
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, bx, by, bw, bh);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, bx, by, bw, bh);
+    ui_draw_text_centered(by + 28, "发现未保存草稿");
+    ui_draw_text_centered(by + 58, "Enter=恢复");
+    ui_draw_text_centered(by + 88, "ESC=忽略");
+    u8g2_SetDrawColor(g_u8g2, 1);
+}
+
+static void drawPromptGenerating() {
+    ui_clear();
+    ui_show_message_centered("AI生成提示中...");
+    ui_draw_status("请稍候", "");
+    ui_commit();
+}
+
+static void runPromptTask(void *arg) {
+    (void)arg;
+    bool wifiWasConnected = g_wifi.isConnected();
+    DeepseekResult result = {false, ""};
+    if (ensure_wifi_connected()) {
+        result = g_deepseek.generatePrompt(s_promptTaskContext);
+    } else {
+        result = {false, "WiFi连接失败"};
+    }
+    restore_wifi_state(wifiWasConnected);
+    lockPromptResult();
+    s_promptTaskResult = result;
+    unlockPromptResult();
+    s_promptTaskDone = true;
+    vTaskDelete(nullptr);
+}
+
 // ── Editor save helper ────────────────────────────────────────────────────
-static bool saveCurrentContent() {
+static bool saveCurrentContent(bool createHistory = true) {
     std::string text = currentEditorText();
     if (inQuickFileSession()) {
         // 快捷编辑: 直接写回 /sdcard/{n}.txt, 允许保存空文件
-        return quickEditSave(quickEditIndex(), text);
+        bool ok = quickEditSave(quickEditIndex(), text, createHistory);
+        if (ok) g_journal.clearRecoveryDraft();
+        return ok;
     }
     if (text.empty()) return false;
 
@@ -1057,7 +1293,9 @@ static bool saveCurrentContent() {
         strftime(fname, sizeof(fname), "%Y-%m-%d_%H%M%S", tm);
         g_editor.savedFilename = std::string(fname) + ".txt";
     }
-    return g_journal.saveEntryRaw(g_editor.savedFilename, fullText);
+    bool ok = g_journal.saveEntryRaw(g_editor.savedFilename, fullText, createHistory);
+    if (ok) g_journal.clearRecoveryDraft();
+    return ok;
 }
 
 static AppState finishEditor(ScreenContext &ctx) {
@@ -1122,10 +1360,77 @@ void screen_editor_init(ScreenContext &ctx) {
     // 重置快捷键帮助对话框
     g_editor.helpActive = false;
     g_editor.helpScroll = 0;
+    clearUndoHistory();
+
+    std::string recoveryContent, recoveryMeta;
+    if (g_journal.loadRecoveryDraft(recoveryContent, recoveryMeta)) {
+        g_editor.recoveryPrompt = true;
+        g_editor.recoveryContent = recoveryContent;
+        g_editor.recoveryMeta = recoveryMeta;
+    } else {
+        g_editor.recoveryPrompt = false;
+        g_editor.recoveryContent.clear();
+        g_editor.recoveryMeta.clear();
+    }
+    g_editor.lastRecoveryHash = 0;
+    g_editor.promptGenerating = false;
+    s_promptTaskDone = false;
 }
 
 AppState screen_editor_handle(int key, ScreenContext &ctx) {
     const auto& vrows = getVrows();
+
+    if (g_editor.promptGenerating) {
+        if (!s_promptTaskDone) {
+            drawPromptGenerating();
+            return APP_EDITOR;
+        }
+        g_editor.promptGenerating = false;
+        lockPromptResult();
+        DeepseekResult result = s_promptTaskResult;
+        unlockPromptResult();
+        if (result.success && !result.content.empty()) {
+            g_editor.promptMode = true;
+            g_editor.promptText = result.content;
+        } else {
+            if (g_editor.promptText.empty()) g_editor.promptText = "今天发生了什么？";
+            if (!result.content.empty()) {
+                ctx.statusMessage = result.content;
+                ctx.statusDuration = 30;
+            }
+        }
+        s_promptTaskContext.clear();
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+
+    if (g_editor.recoveryPrompt) {
+        if (key == 0x0A || key == 0x0D || key == 'y' || key == 'Y') {
+            std::string fn = metaValue(g_editor.recoveryMeta, "filename");
+            if (!fn.empty()) g_editor.savedFilename = fn;
+            loadLinesIntoEditor(g_editor.recoveryContent);
+            g_editor.scroll = 0;
+            g_editor.targetCx = -1;
+            g_editor.modifiedSinceSave = true;
+            g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+            g_editor.recoveryPrompt = false;
+            g_editor.recoveryContent.clear();
+            g_editor.recoveryMeta.clear();
+            markDirty();
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        if (key == 0x1B || key == 'n' || key == 'N') {
+            g_journal.clearRecoveryDraft();
+            g_editor.recoveryPrompt = false;
+            g_editor.recoveryContent.clear();
+            g_editor.recoveryMeta.clear();
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        ui_clear(); drawEditor(); drawRecoveryDialog(); ui_commit();
+        return APP_EDITOR;
+    }
 
     if (g_editor.confirmSave) {
         if (key == 0x0A || key == 0x0D || key == 'y' || key == 'Y') {
@@ -1160,6 +1465,24 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.helpScroll = 0;
         ui_clear(); drawHelpPanel(); ui_commit();
         return APP_EDITOR;
+    }
+
+    if (key == 0x1B) {
+        if (inQuickFileSession()) {
+            // 快捷编辑: 自动保存后跳到设置面板
+            if (quickEditSave(quickEditIndex(), currentEditorText())) g_journal.clearRecoveryDraft();
+            g_editor.modifiedSinceSave = false;
+            ctx.nextState = APP_SETTINGS;
+            return APP_SETTINGS;
+        }
+        bool hasContent = g_editor.lines.size() > 1 ||
+            (g_editor.lines.size() == 1 && !g_editor.lines[0].empty());
+        if (hasContent && g_editor.modifiedSinceSave) {
+            g_editor.confirmSave = true;
+            ui_clear(); drawEditor(); drawConfirmDialog(); ui_commit();
+            return APP_EDITOR;
+        }
+        ctx.nextState = ctx.prevState; return ctx.prevState;
     }
 
     // Ctrl+O → 选区润色(需先用Shift+方向键选择文字)
@@ -1201,6 +1524,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     }
 
     if (key == 9) {
+        recordUndoSnapshot(UndoGroup::Structural);
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 4, ' ');
         g_editor.cx += 4;
         g_editor.targetCx = -1;
@@ -1211,59 +1535,38 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     }
     if (key == 0x0E) { // Ctrl+N → 下一个快捷编辑文件
         if (inQuickFileSession()) {
-            quickEditNext();
+            quickEditSwitchTo((quickEditIndex() + 1) % 10);
             ui_clear(); drawEditor(); ui_commit();
             return APP_EDITOR;
         }
     }
     if (key == 0x10) { // Ctrl+P
         if (inQuickFileSession()) {  // 快捷编辑: 上一个文件
-            quickEditPrev();
+            quickEditSwitchTo((quickEditIndex() + 9) % 10);
             ui_clear(); drawEditor(); ui_commit();
             return APP_EDITOR;
         }
-        bool wifiWasConnected = g_wifi.isConnected();
-        if (ensure_wifi_connected()) {
-            g_editor.promptMode = true;
-            ui_clear();
-            ui_show_message_centered("AI生成提示中...");
-            std::string context;
-            std::string exp = g_settings.personalExperience();
-            std::string hob = g_settings.personalHobbies();
-            if (!exp.empty()) context += "我的经历:" + exp + ";";
-            if (!hob.empty()) context += "我的爱好:" + hob + ";";
-            if (context.empty()) context = "一个普通用户";
-            auto result = g_deepseek.generatePrompt(context);
-            if (result.success && !result.content.empty()) {
-                g_editor.promptText = result.content;
-            } else if (g_editor.promptText.empty()) {
-                g_editor.promptText = "今天发生了什么？";
-            }
-        } else {
-            ui_clear();
-            ui_show_message_centered("WiFi连接失败");
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-        restore_wifi_state(wifiWasConnected);
-        ui_clear(); drawEditor(); ui_commit();
-        return APP_EDITOR;
-    }
-    if (key == 0x1B) {
-        if (inQuickFileSession()) {
-            // 快捷编辑: 自动保存后跳到设置面板
-            quickEditSave(quickEditIndex(), currentEditorText());
-            g_editor.modifiedSinceSave = false;
-            ctx.nextState = APP_SETTINGS;
-            return APP_SETTINGS;
-        }
-        bool hasContent = g_editor.lines.size() > 1 ||
-            (g_editor.lines.size() == 1 && !g_editor.lines[0].empty());
-        if (hasContent && g_editor.modifiedSinceSave) {
-            g_editor.confirmSave = true;
-            ui_clear(); drawEditor(); drawConfirmDialog(); ui_commit();
+        std::string exp = g_settings.personalExperience();
+        std::string hob = g_settings.personalHobbies();
+        s_promptTaskContext.clear();
+        if (!exp.empty()) s_promptTaskContext += "我的经历:" + exp + ";";
+        if (!hob.empty()) s_promptTaskContext += "我的爱好:" + hob + ";";
+        if (s_promptTaskContext.empty()) s_promptTaskContext = "一个普通用户";
+        lockPromptResult();
+        s_promptTaskResult = {false, ""};
+        unlockPromptResult();
+        s_promptTaskDone = false;
+        g_editor.promptGenerating = true;
+        TaskHandle_t h = nullptr;
+        if (xTaskCreate(runPromptTask, "prompt_gen", 8192, nullptr, 1, &h) != pdPASS) {
+            g_editor.promptGenerating = false;
+            ctx.statusMessage = "系统繁忙,请重试";
+            ctx.statusDuration = 30;
+            ui_clear(); drawEditor(); ui_commit();
             return APP_EDITOR;
         }
-        ctx.nextState = ctx.prevState; return ctx.prevState;
+        drawPromptGenerating();
+        return APP_EDITOR;
     }
     if (key == 0x13) {
         std::string text = currentEditorText();
@@ -1278,7 +1581,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     }  // Ctrl+S
     if (key == 0x11) {
         if (inQuickFileSession()) {
-            quickEditSave(quickEditIndex(), currentEditorText());
+            if (quickEditSave(quickEditIndex(), currentEditorText())) g_journal.clearRecoveryDraft();
             g_editor.modifiedSinceSave = false;
             ctx.nextState = APP_SETTINGS;
             return APP_SETTINGS;
@@ -1288,6 +1591,41 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     if (key == 0x06) {  // Ctrl+F
         ctx.nextState = APP_SYNC_SEND_FLOMO;
         return APP_SYNC_SEND_FLOMO;
+    }
+    if (key == 0x1A) {  // Ctrl+Z
+        if (!undoEditor()) {
+            ctx.statusMessage = "没有可撤销内容";
+            ctx.statusDuration = 30;
+        }
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+    if (key == KEY_REDO || key == 0x12) {  // Ctrl+Shift+Z / Ctrl+R
+        if (!redoEditor()) {
+            ctx.statusMessage = "没有可重做内容";
+            ctx.statusDuration = 30;
+        }
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+    if (key == 0x19) {  // Ctrl+Y → 当前日记历史版本
+        if (inQuickFileSession()) {
+            ctx.statusMessage = "快捷编辑历史暂未支持";
+            ctx.statusDuration = 30;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        if (!saveCurrentContent()) {
+            ctx.statusMessage = "保存失败，无法查看历史";
+            ctx.statusDuration = 30;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        g_editor.modifiedSinceSave = false;
+        ctx.selectedEntry = g_editor.savedFilename;
+        ctx.prevState = APP_EDITOR;
+        ctx.nextState = APP_HISTORY;
+        return APP_HISTORY;
     }
     if (key >= KEY_FILE_BASE && key <= KEY_FILE_BASE + 9) {  // Ctrl+0-9 直接切换文件
         if (inQuickFileSession()) {
@@ -1307,6 +1645,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     }
     if (key == 0x18) { // Ctrl+X — cut
         if (g_editor.hasSelection) {
+            recordUndoSnapshot(UndoGroup::Structural);
             g_clipboard = getSelectedText();
             deleteSelection();
         }
@@ -1314,6 +1653,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     }
     if (key == 0x16) { // Ctrl+V — paste
         if (!g_clipboard.empty()) {
+            recordUndoSnapshot(UndoGroup::Structural);
             if (g_editor.hasSelection) {
                 deleteSelection(); // removes selection, then paste at cursor
             }
@@ -1406,6 +1746,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
 
     // Navigation & editing
     if (key == 0x0A || key == 0x0D) { // Enter
+        recordUndoSnapshot(UndoGroup::Structural);
         if (g_editor.hasSelection) deleteSelection();
         // 列表行在行尾回车时自动续行:下一行带上同款列表标记
         std::string prefix;
@@ -1453,13 +1794,16 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.modifiedSinceSave = true;
     } else if (key == 0x7F || key == 0x08) { // Backspace
         if (g_editor.hasSelection) {
+            recordUndoSnapshot(UndoGroup::Delete);
             deleteSelection();
         } else if (g_editor.cx > 0) {
+            recordUndoSnapshot(UndoGroup::Delete);
             int prev = g_editor.cx - 1;
             while (prev > 0 && ((unsigned char)g_editor.lines[g_editor.cy][prev] & 0xC0) == 0x80) prev--;
             g_editor.lines[g_editor.cy].erase(prev, g_editor.cx - prev);
             g_editor.cx = prev;
         } else if (g_editor.cy > 0) {
+            recordUndoSnapshot(UndoGroup::Delete);
             g_editor.cx = (int)g_editor.lines[g_editor.cy-1].length();
             g_editor.lines[g_editor.cy-1] += g_editor.lines[g_editor.cy];
             g_editor.lines.erase(g_editor.lines.begin() + g_editor.cy);
@@ -1470,6 +1814,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
     } else if (key >= 0x20 && key <= 0x7E) { // ASCII printable
+        recordUndoSnapshot(UndoGroup::Typing);
         if (g_editor.hasSelection) deleteSelection();
         g_editor.lines[g_editor.cy].insert(g_editor.cx, 1, (char)key);
         g_editor.cx++;
@@ -1560,11 +1905,44 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
 // a full redraw every 50ms idle tick.
 bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
     (void)ctx;
+    if (g_editor.promptGenerating) {
+        if (s_promptTaskDone) {
+            g_editor.promptGenerating = false;
+            lockPromptResult();
+            DeepseekResult result = s_promptTaskResult;
+            unlockPromptResult();
+            if (result.success && !result.content.empty()) {
+                g_editor.promptMode = true;
+                g_editor.promptText = result.content;
+            } else {
+                if (g_editor.promptText.empty()) g_editor.promptText = "今天发生了什么？";
+            }
+            s_promptTaskContext.clear();
+            ui_clear(); drawEditor(); ui_commit();
+            return true;
+        }
+        drawPromptGenerating();
+        return true;
+    }
+    if (g_editor.recoveryPrompt) {
+        if (forceRedraw || !g_editor.drawnOnce) {
+            ui_clear(); drawEditor(); drawRecoveryDialog(); ui_commit();
+            return true;
+        }
+        return false;
+    }
     // Auto-save on idle ticks (快捷编辑始终自动保存)
     if (g_editor.autoSaveTime > 0 && esp_timer_get_time() > g_editor.autoSaveTime) {
         g_editor.autoSaveTime = 0;
-        if (inQuickFileSession() || g_settings.autoSave()) {
-            if (saveCurrentContent()) g_editor.modifiedSinceSave = false;
+        bool shouldCommit = inQuickFileSession() || g_settings.autoSave();
+        if (shouldCommit) {
+            if (saveCurrentContent(false)) {
+                g_editor.modifiedSinceSave = false;
+            } else if (g_editor.modifiedSinceSave) {
+                saveRecoveryDraftIfChanged();
+            }
+        } else if (g_editor.modifiedSinceSave) {
+            saveRecoveryDraftIfChanged();
         }
     }
     // 查找/替换对话框打开时,面板只在按键时变化;空闲重绘走面板
@@ -1651,6 +2029,7 @@ std::string app_get_editor_text() {
 // Insert text at the cursor, shared by IME commit and voice dictation.
 void editorInsertText(const std::string &text) {
     if (text.empty()) return;
+    recordUndoSnapshot(UndoGroup::Typing);
     if (g_editor.hasSelection) deleteSelection();
     g_editor.lines[g_editor.cy].insert(g_editor.cx, text);
     g_editor.cx += (int)text.length();
@@ -1662,6 +2041,7 @@ void editorInsertText(const std::string &text) {
 
 // Replace the entire editor text (AI polish confirm). Cursor moves to the end.
 void editorReplaceAllText(const std::string &text) {
+    recordUndoSnapshot(UndoGroup::Structural);
     loadLinesIntoEditor(text);
     g_editor.scroll = 0;
     g_editor.targetCx = -1;
@@ -1681,6 +2061,7 @@ std::string app_get_selected_text() {
 void editorReplaceSelection(const std::string &text) {
     // deleteSelection() removes the selection, joins its lines and puts the
     // cursor at the selection start — the natural insertion point.
+    recordUndoSnapshot(UndoGroup::Structural);
     if (g_editor.hasSelection) deleteSelection();
     if (!text.empty()) {
         // Split on '\n' (drop a trailing empty segment, like loadLinesIntoEditor)

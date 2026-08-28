@@ -43,6 +43,7 @@ static const char *TAG = "BtKeybrd";
 #define KEY_PAGE_DOWN  0xA1
 #define KEY_SEARCH     0xA2
 #define KEY_HELP       0xA3
+#define KEY_REDO       0xA4
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 
@@ -303,6 +304,12 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                     // Ctrl+? (Shift+/) → 快捷键帮助对话框
                     uint8_t h = KEY_HELP;
                     xQueueSendToBack(s_queue, &h, 0);
+                    continue;
+                }
+                if (ctrl && shift && kc == 29) {
+                    // Ctrl+Shift+Z → redo
+                    uint8_t r = KEY_REDO;
+                    xQueueSendToBack(s_queue, &r, 0);
                     continue;
                 }
                 if (ctrl && kc == 56) {
@@ -756,6 +763,8 @@ void BtKeyboard::checkKeyRepeat() {
                     xQueueSendToBack(s_queue, &ce, 0);
                 } else if (ctrl && (s_last_mod & 0x22) && kc == 56) {
                     // Ctrl+? → 帮助; 按住不自动重复,避免误开关
+                } else if (ctrl && (s_last_mod & 0x22) && kc == 29) {
+                    // Ctrl+Shift+Z → redo; no key repeat
                 } else if (ctrl && kc == 56) {
                     // Ctrl+/ → 搜索对话框; 按住不自动重复,避免误开/误关
                 } else if ((s_last_mod & 0x22) && kc == 44) {

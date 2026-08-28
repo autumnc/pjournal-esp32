@@ -12,6 +12,7 @@
 
 static const char *TAG = "Flomo";
 FlomoClient g_flomo;
+static const size_t MAX_FLOMO_RESPONSE_SIZE = 32 * 1024;
 
 // Apply inline formatting: **bold**, __underline__, ==highlight==
 static std::string applyInlineFormats(const std::string &text) {
@@ -127,7 +128,7 @@ static std::string textToHtml(const std::string &text) {
 // Flomo constants
 #define FLOMO_API_BASE    "https://flomoapp.com/api/v1"
 #define FLOMO_API_KEY     "flomo_web"
-#define FLOMO_APP_VERSION "4.0"
+#define FLOMO_APP_VERSION "4.1"
 #define FLOMO_PLATFORM    "web"
 #define FLOMO_SIGN_SECRET "dbbc3dd73364b4084c3a69346e0ce2b2"
 
@@ -205,6 +206,7 @@ std::string FlomoClient::login() {
             while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
                 buf[len] = 0;
                 response += buf;
+                if (response.size() > MAX_FLOMO_RESPONSE_SIZE) break;
             }
             // Parse JSON for access_token (simple search)
             // Response format: {"code":0,"data":{"access_token":"xxx"}}
@@ -248,6 +250,7 @@ std::string FlomoClient::login() {
             while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
                 buf[len] = 0;
                 response += buf;
+                if (response.size() > MAX_FLOMO_RESPONSE_SIZE) break;
             }
             if (!response.empty())
                 ESP_LOGW(TAG, "Login response: %.*s", (int)response.size(), response.c_str());
@@ -325,6 +328,7 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
             while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
                 buf[len] = 0;
                 response += buf;
+                if (response.size() > MAX_FLOMO_RESPONSE_SIZE) break;
             }
             // Parse code field from JSON response
             auto codePos = response.find("\"code\":0");
@@ -340,6 +344,7 @@ bool FlomoClient::createMemo(const std::string &token, const std::string &conten
             while ((len = esp_http_client_read(client, buf, sizeof(buf) - 1)) > 0) {
                 buf[len] = 0;
                 response += buf;
+                if (response.size() > MAX_FLOMO_RESPONSE_SIZE) break;
             }
             if (!response.empty())
                 ESP_LOGW(TAG, "Memo response: %.*s", (int)response.size(), response.c_str());

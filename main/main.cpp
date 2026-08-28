@@ -31,6 +31,7 @@
 #include <esp_sntp.h>
 #include <driver/gpio.h>
 #include <sys/time.h>
+#include <freertos/semphr.h>
 #include <cstdio>
 
 static const char *TAG = "Main";
@@ -57,6 +58,89 @@ static bool initDisplay() {
     }
     g_u8g2 = u8g2_st7305_get_u8g2(&s_lcd_dev);
     return true;
+}
+
+enum class AsyncUiState {
+    Idle,
+    Running,
+    Done,
+};
+
+static volatile AsyncUiState s_webdavState = AsyncUiState::Idle;
+static SyncResult s_webdavResult = {false, ""};
+static int64_t s_webdavResultUntil = 0;
+
+static volatile AsyncUiState s_flomoState = AsyncUiState::Idle;
+static FlomoResult s_flomoResult = {false, ""};
+static std::string s_flomoText;
+static AppState s_flomoReturnTo = APP_EDITOR;
+static int64_t s_flomoResultUntil = 0;
+static SemaphoreHandle_t s_asyncResultMutex = nullptr;
+
+static void ensureAsyncResultMutex() {
+    if (!s_asyncResultMutex) s_asyncResultMutex = xSemaphoreCreateMutex();
+}
+
+static void lockAsyncResult() {
+    ensureAsyncResultMutex();
+    if (s_asyncResultMutex) xSemaphoreTake(s_asyncResultMutex, portMAX_DELAY);
+}
+
+static void unlockAsyncResult() {
+    if (s_asyncResultMutex) xSemaphoreGive(s_asyncResultMutex);
+}
+
+static void drawCenteredBusy(const char *title, const char *line) {
+    ui_clear();
+    ui_draw_text_centered(100, title, false, true);
+    ui_draw_text_centered(135, line);
+    ui_commit();
+}
+
+static void webdavSyncTask(void *arg) {
+    (void)arg;
+    bool wifiWasConnected = g_wifi.isConnected();
+    SyncResult result = {false, ""};
+
+    std::string url = g_settings.webdavUrl();
+    std::string user = g_settings.webdavUsername();
+    std::string pass = g_settings.webdavPassword();
+    if (url.empty() || user.empty()) {
+        result = {false, "请先配置WebDAV"};
+    } else if (!ensure_wifi_connected()) {
+        result = {false, "WiFi连接失败"};
+    } else {
+        g_webdav.configure(url, user, pass);
+        result = g_webdav.sync("/sdcard/pjournal");
+    }
+
+    restore_wifi_state(wifiWasConnected);
+    lockAsyncResult();
+    s_webdavResult = result;
+    unlockAsyncResult();
+    s_webdavState = AsyncUiState::Done;
+    vTaskDelete(nullptr);
+}
+
+static void flomoSendTask(void *arg) {
+    (void)arg;
+    bool wifiWasConnected = g_wifi.isConnected();
+    FlomoResult result = {false, ""};
+
+    if (s_flomoText.empty()) {
+        result = {false, "内容为空"};
+    } else if (!ensure_wifi_connected()) {
+        result = {false, "WiFi未连接"};
+    } else {
+        result = g_flomo.send(s_flomoText);
+    }
+
+    restore_wifi_state(wifiWasConnected);
+    lockAsyncResult();
+    s_flomoResult = result;
+    unlockAsyncResult();
+    s_flomoState = AsyncUiState::Done;
+    vTaskDelete(nullptr);
 }
 
 // BLE stack init + auto-connect in a background task so the main UI
@@ -693,7 +777,7 @@ extern "C" void app_main() {
             // Preserve editorInited when going to inspiration/polish (editor should resume)
             // Reset editorInited when editor is opened FROM another screen (new content)
             if (currentState != APP_EDITOR && currentState != APP_SYNC_SEND_FLOMO) {
-                if (currentState == APP_INSPIRATION || currentState == APP_POLISH) {
+                if (currentState == APP_INSPIRATION || currentState == APP_POLISH || currentState == APP_HISTORY) {
                     // editor state preserved across the overlay panel
                 } else {
                     editorInited = false;
@@ -719,6 +803,16 @@ extern "C" void app_main() {
             if (key > 0) currentState = screen_viewer_handle(key, ctx);
             else { screen_viewer_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
             if (currentState != APP_VIEWER) viewerInited = false;
+            break;
+        }
+
+        case APP_HISTORY: {
+            g_font.setSize(22);
+            static bool historyInited = false;
+            if (!historyInited) { screen_history_init(ctx.selectedEntry, ctx.prevState); historyInited = true; }
+            if (key > 0) currentState = screen_history_handle(key, ctx);
+            else { screen_history_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            if (currentState != APP_HISTORY) historyInited = false;
             break;
         }
 
@@ -821,128 +915,90 @@ extern "C" void app_main() {
             g_font.setSize(22);
             IME::getInstance().setPageSize(7);
 
-            // Show sync panel immediately
-            ui_clear();
-            ui_draw_text_centered(100, "WebDAV 同步", false, true);
-            ui_draw_text_centered(135, "正在连接WiFi...");
-            ui_commit();
-
-            // Auto-connect WiFi if needed
-            bool wifiWasConnected = g_wifi.isConnected();
-            if (!wifiWasConnected) {
-                std::string ssid = g_settings.wifiSsid();
-                std::string pass = g_settings.wifiPassword();
-                if (!ssid.empty()) {
-                    g_wifi.begin();
-                    g_wifi.connect(ssid.c_str(), pass.c_str());
-                    for (int i = 0; i < 100; i++) {
-                        if (g_wifi.isConnected()) break;
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
+            if (s_webdavState == AsyncUiState::Idle) {
+                lockAsyncResult();
+                s_webdavResult = {false, ""};
+                unlockAsyncResult();
+                s_webdavResultUntil = 0;
+                s_webdavState = AsyncUiState::Running;
+                TaskHandle_t h = nullptr;
+                if (xTaskCreate(webdavSyncTask, "webdav_sync", 12288, nullptr, 1, &h) != pdPASS) {
+                    s_webdavResult = {false, "系统繁忙,请重试"};
+                    s_webdavState = AsyncUiState::Done;
                 }
             }
 
-            if (!g_wifi.isConnected()) {
-                ui_clear();
-                ui_draw_text_centered(100, "WebDAV 同步", false, true);
-                ui_draw_text_centered(135, "WiFi连接失败");
-                ui_commit();
-                vTaskDelay(pdMS_TO_TICKS(2000));
-                currentState = APP_MAIN;
+            if (s_webdavState == AsyncUiState::Running) {
+                drawCenteredBusy("WebDAV 同步", "正在同步...");
+                vTaskDelay(pdMS_TO_TICKS(100));
                 break;
             }
 
-            ui_clear();
-            ui_draw_text_centered(100, "WebDAV 同步", false, true);
-            ui_draw_text_centered(135, "正在同步...");
-            ui_commit();
-
-            std::string url = g_settings.webdavUrl();
-            std::string user = g_settings.webdavUsername();
-            std::string pass = g_settings.webdavPassword();
-            if (url.empty() || user.empty()) {
-                ui_clear();
-                ui_draw_text_centered(100, "WebDAV 同步", false, true);
-                ui_draw_text_centered(135, "请先配置WebDAV");
-                ui_commit();
-                vTaskDelay(pdMS_TO_TICKS(2000));
-            } else {
-                g_webdav.configure(url, user, pass);
-                auto result = g_webdav.sync("/sdcard/pjournal");
-                ui_clear();
-                ui_draw_text_centered(100, "WebDAV 同步", false, true);
-                ui_draw_text_centered(135, result.message.c_str());
-                ui_commit();
-                vTaskDelay(pdMS_TO_TICKS(2000));
+            if (s_webdavResultUntil == 0) {
+                s_webdavResultUntil = esp_timer_get_time() + 2000000;
+                lockAsyncResult();
+                std::string message = s_webdavResult.message;
+                unlockAsyncResult();
+                drawCenteredBusy("WebDAV 同步",
+                                 message.empty() ? "同步结束" : message.c_str());
+                break;
             }
-
-            // Always disconnect WiFi after sync to save power
-            g_wifi.disconnect();
+            if (esp_timer_get_time() < s_webdavResultUntil) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+            }
+            s_webdavState = AsyncUiState::Idle;
             currentState = APP_MAIN;
             break;
         }
 
         case APP_SYNC_SEND_FLOMO: {
-            static int flomoStep = 0;
-            static std::string flomoText;
-            static std::string flomoResult;
-            static AppState flomoReturnTo = APP_EDITOR;
-            if (flomoStep == 0) {
+            if (s_flomoState == AsyncUiState::Idle) {
                 if (!g_flomoPendingText.empty()) {
-                    flomoText = std::move(g_flomoPendingText);
+                    s_flomoText = std::move(g_flomoPendingText);
                     g_flomoPendingText.clear();
-                    flomoReturnTo = g_flomoReturnTo;
+                    s_flomoReturnTo = g_flomoReturnTo;
                 } else {
-                    flomoText = app_get_editor_text();
-                    flomoReturnTo = APP_EDITOR;
+                    s_flomoText = app_get_editor_text();
+                    s_flomoReturnTo = APP_EDITOR;
                 }
-                flomoResult.clear();
-                if (flomoText.empty()) {
-                    ui_clear(); ui_show_message_centered("内容为空");
-                    ui_commit(); vTaskDelay(pdMS_TO_TICKS(1500));
-                    g_wifi.disconnect();
-                    flomoStep = 0;
-                    currentState = flomoReturnTo;
-                    break;
+                lockAsyncResult();
+                s_flomoResult = {false, ""};
+                unlockAsyncResult();
+                s_flomoResultUntil = 0;
+                s_flomoState = AsyncUiState::Running;
+                TaskHandle_t h = nullptr;
+                if (xTaskCreate(flomoSendTask, "flomo_send", 8192, nullptr, 1, &h) != pdPASS) {
+                    s_flomoResult = {false, "系统繁忙,请重试"};
+                    s_flomoState = AsyncUiState::Done;
                 }
-                flomoStep = 1;
             }
-            if (flomoStep == 1) {
-                ui_clear(); ui_show_message_centered("正在连接WiFi...");
+
+            if (s_flomoState == AsyncUiState::Running) {
+                ui_clear();
+                ui_show_message_centered("正在发送...");
                 ui_commit();
-                if (!g_wifi.isConnected()) {
-                    std::string ssid = g_settings.wifiSsid();
-                    std::string pass = g_settings.wifiPassword();
-                    if (!ssid.empty()) {
-                        g_wifi.begin();
-                        g_wifi.connect(ssid.c_str(), pass.c_str());
-                        for (int i = 0; i < 100; i++) {
-                            if (g_wifi.isConnected()) break;
-                            vTaskDelay(pdMS_TO_TICKS(100));
-                        }
-                    }
-                }
-                if (!g_wifi.isConnected()) {
-                    ui_clear(); ui_show_message_centered("WiFi未连接");
-                    ui_commit(); vTaskDelay(pdMS_TO_TICKS(1500));
-                    g_wifi.disconnect();
-                    flomoStep = 0;
-                    currentState = flomoReturnTo;
-                    break;
-                }
-                flomoStep = 2;
+                vTaskDelay(pdMS_TO_TICKS(100));
+                break;
             }
-            if (flomoStep == 2) {
-                ui_clear(); ui_show_message_centered("正在发送...");
+
+            if (s_flomoResultUntil == 0) {
+                s_flomoResultUntil = esp_timer_get_time() + 2000000;
+                lockAsyncResult();
+                std::string message = s_flomoResult.message;
+                unlockAsyncResult();
+                ui_clear();
+                ui_show_message_centered(message.empty() ? "发送结束" : message.c_str());
                 ui_commit();
-                auto result = g_flomo.send(flomoText);
-                flomoResult = result.message;
-                ui_clear(); ui_show_message_centered(flomoResult.c_str());
-                ui_commit(); vTaskDelay(pdMS_TO_TICKS(2000));
-                g_wifi.disconnect();
-                flomoStep = 0;
-                currentState = flomoReturnTo;
+                break;
             }
+            if (esp_timer_get_time() < s_flomoResultUntil) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+            }
+            s_flomoText.clear();
+            s_flomoState = AsyncUiState::Idle;
+            currentState = s_flomoReturnTo;
             break;
         }
 

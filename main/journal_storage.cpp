@@ -1,4 +1,6 @@
 #include "journal_storage.h"
+#include "safe_file.h"
+#include "settings_manager.h"
 #include <cstring>
 #include <ctime>
 #include <algorithm>
@@ -20,6 +22,57 @@ static bool isJournalExt(const std::string &fn) {
     if (dot == std::string::npos) return false;
     std::string ext = fn.substr(dot);
     return ext == ".txt" || ext == ".md";
+}
+
+static std::string stemOf(const std::string &fn) {
+    size_t dot = fn.rfind('.');
+    return dot == std::string::npos ? fn : fn.substr(0, dot);
+}
+
+static void cleanupOldHistory(const std::string &dir, int keep) {
+    DIR *d = opendir(dir.c_str());
+    if (!d) return;
+    std::vector<std::string> files;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (fn.empty() || fn[0] == '.') continue;
+        files.push_back(fn);
+    }
+    closedir(d);
+    if ((int)files.size() <= keep) return;
+    std::sort(files.begin(), files.end());
+    for (int i = 0; i < (int)files.size() - keep; i++) {
+        remove((dir + "/" + files[i]).c_str());
+    }
+}
+
+static bool saveJournalHistoryVersion(const std::string &base, const std::string &filename,
+                                      const std::string &oldContent) {
+    std::string dir = base + "/.history/" + stemOf(filename);
+    if (!ensureDirPath(dir)) return false;
+    time_t now;
+    time(&now);
+    struct tm *tm = localtime(&now);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%d_%H%M%S", tm);
+    std::string path = dir + "/" + std::string(ts) + ".txt";
+    for (int i = 1; fileExists(path) && i < 100; i++) {
+        path = dir + "/" + std::string(ts) + "_" + std::to_string(i) + ".txt";
+    }
+    bool ok = safeWriteFile(path, oldContent);
+    if (ok) cleanupOldHistory(dir, 10);
+    return ok;
+}
+
+static std::string historyDirFor(const std::string &base, const std::string &filename) {
+    return base + "/.history/" + stemOf(filename);
+}
+
+static bool isSafeHistoryFilename(const std::string &fn) {
+    if (fn.empty() || fn.find('/') != std::string::npos || fn.find("..") != std::string::npos) return false;
+    return isJournalExt(fn);
 }
 
 // SD card mutex (recursive to handle nested public method calls)
@@ -92,6 +145,14 @@ void JournalStorage::scanIndex() {
         while ((de = readdir(dir)) != NULL) {
             if (de->d_type != DT_REG) continue;
             std::string fn = de->d_name;
+            if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".bak") {
+                std::string orig = fn.substr(0, fn.size() - 4);
+                std::string origPath = basePath() + "/" + orig;
+                if (isJournalExt(orig) && !fileExists(origPath)) {
+                    rename((basePath() + "/" + fn).c_str(), origPath.c_str());
+                    fn = orig;
+                }
+            }
             if (fn[0] == '.' || !isJournalExt(fn)) continue;
             m_fileIndex.push_back(fn);
             m_dateSet.insert(fn.substr(0, 10));
@@ -138,27 +199,132 @@ bool JournalStorage::saveEntry(const std::string &text) {
     strftime(ts, sizeof(ts), "%Y-%m-%d_%H%M%S", tm);
     std::string fname = std::string(ts) + ".txt";
 
-    FILE *f = fopen((basePath() + "/" + fname).c_str(), "w");
-    if (!f) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return false; }
-    fwrite(text.data(), 1, text.size(), f);
-    fclose(f);
+    if (!safeWriteFile(basePath() + "/" + fname, text)) {
+        if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+        return false;
+    }
     ESP_LOGI(TAG, "Saved: %s", fname.c_str());
     if (m_indexValid) indexAddFile(fname);
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return true;
 }
 
-bool JournalStorage::saveEntryRaw(const std::string &filename, const std::string &content) {
+bool JournalStorage::saveEntryRaw(const std::string &filename, const std::string &content, bool createHistory) {
     if (!mounted_) return false;
     if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
     ensureDir();
-    FILE *f = fopen((basePath() + "/" + filename).c_str(), "w");
-    if (!f) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return false; }
-    fwrite(content.data(), 1, content.size(), f);
-    fclose(f);
+    std::string path = basePath() + "/" + filename;
+    if (createHistory && g_settings.versionHistory() && filename.rfind("__", 0) != 0 && fileExists(path)) {
+        std::string old = readWholeFile(path);
+        if (old != content) saveJournalHistoryVersion(basePath(), filename, old);
+    }
+    if (!safeWriteFile(path, content)) {
+        if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+        return false;
+    }
     if (m_indexValid) indexAddFile(filename);
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return true;
+}
+
+bool JournalStorage::saveRecoveryDraft(const std::string &content, const std::string &meta) {
+    if (!mounted_) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    std::string dir = basePath() + "/.recovery";
+    bool ok = ensureDirPath(dir) &&
+              safeWriteFile(dir + "/editor.tmp", content) &&
+              safeWriteFile(dir + "/editor.meta", meta);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return ok;
+}
+
+bool JournalStorage::loadRecoveryDraft(std::string &content, std::string &meta) {
+    if (!mounted_) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    std::string dir = basePath() + "/.recovery";
+    content = readWholeFile(dir + "/editor.tmp");
+    meta = readWholeFile(dir + "/editor.meta");
+    bool ok = !content.empty() || !meta.empty();
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return ok;
+}
+
+void JournalStorage::clearRecoveryDraft() {
+    if (!mounted_) return;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    std::string dir = basePath() + "/.recovery";
+    remove((dir + "/editor.tmp").c_str());
+    remove((dir + "/editor.meta").c_str());
+    remove((dir + "/editor.tmp.tmp").c_str());
+    remove((dir + "/editor.meta.tmp").c_str());
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+}
+
+std::vector<JournalHistoryVersion> JournalStorage::listHistoryVersions(const std::string &filename) {
+    std::vector<JournalHistoryVersion> result;
+    if (!mounted_) return result;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    std::string dir = historyDirFor(basePath(), filename);
+    DIR *d = opendir(dir.c_str());
+    if (!d) {
+        if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+        return result;
+    }
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_type != DT_REG) continue;
+        std::string fn = de->d_name;
+        if (!isSafeHistoryFilename(fn)) continue;
+        struct stat st;
+        std::string path = dir + "/" + fn;
+        if (stat(path.c_str(), &st) == 0) {
+            JournalHistoryVersion v;
+            v.filename = fn;
+            v.mtime = st.st_mtime;
+            v.size = (size_t)st.st_size;
+            result.push_back(v);
+        }
+    }
+    closedir(d);
+    std::sort(result.begin(), result.end(), [](const JournalHistoryVersion &a, const JournalHistoryVersion &b) {
+        if (a.filename != b.filename) return a.filename > b.filename;
+        return a.mtime > b.mtime;
+    });
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return result;
+}
+
+std::string JournalStorage::readHistoryVersion(const std::string &filename, const std::string &historyFilename) {
+    if (!mounted_ || !isSafeHistoryFilename(historyFilename)) return "";
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    std::string content = readWholeFile(historyDirFor(basePath(), filename) + "/" + historyFilename);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return content;
+}
+
+bool JournalStorage::restoreHistoryVersion(const std::string &filename, const std::string &historyFilename) {
+    if (!mounted_ || !isSafeHistoryFilename(historyFilename)) return false;
+    std::string content = readHistoryVersion(filename, historyFilename);
+    if (content.empty()) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    ensureDir();
+    std::string path = basePath() + "/" + filename;
+    if (fileExists(path)) {
+        std::string old = readWholeFile(path);
+        if (old != content) saveJournalHistoryVersion(basePath(), filename, old);
+    }
+    bool ok = safeWriteFile(path, content);
+    if (ok && m_indexValid) indexAddFile(filename);
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return ok;
+}
+
+bool JournalStorage::deleteHistoryVersion(const std::string &filename, const std::string &historyFilename) {
+    if (!mounted_ || !isSafeHistoryFilename(historyFilename)) return false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    bool ok = remove((historyDirFor(basePath(), filename) + "/" + historyFilename).c_str()) == 0;
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    return ok;
 }
 
 std::vector<JournalEntry> JournalStorage::listEntries() {
@@ -245,6 +411,7 @@ std::vector<std::pair<std::string, time_t>> JournalStorage::listFileMtimes() {
 
         struct stat st;
         std::string full = basePath() + "/" + fn;
+        repairSafeWriteFile(full);
         if (stat(full.c_str(), &st) == 0) {
             result.push_back({fn, st.st_mtime});
         }
@@ -257,7 +424,9 @@ std::vector<std::pair<std::string, time_t>> JournalStorage::listFileMtimes() {
 std::string JournalStorage::readEntry(const std::string &filename) {
     if (!mounted_) return "";
     if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
-    FILE *f = fopen((basePath() + "/" + filename).c_str(), "r");
+    std::string path = basePath() + "/" + filename;
+    repairSafeWriteFile(path);
+    FILE *f = fopen(path.c_str(), "r");
     if (!f) { if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex); return ""; }
     std::string result;
     char buf[256];

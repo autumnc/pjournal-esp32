@@ -14,6 +14,7 @@
 #include <set>
 
 #define KEY_CTRL_ENTER 0x85
+static const long MAX_OUTLINE_CONTENT_FILE_SIZE = 256 * 1024;
 
 extern u8g2_t *g_u8g2;
 extern "C" {
@@ -315,6 +316,7 @@ static std::string readContentFile(const std::string &path) {
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (sz <= 0) { fclose(f); return ""; }
+    if (sz > MAX_OUTLINE_CONTENT_FILE_SIZE) { fclose(f); return ""; }
     std::string content(static_cast<size_t>(sz), '\0');
     if (fread(&content[0], 1, static_cast<size_t>(sz), f) != static_cast<size_t>(sz)) {
         fclose(f); return "";
