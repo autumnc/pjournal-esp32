@@ -11,7 +11,7 @@ struct u8g2_struct;
 typedef struct u8g2_struct u8g2_t;
 
 // VRow structure for word-wrap rendering
-struct VRow { int lineIdx; int start; int end; };
+struct VRow { int lineIdx; int start; int end; int indentCells = 0; };
 
 // UI constants - screen dimensions are fixed
 #define SCREEN_W 400

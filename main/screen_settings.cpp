@@ -47,6 +47,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"auto_sleep", "自动休眠", false, false},
     {"sleep_screen", "休眠保留画面", false, false},
     {"md_render", "Markdown渲染", false, false},
+    {"first_line_indent", "首行缩进", false, false},
     {"_font_size", "字体大小", false, true},
     {"_sync_time", "网络同步时间", false, true},
 };
@@ -56,7 +57,7 @@ static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS
 static bool isToggleField(const char *key) {
     return strcmp(key, "auto_save") == 0 || strcmp(key, "auto_sleep") == 0 ||
            strcmp(key, "sleep_screen") == 0 || strcmp(key, "md_render") == 0 ||
-           strcmp(key, "version_history") == 0;
+           strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0;
 }
 
 static bool toggleValue(const char *key) {

@@ -109,13 +109,14 @@ static void drawPromptEditor() {
         const VRow &vr = vrows[g.scroll + i];
         std::string row = lines[vr.lineIdx].substr(vr.start, vr.end - vr.start);
         if (row.empty()) row = " ";
-        ui_draw_text(8, top + i * LINE_SPACING, row.c_str());
+        ui_draw_text(8 + vr.indentCells * g_font.halfAdvance(), top + i * LINE_SPACING, row.c_str());
     }
     if (vrows.empty()) ui_draw_text(8, top, " ");
 
     int dispRow = curVR - g.scroll;
-    int x = 8 + (byteToCells(lines[lineIdx], g.cur - lineStart) -
-                 byteToCells(lines[lineIdx], vrows[curVR].start));
+    int x = 8 + (vrows[curVR].indentCells +
+                 byteToCells(lines[lineIdx], g.cur - lineStart) -
+                 byteToCells(lines[lineIdx], vrows[curVR].start)) * g_font.halfAdvance();
     std::string curCh = g.buf.substr(g.cur, 1);
     int cw = (curCh.empty() || curCh == "\n") ? 8 : g_font.textWidth(curCh.c_str());
     u8g2_SetDrawColor(g_u8g2, 0);

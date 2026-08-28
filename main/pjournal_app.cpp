@@ -37,6 +37,7 @@ static struct {
 static struct { std::vector<std::string> lines; int scroll = 0; std::string filename;
     std::string dateStr;
     std::vector<VRow> cachedVrows; bool vrowsDirty = true;
+    bool vrowsCachedFirstLineIndent = false;
     std::vector<MdLineInfo> cachedMdInfo; bool mdInfoDirty = true; bool mdCachedOn = false;
 } g_viewer;
 static struct {
@@ -52,13 +53,16 @@ static struct {
     int previewScroll = 0;
     std::vector<VRow> cachedVrows;
     bool vrowsDirty = true;
+    bool vrowsCachedFirstLineIndent = false;
     std::vector<MdLineInfo> cachedMdInfo;
     bool mdInfoDirty = true;
     bool mdCachedOn = false;
 } g_history;
 
 static const std::vector<VRow>& getViewerVrows() {
-    if (g_viewer.vrowsDirty) {
+    bool firstLineIndent = g_settings.firstLineIndent();
+    if (g_viewer.vrowsDirty || g_viewer.vrowsCachedFirstLineIndent != firstLineIndent) {
+        g_viewer.vrowsCachedFirstLineIndent = firstLineIndent;
         g_viewer.cachedVrows = buildVrows(g_viewer.lines);
         g_viewer.vrowsDirty = false;
     }
@@ -80,7 +84,9 @@ static const std::vector<MdLineInfo>& getViewerMdInfo(bool mdOn) {
 static void refreshBrowserCache() { g_browser.entries = g_journal.listEntries(); }
 
 static const std::vector<VRow>& getHistoryVrows() {
-    if (g_history.vrowsDirty) {
+    bool firstLineIndent = g_settings.firstLineIndent();
+    if (g_history.vrowsDirty || g_history.vrowsCachedFirstLineIndent != firstLineIndent) {
+        g_history.vrowsCachedFirstLineIndent = firstLineIndent;
         g_history.cachedVrows = buildVrows(g_history.lines);
         g_history.vrowsDirty = false;
     }
@@ -461,7 +467,7 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     const auto& mdInfo = getViewerMdInfo(mdOn);
     for (int i = 0; i < visible && (g_viewer.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_viewer.scroll + i];
-        mdDrawVrow(4, contentY + i * LINE_SPACING, g_viewer.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx]);
+        mdDrawVrow(4, contentY + i * LINE_SPACING, g_viewer.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
     }
 
     if (g_viewer.scroll > 0 && maxScroll > 0) {
@@ -576,7 +582,7 @@ static void drawHistoryPreview() {
     const auto& mdInfo = getHistoryMdInfo(mdOn);
     for (int i = 0; i < visible && (g_history.previewScroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_history.previewScroll + i];
-        mdDrawVrow(4, contentY + i * LINE_SPACING, g_history.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx]);
+        mdDrawVrow(4, contentY + i * LINE_SPACING, g_history.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
     }
     ui_draw_status("r恢复 d删除 q返回", "");
     ui_commit();

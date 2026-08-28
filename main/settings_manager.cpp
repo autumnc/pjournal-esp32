@@ -118,6 +118,7 @@ bool SettingsManager::autoSave() { return get("auto_save") == "1"; }
 bool SettingsManager::autoSleep() { return get("auto_sleep") != "0"; }  // default on
 bool SettingsManager::sleepScreen() { return get("sleep_screen") == "1"; }  // default off(白屏)
 bool SettingsManager::markdownRender() { return get("md_render") != "0"; }  // default on
+bool SettingsManager::firstLineIndent() { return get("first_line_indent") == "1"; }  // default off
 bool SettingsManager::versionHistory() { return get("version_history") == "1"; }  // default off
 
 int SettingsManager::fontSize() {

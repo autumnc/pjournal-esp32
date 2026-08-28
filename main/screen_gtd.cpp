@@ -3007,7 +3007,7 @@ static void drawNoteEditor() {
 
         std::string text = g.noteLines[vr.lineIdx].substr(vr.start, vr.end - vr.start);
 
-        ui_draw_text(4, ly, text.c_str(), false);
+        ui_draw_text(4 + vr.indentCells * g_font.halfAdvance(), ly, text.c_str(), false);
 
     }
 
@@ -3021,7 +3021,7 @@ static void drawNoteEditor() {
 
         std::string before = g.noteLines[vr.lineIdx].substr(vr.start, g.noteCol - vr.start);
 
-        int cx = 4 + g_font.textWidth(before.c_str());
+        int cx = 4 + vr.indentCells * g_font.halfAdvance() + g_font.textWidth(before.c_str());
 
         int cy = contentY + (cursorVrow - g.noteScroll) * LINE_SPACING;
 

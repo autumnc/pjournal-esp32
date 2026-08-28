@@ -49,7 +49,7 @@ std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines);
 // Draw the [start, end) byte slice of `line` (a vrow) at (x, y) with markdown
 // styles. y is the text baseline. Byte offsets match buildVrows output.
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
-                const MdLineInfo &info);
+                const MdLineInfo &info, int indentCells = 0);
 
 // Visual x (px from the line's left edge) at which raw byte bytePos renders.
 // For heading/task/quote lines the content sits at a fixed prefix offset
@@ -60,7 +60,8 @@ int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos);
 // Visual x (px) of bytePos within a vrow that starts at raw byte vrowStart.
 // Continuation vrows repeat the prefix indent. Use for all vrow drawing /
 // cursor / selection positioning.
-int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart);
+int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart,
+            int indentCells = 0);
 
 // Enable/disable markdown rendering (Settings "Markdown渲染"). When disabled,
 // every line is drawn as raw text with the marker characters untouched.

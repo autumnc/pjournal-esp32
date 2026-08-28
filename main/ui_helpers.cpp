@@ -223,6 +223,9 @@ static int mdIndentCells(const std::string &line) {
 
 std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
     std::vector<VRow> vrows;
+    bool firstLineIndent = g_settings.firstLineIndent();
+    std::vector<MdLineInfo> mdInfo;
+    if (firstLineIndent) mdInfo = mdClassifyLines(lines);
     for (int li = 0; li < (int)lines.size(); li++) {
         const auto &line = lines[li];
         int len = (int)line.length();
@@ -233,6 +236,14 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
         int maxc = SCREEN_W / g_font.halfAdvance();
         int indent = mdIndentCells(line);
         int prefixEnd = mdPrefixLen(line);
+        int firstIndent = 0;
+        if (firstLineIndent) {
+            const MdLineInfo &info = mdInfo[li];
+            if (info.headingLevel == 0 && !info.list && !info.task &&
+                !info.quote && !info.inCodeBlock && !info.hr) {
+                firstIndent = 4;  // two Chinese-width characters
+            }
+        }
         int pos = 0;
         while (pos < len) {
             int cells = 0;
@@ -241,8 +252,10 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
             int pe = (pos == 0) ? prefixEnd : 0;  // only the first vrow has the marker
             // cap 用标记的格数而非字节数(pe):CJK 标记(如 `一、`/`1、`)字节数大于格数,
             // 用 pe 会让首 vrow 内容多塞几格、画到屏幕右缘之外。
-            int cap = maxc - indent + ((pos == 0) ? byteToCells(line, prefixEnd) : 0);
+            int rowIndent = (pos == 0) ? firstIndent : 0;
+            int cap = maxc - indent - rowIndent + ((pos == 0) ? byteToCells(line, prefixEnd) : 0);
             if (cap > maxc) cap = maxc;
+            if (cap < 1) cap = 1;
             while (end < len) {
                 unsigned char c = (unsigned char)line[end];
                 int cc = charCellWidth(c);
@@ -259,15 +272,15 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
                 end += clen;
             }
             if (end >= len) {
-                vrows.push_back({li, pos, len});
+                vrows.push_back({li, pos, len, rowIndent});
                 break;
             }
             if (lastBreak > pos) {
-                vrows.push_back({li, pos, lastBreak});
+                vrows.push_back({li, pos, lastBreak, rowIndent});
                 pos = lastBreak;
                 while (pos < len && line[pos] == ' ') pos++;
             } else {
-                vrows.push_back({li, pos, end});
+                vrows.push_back({li, pos, end, rowIndent});
                 pos = end;
             }
         }

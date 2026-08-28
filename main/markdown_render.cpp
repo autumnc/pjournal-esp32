@@ -505,9 +505,11 @@ int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos) {
 // Continuation vrows (vrowStart > 0) of heading/task/quote/list lines repeat the
 // prefix indent so wrapped text stays aligned under the first line. Without
 // this, wrapped lines were placed at their whole-line x, i.e. off-screen.
-int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart) {
+int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart,
+            int indentCells) {
+    int extra = indentCells * g_font.halfAdvance();
     if (!s_mdEnabled)
-        return g_font.textWidth(line.substr(vrowStart, bytePos - vrowStart).c_str());
+        return extra + g_font.textWidth(line.substr(vrowStart, bytePos - vrowStart).c_str());
     int cell = g_font.halfAdvance();
     int prefix = 0;
     if (vrowStart > 0) {
@@ -518,11 +520,11 @@ int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vr
             if (m.ok) prefix = (m.start + m.cells) * cell;
         }
     }
-    return mdVisualX(line, info, bytePos) - mdVisualX(line, info, vrowStart) + prefix;
+    return extra + mdVisualX(line, info, bytePos) - mdVisualX(line, info, vrowStart) + prefix;
 }
 
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
-                const MdLineInfo &info) {
+                const MdLineInfo &info, int indentCells) {
     std::vector<MdSeg> segs;
     mdParseLine(line, info, segs);
     int len = (int)line.size();
@@ -535,7 +537,7 @@ void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
         if (seg.end <= start) continue;
         int s = std::max(seg.start, start);
         int e = std::min(seg.end, end);
-        int cx = x + mdVrowX(line, info, s, start);
+        int cx = x + mdVrowX(line, info, s, start, indentCells);
         std::string draw = sliceDraw(seg, s, e);
         if (!draw.empty()) g_font.drawTextStyled(cx, y, draw.c_str(), seg.ts);
     }
