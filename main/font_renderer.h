@@ -5,7 +5,7 @@
 
 #include "symbol_glyphs.h"
 
-// Font renderer: reads from embedded terminus28.fnt / terminus22.fnt blobs
+// Font renderer: reads from embedded terminus28.fnt / terminus22.fnt / terminus16.fnt blobs
 struct TextStyle {
     bool bold = false;      // synthetic bold: glyph drawn twice, 1px offset
     bool underline = false; // line below the whole segment
@@ -18,7 +18,7 @@ class FontRenderer {
 public:
     bool begin();
 
-    // Switch between 24pt and 28pt font
+    // Switch between available font sizes
     bool setSize(int fontSize);
 
     // Draw UTF-8 text at (x, y). y is baseline.
@@ -74,6 +74,7 @@ private:
     bool parseBlob(const uint8_t *blob, size_t sz);
 
     const uint8_t *blob_ = nullptr;
+    const uint8_t *blob_16_ = nullptr;
     const uint8_t *blob_22_ = nullptr;
     const uint8_t *blob_28_ = nullptr;
     bool loaded_ = false;

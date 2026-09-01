@@ -10,10 +10,13 @@ extern const uint8_t terminus28_fnt_start[] asm("_binary_terminus28_fnt_start");
 extern const uint8_t terminus28_fnt_end[]   asm("_binary_terminus28_fnt_end");
 extern const uint8_t terminus22_fnt_start[] asm("_binary_terminus22_fnt_start");
 extern const uint8_t terminus22_fnt_end[]   asm("_binary_terminus22_fnt_end");
+extern const uint8_t terminus16_fnt_start[] asm("_binary_terminus16_fnt_start");
+extern const uint8_t terminus16_fnt_end[]   asm("_binary_terminus16_fnt_end");
 
 bool FontRenderer::begin() {
     blob_28_ = terminus28_fnt_start;
     blob_22_ = terminus22_fnt_start;
+    blob_16_ = terminus16_fnt_start;
     // Default to 28pt
     return setSize(28);
 }
@@ -30,6 +33,9 @@ bool FontRenderer::setSize(int fontSize) {
     } else if (fontSize == 22) {
         blob = blob_22_;
         sz = terminus22_fnt_end - terminus22_fnt_start;
+    } else if (fontSize == 16) {
+        blob = blob_16_;
+        sz = terminus16_fnt_end - terminus16_fnt_start;
     } else {
         return false;
     }

@@ -453,7 +453,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             }
             if (strcmp(f.key, "_font_size") == 0) {
                 int curSize = g_settings.fontSize();
-                int newSize = (curSize == 28) ? 22 : 28;
+                int newSize = (curSize == 28) ? 22 : (curSize == 22) ? 16 : 28;
                 g_settings.setString("font_size", std::to_string(newSize));
                 return APP_SETTINGS;
             }

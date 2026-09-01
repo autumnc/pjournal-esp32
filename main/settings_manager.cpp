@@ -123,6 +123,7 @@ bool SettingsManager::versionHistory() { return get("version_history") == "1"; }
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");
+    if (v == "16") return 16;
     if (v == "22") return 22;
     return 28;
 }

@@ -90,7 +90,7 @@ def parse_bdf(bdf_path):
                     break
                 i += 1
 
-            if encoding is not None and bbx is not None:
+            if encoding is not None and encoding >= 0 and bbx is not None:
                 w, h, xo, yo = bbx
                 # Parse bitmap hex data
                 bitmap = bytearray()

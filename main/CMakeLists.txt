@@ -35,6 +35,7 @@ idf_component_register(SRCS
         "ime/liangfen.bin"
         "terminus28.fnt"
         "terminus22.fnt"
+        "terminus16.fnt"
     PRIV_REQUIRES
         spi_flash
         nvs_flash
@@ -60,4 +61,4 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.1.2")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.2.0")

@@ -435,8 +435,8 @@ void ui_draw_text_centered(int y, const char *text, bool invert, bool bold) {
 void ui_draw_status(const char *left, const char *right) {
     // 状态栏始终用22号字体;画完恢复原字号,不影响同帧后续绘制(如编辑器保存确认框)
     int prev_size = g_font.fontSize();
-    if (prev_size != 22) g_font.setSize(22);
-    int y = STATUS_Y;
+    if (prev_size != STATUS_BAR_FONT_SIZE) g_font.setSize(STATUS_BAR_FONT_SIZE);
+    int y = STATUS_BAR_Y;
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 0, y, SCREEN_W);
     u8g2_SetDrawColor(g_u8g2, 1);

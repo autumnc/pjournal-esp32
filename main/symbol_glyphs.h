@@ -1880,7 +1880,7 @@ inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
     const SymbolGlyph *table = nullptr;
     if (font_size == 28) table = g_symbolGlyphs_28;
     if (font_size == 22) table = g_symbolGlyphs_22;
-    if (!table) table = g_symbolGlyphs_28;
+    if (!table) return nullptr;
     switch (cp) {
     // Common symbols (indices 0-8)
         case 0x25B8: return &table[0];
@@ -1914,16 +1914,16 @@ inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
         case 0xFF5A: if (font_size == 28) return &g_symbolGlyphs_28[28]; return nullptr;
         case 0xFF5F: if (font_size == 28) return &g_symbolGlyphs_28[29]; return nullptr;
         case 0x3000: if (font_size == 22) return &g_symbolGlyphs_22[9]; return nullptr;
-        case 0xE003: if (font_size == 22) return &g_symbolGlyphs_22[10]; return &g_symbolGlyphs_28[30];
-        case 0xE004: if (font_size == 22) return &g_symbolGlyphs_22[11]; return &g_symbolGlyphs_28[31];
-        case 0xE005: if (font_size == 22) return &g_symbolGlyphs_22[12]; return &g_symbolGlyphs_28[32];
-        case 0xE006: if (font_size == 22) return &g_symbolGlyphs_22[13]; return &g_symbolGlyphs_28[33];
-        case 0xE007: if (font_size == 22) return &g_symbolGlyphs_22[14]; return &g_symbolGlyphs_28[34];
-        case 0xE008: if (font_size == 22) return &g_symbolGlyphs_22[15]; return &g_symbolGlyphs_28[35];
-        case 0xE009: if (font_size == 22) return &g_symbolGlyphs_22[16]; return &g_symbolGlyphs_28[36];
-        case 0xE00A: if (font_size == 22) return &g_symbolGlyphs_22[17]; return &g_symbolGlyphs_28[37];
-        case 0xE00B: if (font_size == 22) return &g_symbolGlyphs_22[18]; return &g_symbolGlyphs_28[38];
-        case 0xE00C: if (font_size == 22) return &g_symbolGlyphs_22[19]; return &g_symbolGlyphs_28[39];
+        case 0xE003: if (font_size == 22) return &g_symbolGlyphs_22[10]; if (font_size == 28) return &g_symbolGlyphs_28[30]; return nullptr;
+        case 0xE004: if (font_size == 22) return &g_symbolGlyphs_22[11]; if (font_size == 28) return &g_symbolGlyphs_28[31]; return nullptr;
+        case 0xE005: if (font_size == 22) return &g_symbolGlyphs_22[12]; if (font_size == 28) return &g_symbolGlyphs_28[32]; return nullptr;
+        case 0xE006: if (font_size == 22) return &g_symbolGlyphs_22[13]; if (font_size == 28) return &g_symbolGlyphs_28[33]; return nullptr;
+        case 0xE007: if (font_size == 22) return &g_symbolGlyphs_22[14]; if (font_size == 28) return &g_symbolGlyphs_28[34]; return nullptr;
+        case 0xE008: if (font_size == 22) return &g_symbolGlyphs_22[15]; if (font_size == 28) return &g_symbolGlyphs_28[35]; return nullptr;
+        case 0xE009: if (font_size == 22) return &g_symbolGlyphs_22[16]; if (font_size == 28) return &g_symbolGlyphs_28[36]; return nullptr;
+        case 0xE00A: if (font_size == 22) return &g_symbolGlyphs_22[17]; if (font_size == 28) return &g_symbolGlyphs_28[37]; return nullptr;
+        case 0xE00B: if (font_size == 22) return &g_symbolGlyphs_22[18]; if (font_size == 28) return &g_symbolGlyphs_28[38]; return nullptr;
+        case 0xE00C: if (font_size == 22) return &g_symbolGlyphs_22[19]; if (font_size == 28) return &g_symbolGlyphs_28[39]; return nullptr;
 case 0xE00D: if (font_size == 22) return &g_symbolGlyphs_22[20]; return nullptr;
         case 0xE00E: if (font_size == 22) return &g_symbolGlyphs_22[21]; return nullptr;
         case 0xE00F: if (font_size == 22) return &g_symbolGlyphs_22[22]; return nullptr;
@@ -1957,16 +1957,16 @@ case 0xE00D: if (font_size == 22) return &g_symbolGlyphs_22[20]; return nullptr;
         case 0xE02B: if (font_size == 22) return &g_symbolGlyphs_22[50]; return nullptr;
         case 0xE02C: if (font_size == 22) return &g_symbolGlyphs_22[51]; return nullptr;
         case 0xE02D: if (font_size == 22) return &g_symbolGlyphs_22[52]; return nullptr;
-                case 0x2022: return (font_size == 28) ? &g_symbolGlyphs_28[40] : &g_symbolGlyphs_22[53];
-                case 0x2610: return (font_size == 28) ? &g_symbolGlyphs_28[41] : &g_symbolGlyphs_22[54];
-                case 0x2713: return (font_size == 28) ? &g_symbolGlyphs_28[42] : &g_symbolGlyphs_22[55];
-                case 0x25A0: return (font_size == 28) ? &g_symbolGlyphs_28[43] : &g_symbolGlyphs_22[56];
-                case 0xF03A4: return (font_size == 28) ? &g_symbolGlyphs_28[44] : &g_symbolGlyphs_22[57];
-                case 0xF03A7: return (font_size == 28) ? &g_symbolGlyphs_28[45] : &g_symbolGlyphs_22[58];
-                case 0xF03AA: return (font_size == 28) ? &g_symbolGlyphs_28[46] : &g_symbolGlyphs_22[59];
-                case 0xF03AD: return (font_size == 28) ? &g_symbolGlyphs_28[47] : &g_symbolGlyphs_22[60];
-                case 0xF03B1: return (font_size == 28) ? &g_symbolGlyphs_28[48] : &g_symbolGlyphs_22[61];
-                case 0xF03B3: return (font_size == 28) ? &g_symbolGlyphs_28[49] : &g_symbolGlyphs_22[62];
+                case 0x2022: return (font_size == 28) ? &g_symbolGlyphs_28[40] : (font_size == 22) ? &g_symbolGlyphs_22[53] : nullptr;
+                case 0x2610: return (font_size == 28) ? &g_symbolGlyphs_28[41] : (font_size == 22) ? &g_symbolGlyphs_22[54] : nullptr;
+                case 0x2713: return (font_size == 28) ? &g_symbolGlyphs_28[42] : (font_size == 22) ? &g_symbolGlyphs_22[55] : nullptr;
+                case 0x25A0: return (font_size == 28) ? &g_symbolGlyphs_28[43] : (font_size == 22) ? &g_symbolGlyphs_22[56] : nullptr;
+                case 0xF03A4: return (font_size == 28) ? &g_symbolGlyphs_28[44] : (font_size == 22) ? &g_symbolGlyphs_22[57] : nullptr;
+                case 0xF03A7: return (font_size == 28) ? &g_symbolGlyphs_28[45] : (font_size == 22) ? &g_symbolGlyphs_22[58] : nullptr;
+                case 0xF03AA: return (font_size == 28) ? &g_symbolGlyphs_28[46] : (font_size == 22) ? &g_symbolGlyphs_22[59] : nullptr;
+                case 0xF03AD: return (font_size == 28) ? &g_symbolGlyphs_28[47] : (font_size == 22) ? &g_symbolGlyphs_22[60] : nullptr;
+                case 0xF03B1: return (font_size == 28) ? &g_symbolGlyphs_28[48] : (font_size == 22) ? &g_symbolGlyphs_22[61] : nullptr;
+                case 0xF03B3: return (font_size == 28) ? &g_symbolGlyphs_28[49] : (font_size == 22) ? &g_symbolGlyphs_22[62] : nullptr;
 
         default: return nullptr;
     }

@@ -16,6 +16,9 @@ struct VRow { int lineIdx; int start; int end; int indentCells = 0; };
 // UI constants - screen dimensions are fixed
 #define SCREEN_W 400
 #define SCREEN_H 300
+#define STATUS_BAR_FONT_SIZE 22
+#define STATUS_BAR_H 22
+#define STATUS_BAR_Y (SCREEN_H - STATUS_BAR_H - 2)
 
 // Font-dependent metrics (dynamic via g_font)
 #define FONT_H (g_font.lineHeight())

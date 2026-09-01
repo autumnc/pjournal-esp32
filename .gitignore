@@ -11,5 +11,6 @@ build/
 !/main/terminus24.fnt
 !/main/terminus22.fnt
 !/main/terminus20.fnt
+!/main/terminus16.fnt
 managed_components/
 __pycache__/
