@@ -1079,7 +1079,9 @@ static void drawEditor() {
     const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
     for (int i = 0; i < visibleVrows && (g_editor.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_editor.scroll + i];
-        mdDrawVrow(4, y + i * LINE_SPACING, g_editor.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
+        int mdCursor = (vr.lineIdx == g_editor.cy) ? g_editor.cx : -1;
+        mdDrawVrow(4, y + i * LINE_SPACING, g_editor.lines[vr.lineIdx], vr.start, vr.end,
+                   mdInfo[vr.lineIdx], vr.indentCells, mdCursor);
     }
 
     // Selection highlight
@@ -1099,9 +1101,12 @@ static void drawEditor() {
             if (hlStart >= hlEnd) continue;
             // Highlight range [hlStart, hlEnd) on this vrow
             const MdLineInfo &mdi = mdInfo[lineIdx];
-            std::string sel = g_editor.lines[lineIdx].substr(hlStart, hlEnd - hlStart);
-            int xOff = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlStart, rowStart, vr.indentCells);
-            int selW = g_font.textWidth(sel.c_str());
+            int mdCursor = (lineIdx == g_editor.cy) ? g_editor.cx : -1;
+            int xOff = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlStart, rowStart,
+                                   vr.indentCells, mdCursor);
+            int selEndX = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlEnd, rowStart,
+                                      vr.indentCells, mdCursor);
+            int selW = selEndX - xOff;
             int ly = y + i * LINE_SPACING;
             u8g2_SetDrawColor(g_u8g2, 2);  // XOR mode
             u8g2_DrawBox(g_u8g2, xOff, ly - g_font.ascent(), selW, FONT_H);
@@ -1113,7 +1118,7 @@ static void drawEditor() {
         auto &vr = vrows[cursorVR];
         const std::string &line = g_editor.lines[vr.lineIdx];
         const MdLineInfo &mdi = mdInfo[vr.lineIdx];
-        int cx = 4 + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells);
+        int cx = 4 + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells, g_editor.cx);
         int cy_draw = y + (cursorVR - g_editor.scroll) * LINE_SPACING;
         int cw = g_font.halfAdvance();
         if (g_editor.cx < (int)line.length()) {

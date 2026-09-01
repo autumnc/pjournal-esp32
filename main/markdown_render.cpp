@@ -23,6 +23,14 @@ struct MdSeg {
 
 bool s_mdEnabled = true;  // cleared when "Markdown渲染" setting is off
 
+bool cursorInMarker(int cursorBytePos, int start, int end) {
+    return cursorBytePos >= start && cursorBytePos < end;
+}
+
+bool cursorInConstruct(int cursorBytePos, int start, int end) {
+    return cursorBytePos >= start && cursorBytePos <= end;
+}
+
 // Spaces whose width matches the raw byte range [from,to). Keeps the width
 // invariant even if the raw range contains non-ASCII bytes.
 std::string spacesForWidth(const std::string &line, int from, int to) {
@@ -256,7 +264,7 @@ static int mdContentWidth(const std::string &line, int from, int to) {
 // Scan [from, len) for paired inline markers. Each emitted segment preserves
 // the width of its raw byte range.
 void mdParseInline(const std::string &line, int from, const TextStyle &base,
-                   std::vector<MdSeg> &segs) {
+                   std::vector<MdSeg> &segs, int cursorBytePos = -1) {
     int len = (int)line.size();
     int plainStart = from;
     while (plainStart < len) {
@@ -274,6 +282,11 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             if (cclose < 0) {  // unmatched → literal star
                 segs.push_back({m, m + 1, base, line.substr(m, 1)});
                 plainStart = m + 1;
+                continue;
+            }
+            if (cursorInConstruct(cursorBytePos, m, cclose + n)) {
+                segs.push_back({m, cclose + n, base, line.substr(m, cclose + n - m)});
+                plainStart = cclose + n;
                 continue;
             }
             TextStyle st = base;
@@ -294,6 +307,11 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
+            if (cursorInConstruct(cursorBytePos, m, cclose + 1)) {
+                segs.push_back({m, cclose + 1, base, line.substr(m, cclose + 1 - m)});
+                plainStart = cclose + 1;
+                continue;
+            }
             TextStyle st = base;
             st.invert = true;
             segs.push_back({m, m + 1, base, " "});
@@ -307,6 +325,11 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             if (cclose < 0 || cclose >= len) {  // unmatched → literal
                 segs.push_back({m, m + 1, base, line.substr(m, 1)});
                 plainStart = m + 1;
+                continue;
+            }
+            if (cursorInConstruct(cursorBytePos, m, cclose + 2)) {
+                segs.push_back({m, cclose + 2, base, line.substr(m, cclose + 2 - m)});
+                plainStart = cclose + 2;
                 continue;
             }
             TextStyle st = base;
@@ -324,6 +347,11 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
+            if (cursorInConstruct(cursorBytePos, m, cclose + 2)) {
+                segs.push_back({m, cclose + 2, base, line.substr(m, cclose + 2 - m)});
+                plainStart = cclose + 2;
+                continue;
+            }
             TextStyle st = base;
             st.emph = true;
             segs.push_back({m, m + 2, base, " "});
@@ -337,6 +365,11 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             if (p >= 0 && p < len) {
                 int cp = (int)line.find(')', p + 2);
                 if (cp >= 0 && cp < len) {
+                    if (cursorInConstruct(cursorBytePos, m, cp + 1)) {
+                        segs.push_back({m, cp + 1, base, line.substr(m, cp + 1 - m)});
+                        plainStart = cp + 1;
+                        continue;
+                    }
                     TextStyle st = base;
                     st.invert = true;
                     st.underline = true;
@@ -355,7 +388,8 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
         emitPlain(line, plainStart, len, base, segs);
 }
 
-void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<MdSeg> &segs) {
+void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<MdSeg> &segs,
+                 int cursorBytePos = -1) {
     int len = (int)line.size();
     if (!s_mdEnabled) {
         segs.push_back({0, len, TextStyle{}, line});
@@ -382,14 +416,20 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
             "\xF3\xB0\x8E\xA4", "\xF3\xB0\x8E\xA7", "\xF3\xB0\x8E\xAA",
             "\xF3\xB0\x8E\xAD", "\xF3\xB0\x8E\xB1", "\xF3\xB0\x8E\xB3",
         };
-        // Heading glyph advance is 2 cells; content starts right after it.
-        segs.push_back({0, n, base, kLevelGlyph[info.headingLevel - 1]});
+        if (cursorInMarker(cursorBytePos, 0, n)) {
+            segs.push_back({0, n, TextStyle{}, line.substr(0, n)});
+        } else {
+            // Heading glyph advance is 2 cells; content starts right after it.
+            segs.push_back({0, n, base, kLevelGlyph[info.headingLevel - 1]});
+        }
         pos = n;
     } else if (info.list || info.task) {
         MdListMarker m = mdListMarker(line);
         if (m.ok) {
             int mend = m.start + m.len;
-            if (m.task) {
+            if (cursorInMarker(cursorBytePos, 0, mend)) {
+                segs.push_back({0, mend, base, line.substr(0, mend)});
+            } else if (m.task) {
                 bool checked = (m.start + 3 < len) &&
                                (line[m.start + 3] == 'x' || line[m.start + 3] == 'X');
                 std::string repl = checked ? " \xE2\x9C\x93 " : " \xE2\x98\x90 ";  // ☐/✓, content after marker
@@ -405,11 +445,14 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
             pos = mend;
         }
     } else if (info.quote) {
-        segs.push_back({0, 2, base, "    "});  // bar at cell 4, 1-space gap, content at cell 5
+        if (cursorInMarker(cursorBytePos, 0, 2))
+            segs.push_back({0, 2, base, line.substr(0, 2)});
+        else
+            segs.push_back({0, 2, base, "    "});  // bar at cell 4, 1-space gap, content at cell 5
         pos = 2;
     }
 
-    mdParseInline(line, pos, base, segs);
+    mdParseInline(line, pos, base, segs, cursorBytePos);
 }
 
 std::string sliceDraw(const MdSeg &seg, int s, int e) {
@@ -418,6 +461,34 @@ std::string sliceDraw(const MdSeg &seg, int s, int e) {
     int n = e - s;
     if ((int)seg.drawText.size() >= so + n) return seg.drawText.substr(so, n);
     return seg.drawText;  // symbol segments are never partially sliced
+}
+
+int segWidthToByte(const MdSeg &seg, int bytePos) {
+    if (bytePos <= seg.start) return 0;
+    if (bytePos >= seg.end) return g_font.textWidth(seg.drawText.c_str());
+    return g_font.textWidth(sliceDraw(seg, seg.start, bytePos).c_str());
+}
+
+int mdParsedX(const std::string &line, const MdLineInfo &info, int bytePos,
+              int cursorBytePos) {
+    std::vector<MdSeg> segs;
+    mdParseLine(line, info, segs, cursorBytePos);
+    int px = 0;
+    for (auto &seg : segs) {
+        if (bytePos >= seg.end) px += g_font.textWidth(seg.drawText.c_str());
+        else return px + segWidthToByte(seg, bytePos);
+    }
+    return px;
+}
+
+int mdContinuationPrefix(const std::string &line, const MdLineInfo &info, int cursorBytePos) {
+    if (info.headingLevel > 0) return mdParsedX(line, info, info.headingLevel, cursorBytePos);
+    if (info.quote) return mdParsedX(line, info, 2, cursorBytePos);
+    if (info.list || info.task) {
+        MdListMarker m = mdListMarker(line);
+        if (m.ok) return mdParsedX(line, info, m.start + m.len, cursorBytePos);
+    }
+    return 0;
 }
 
 }  // namespace
@@ -473,8 +544,10 @@ std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines) {
     return out;
 }
 
-int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos) {
+int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos,
+              int cursorBytePos) {
     if (!s_mdEnabled) return g_font.textWidth(line.substr(0, bytePos).c_str());
+    if (cursorBytePos >= 0) return mdParsedX(line, info, bytePos, cursorBytePos);
     int cell = g_font.halfAdvance();
     if (info.headingLevel > 0) {
         if (bytePos >= info.headingLevel)
@@ -506,10 +579,15 @@ int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos) {
 // prefix indent so wrapped text stays aligned under the first line. Without
 // this, wrapped lines were placed at their whole-line x, i.e. off-screen.
 int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart,
-            int indentCells) {
+            int indentCells, int cursorBytePos) {
     int extra = indentCells * g_font.halfAdvance();
     if (!s_mdEnabled)
         return extra + g_font.textWidth(line.substr(vrowStart, bytePos - vrowStart).c_str());
+    if (cursorBytePos >= 0) {
+        int prefix = vrowStart > 0 ? mdContinuationPrefix(line, info, cursorBytePos) : 0;
+        return extra + mdVisualX(line, info, bytePos, cursorBytePos) -
+               mdVisualX(line, info, vrowStart, cursorBytePos) + prefix;
+    }
     int cell = g_font.halfAdvance();
     int prefix = 0;
     if (vrowStart > 0) {
@@ -524,9 +602,9 @@ int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vr
 }
 
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
-                const MdLineInfo &info, int indentCells) {
+                const MdLineInfo &info, int indentCells, int cursorBytePos) {
     std::vector<MdSeg> segs;
-    mdParseLine(line, info, segs);
+    mdParseLine(line, info, segs, cursorBytePos);
     int len = (int)line.size();
     if (end > len) end = len;
 
@@ -537,12 +615,12 @@ void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
         if (seg.end <= start) continue;
         int s = std::max(seg.start, start);
         int e = std::min(seg.end, end);
-        int cx = x + mdVrowX(line, info, s, start, indentCells);
+        int cx = x + mdVrowX(line, info, s, start, indentCells, cursorBytePos);
         std::string draw = sliceDraw(seg, s, e);
         if (!draw.empty()) g_font.drawTextStyled(cx, y, draw.c_str(), seg.ts);
     }
 
-    if (info.quote) {
+    if (info.quote && !cursorInMarker(cursorBytePos, 0, 2)) {
         u8g2_SetDrawColor(g_u8g2, 0);
         u8g2_DrawBox(g_u8g2, x + 3 * g_font.halfAdvance(), y - g_font.ascent(), 2, g_font.lineHeight());
         // do NOT flip color back to 1 here: the next vrow's text would then be
