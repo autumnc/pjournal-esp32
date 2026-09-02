@@ -118,10 +118,10 @@ def md_parse_inline(line, frm, base, segs):
             if n >= 3: st['bold'] = True; st['underline'] = True
             elif n == 2: st['bold'] = True
             else: st['underline'] = True
-            segs.append([m, m+n, dict(base), b" "])
+            segs.append([m, m+n, dict(base), b""])
             if cc > m + n:
                 emit_plain(line, m + n, cc, st, segs)
-            segs.append([cc, cc+n, dict(base), b" "])
+            segs.append([cc, cc+n, dict(base), b""])
             plain = cc + n
             continue
         if c == BT:
@@ -129,9 +129,9 @@ def md_parse_inline(line, frm, base, segs):
             if cc < 0 or cc >= ln:
                 segs.append([m, m+1, dict(base), line[m:m+1]]); plain = m + 1; continue
             st = dict(base); st['invert'] = True
-            segs.append([m, m+1, dict(base), b" "])
+            segs.append([m, m+1, dict(base), b""])
             emit_plain(line, m + 1, cc, st, segs)
-            segs.append([cc, cc+1, dict(base), b" "])
+            segs.append([cc, cc+1, dict(base), b""])
             plain = cc + 1
             continue
         if c == TL and m+1 < ln and line[m+1] == TL:
@@ -139,9 +139,9 @@ def md_parse_inline(line, frm, base, segs):
             if cc < 0 or cc >= ln:
                 segs.append([m, m+1, dict(base), line[m:m+1]]); plain = m + 1; continue
             st = dict(base); st['strike'] = True
-            segs.append([m, m+2, dict(base), b" "])
+            segs.append([m, m+2, dict(base), b""])
             emit_plain(line, m + 2, cc, st, segs)
-            segs.append([cc, cc+2, dict(base), b" "])
+            segs.append([cc, cc+2, dict(base), b""])
             plain = cc + 2
             continue
         if c == EQ and m+1 < ln and line[m+1] == EQ:
@@ -149,9 +149,9 @@ def md_parse_inline(line, frm, base, segs):
             if cc < 0 or cc >= ln:
                 segs.append([m, m+1, dict(base), line[m:m+1]]); plain = m + 1; continue
             st = dict(base); st['emph'] = True
-            segs.append([m, m+2, dict(base), b" "])
+            segs.append([m, m+2, dict(base), b""])
             emit_plain(line, m + 2, cc, st, segs)
-            segs.append([cc, cc+2, dict(base), b" "])
+            segs.append([cc, cc+2, dict(base), b""])
             plain = cc + 2
             continue
         if c == LB:
@@ -206,6 +206,8 @@ def md_list_marker(line):
 
 def md_visual_x(line, info, pos):
     cell = 1  # cells
+    if info['inCodeBlock'] or info['hr']:
+        return width(line[0:pos])
     if info['headingLevel']:
         n = info['headingLevel']
         if pos >= n:
@@ -288,12 +290,11 @@ def md_content_width(line, frm, to):
             px += 1; i = m + 1; continue
         open_end = m + open_len
         if to <= open_end:
-            px += 1; break
+            break
         close_end = close_idx + close_len
         if to <= close_idx:
-            px += 1 + width(line[content_start:to]); break
-        px += 1 + width(line[content_start:close_idx])
-        if to >= close_end: px += 1
+            px += width(line[content_start:to]); break
+        px += width(line[content_start:close_idx])
         i = close_end
     return px
 

@@ -5,9 +5,9 @@
 
 // Markdown live rendering for the editor.
 // Block markers (#, -, >, task) are width-preserving: replaced by same-width
-// symbols. Inline markers (** , ==, ~~, `, *) render as a single space on each
-// side (uniform 1-cell padding); mdVisualX/mdVrowX are marker-aware so cursor /
-// selection / wrapped-row placement stay aligned with what's drawn.
+// symbols. Paired inline markers (** , ==, ~~, `, *) are hidden without taking
+// space; mdVisualX/mdVrowX are marker-aware so cursor / selection / wrapped-row
+// placement stay aligned with what's drawn.
 
 struct MdLineInfo {
     int headingLevel = 0;  // 1..6, 0 = not a heading

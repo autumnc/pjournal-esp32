@@ -18,7 +18,7 @@ namespace {
 struct MdSeg {
     int start, end;         // byte range in the raw line
     TextStyle ts;           // style to render
-    std::string drawText;   // replacement text, width == raw width of [start,end)
+    std::string drawText;   // replacement text for [start,end), possibly empty
 };
 
 bool s_mdEnabled = true;  // cleared when "Markdown渲染" setting is off
@@ -202,10 +202,9 @@ int findStars(const std::string &line, int from, int len, int n) {
     return -1;
 }
 
-// Marker-aware visual width (px) of line[from,to): each inline marker pair
-// renders as a single space on each side (not one per marker char), so styled
-// regions get uniform 1-cell padding. Links and escapes stay width-neutral.
-// Mirrors mdParseInline pairing so the cursor/selection match what's drawn.
+// Marker-aware visual width (px) of line[from,to): paired inline markers are
+// hidden without taking space. Links and escapes stay width-neutral. Mirrors
+// mdParseInline pairing so the cursor/selection match what's drawn.
 static int mdContentWidth(const std::string &line, int from, int to) {
     int len = (int)line.size();
     if (to > len) to = len;
@@ -248,21 +247,19 @@ static int mdContentWidth(const std::string &line, int from, int to) {
         }
         if (closeIdx < 0) { px += g_font.halfAdvance(); i = m + 1; continue; }  // unmatched literal
         int openEnd = m + openLen;
-        if (to <= openEnd) { px += g_font.halfAdvance(); break; }  // inside open marker
+        if (to <= openEnd) break;  // inside hidden open marker
         int closeEnd = closeIdx + closeLen;
         if (to <= closeIdx) {  // inside styled content
-            px += g_font.halfAdvance() + g_font.textWidth(line.substr(contentStart, to - contentStart).c_str());
+            px += g_font.textWidth(line.substr(contentStart, to - contentStart).c_str());
             break;
         }
-        px += g_font.halfAdvance() + g_font.textWidth(line.substr(contentStart, closeIdx - contentStart).c_str());
-        if (to >= closeEnd) px += g_font.halfAdvance();
+        px += g_font.textWidth(line.substr(contentStart, closeIdx - contentStart).c_str());
         i = closeEnd;
     }
     return px;
 }
 
-// Scan [from, len) for paired inline markers. Each emitted segment preserves
-// the width of its raw byte range.
+// Scan [from, len) for paired inline markers.
 void mdParseInline(const std::string &line, int from, const TextStyle &base,
                    std::vector<MdSeg> &segs, int cursorBytePos = -1) {
     int len = (int)line.size();
@@ -293,10 +290,10 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             if (n >= 3) { st.bold = true; st.underline = true; }
             else if (n == 2) st.bold = true;
             else st.underline = true;  // single * = italic → underline
-            segs.push_back({m, m + n, base, " "});
+            segs.push_back({m, m + n, base, ""});
             if (cclose > m + n)
                 emitPlain(line, m + n, cclose, st, segs);
-            segs.push_back({cclose, cclose + n, base, " "});
+            segs.push_back({cclose, cclose + n, base, ""});
             plainStart = cclose + n;
             continue;
         }
@@ -314,9 +311,9 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             }
             TextStyle st = base;
             st.invert = true;
-            segs.push_back({m, m + 1, base, " "});
+            segs.push_back({m, m + 1, base, ""});
             emitPlain(line, m + 1, cclose, st, segs);
-            segs.push_back({cclose, cclose + 1, base, " "});
+            segs.push_back({cclose, cclose + 1, base, ""});
             plainStart = cclose + 1;
             continue;
         }
@@ -334,9 +331,9 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             }
             TextStyle st = base;
             st.strike = true;
-            segs.push_back({m, m + 2, base, " "});
+            segs.push_back({m, m + 2, base, ""});
             emitPlain(line, m + 2, cclose, st, segs);
-            segs.push_back({cclose, cclose + 2, base, " "});
+            segs.push_back({cclose, cclose + 2, base, ""});
             plainStart = cclose + 2;
             continue;
         }
@@ -354,9 +351,9 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             }
             TextStyle st = base;
             st.emph = true;
-            segs.push_back({m, m + 2, base, " "});
+            segs.push_back({m, m + 2, base, ""});
             emitPlain(line, m + 2, cclose, st, segs);
-            segs.push_back({cclose, cclose + 2, base, " "});
+            segs.push_back({cclose, cclose + 2, base, ""});
             plainStart = cclose + 2;
             continue;
         }
@@ -548,6 +545,7 @@ int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos,
               int cursorBytePos) {
     if (!s_mdEnabled) return g_font.textWidth(line.substr(0, bytePos).c_str());
     if (cursorBytePos >= 0) return mdParsedX(line, info, bytePos, cursorBytePos);
+    if (info.inCodeBlock || info.hr) return g_font.textWidth(line.substr(0, bytePos).c_str());
     int cell = g_font.halfAdvance();
     if (info.headingLevel > 0) {
         if (bytePos >= info.headingLevel)
