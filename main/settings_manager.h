@@ -32,6 +32,7 @@ public:
     bool markdownRender();
     bool firstLineIndent();
     bool versionHistory();
+    bool recoveryDraft();
     int fontSize();
     std::string appMode();  // "journal"(个人日记) 或 "quick"(快捷编辑)
 

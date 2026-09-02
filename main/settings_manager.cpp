@@ -120,6 +120,7 @@ bool SettingsManager::sleepScreen() { return get("sleep_screen") == "1"; }  // d
 bool SettingsManager::markdownRender() { return get("md_render") != "0"; }  // default on
 bool SettingsManager::firstLineIndent() { return get("first_line_indent") == "1"; }  // default off
 bool SettingsManager::versionHistory() { return get("version_history") == "1"; }  // default off
+bool SettingsManager::recoveryDraft() { return get("recovery_draft") != "0"; }  // default on
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");

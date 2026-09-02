@@ -43,6 +43,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"timezone", "时区(如CST-8)", false, false},
     {"ntp_server", "NTP服务器", false, false},
     {"auto_save", "自动保存", false, false},
+    {"recovery_draft", "恢复草稿", false, false},
     {"version_history", "版本历史", false, false},
     {"auto_sleep", "自动休眠", false, false},
     {"sleep_screen", "休眠保留画面", false, false},
@@ -57,13 +58,15 @@ static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS
 static bool isToggleField(const char *key) {
     return strcmp(key, "auto_save") == 0 || strcmp(key, "auto_sleep") == 0 ||
            strcmp(key, "sleep_screen") == 0 || strcmp(key, "md_render") == 0 ||
-           strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0;
+           strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0 ||
+           strcmp(key, "recovery_draft") == 0;
 }
 
 static bool toggleValue(const char *key) {
     std::string v = g_settings.getString(key);
     if (strcmp(key, "auto_sleep") == 0) return v != "0";  // 默认开
     if (strcmp(key, "md_render") == 0) return v != "0";   // 默认开
+    if (strcmp(key, "recovery_draft") == 0) return v != "0";  // 默认开
     return v == "1";  // auto_save: 默认关
 }
 

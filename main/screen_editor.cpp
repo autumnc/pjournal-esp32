@@ -1371,7 +1371,7 @@ void screen_editor_init(ScreenContext &ctx) {
     clearUndoHistory();
 
     std::string recoveryContent, recoveryMeta;
-    if (g_journal.loadRecoveryDraft(recoveryContent, recoveryMeta)) {
+    if (g_settings.recoveryDraft() && g_journal.loadRecoveryDraft(recoveryContent, recoveryMeta)) {
         g_editor.recoveryPrompt = true;
         g_editor.recoveryContent = recoveryContent;
         g_editor.recoveryMeta = recoveryMeta;
@@ -1946,10 +1946,10 @@ bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
         if (shouldCommit) {
             if (saveCurrentContent(false)) {
                 g_editor.modifiedSinceSave = false;
-            } else if (g_editor.modifiedSinceSave) {
+            } else if (g_editor.modifiedSinceSave && g_settings.recoveryDraft()) {
                 saveRecoveryDraftIfChanged();
             }
-        } else if (g_editor.modifiedSinceSave) {
+        } else if (g_editor.modifiedSinceSave && g_settings.recoveryDraft()) {
             saveRecoveryDraftIfChanged();
         }
     }
