@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <set>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -65,6 +66,8 @@ static struct {
     bool mdInfoDirty = true;
     std::vector<MdLineInfo> cachedMdInfo;
     bool cachedMdOn = false;
+    // 折叠的标题行号(Ctrl+T 切换)。视图态:不随文本持久化,按行号平移维护。
+    std::set<int> foldedHeadings;
     std::vector<EditorSnapshot> undoStack;
     std::vector<EditorSnapshot> redoStack;
     size_t undoBytes = 0;
@@ -127,6 +130,25 @@ static void markDirty() {
     g_editor.vrowsDirty = true;
     g_editor.wordCountDirty = true;
     g_editor.mdInfoDirty = true;
+}
+
+// 行数变化时平移折叠标题的行号,保持折叠集与缓冲区对齐。
+static void foldLinesInserted(int at, int count) {
+    if (g_editor.foldedHeadings.empty()) return;
+    std::set<int> shifted;
+    for (int e : g_editor.foldedHeadings)
+        shifted.insert(e >= at ? e + count : e);
+    g_editor.foldedHeadings.swap(shifted);
+}
+
+static void foldLinesErased(int at, int count) {
+    if (g_editor.foldedHeadings.empty()) return;
+    std::set<int> shifted;
+    for (int e : g_editor.foldedHeadings) {
+        if (e >= at && e < at + count) continue;   // 被删除的折叠标题
+        shifted.insert(e >= at + count ? e - count : e);
+    }
+    g_editor.foldedHeadings.swap(shifted);
 }
 
 static uint32_t fnv1a(const std::string &s) {
@@ -194,9 +216,11 @@ static void deleteSelection() {
     g_editor.lines[start.cy] = g_editor.lines[start.cy].substr(0, start.cx)
         + g_editor.lines[end.cy].substr(end.cx);
     // Remove lines between start and end
-    if (end.cy > start.cy)
+    if (end.cy > start.cy) {
         g_editor.lines.erase(g_editor.lines.begin() + start.cy + 1,
                              g_editor.lines.begin() + end.cy + 1);
+        foldLinesErased(start.cy + 1, end.cy - start.cy);
+    }
     g_editor.cy = start.cy;
     g_editor.cx = start.cx;
     g_editor.hasSelection = false;
@@ -250,11 +274,18 @@ static int editorPageRows() {
     return rows;
 }
 
+static const std::vector<MdLineInfo>& getMdInfo(bool mdOn);
+
 static const std::vector<VRow>& getVrows() {
     bool firstLineIndent = g_settings.firstLineIndent();
     if (g_editor.vrowsDirty || g_editor.cachedFirstLineIndent != firstLineIndent) {
         g_editor.cachedFirstLineIndent = firstLineIndent;
-        g_editor.cachedVrows = buildVrows(g_editor.lines);
+        // 传缓存避免重复 classify;md 渲染关闭时缓存全零,须传 nullptr 让
+        // buildVrows 自行 classify(首行缩进仍需区分标题/列表)。
+        bool mdOn = g_settings.markdownRender();
+        const auto &mi = getMdInfo(mdOn);
+        g_editor.cachedVrows = buildVrows(g_editor.lines, mdOn ? &mi : nullptr,
+                                          &g_editor.foldedHeadings);
         g_editor.vrowsDirty = false;
     }
     return g_editor.cachedVrows;
@@ -297,6 +328,7 @@ static std::string currentEditorText() {
 
 static void loadLinesIntoEditor(const std::string &content) {
     g_editor.lines.clear();
+    g_editor.foldedHeadings.clear();  // 折叠是视图态,整篇重载(undo/加载)后不保留
     if (content.empty()) {
         g_editor.lines.push_back("");
         g_editor.cx = g_editor.cy = 0;
@@ -949,6 +981,7 @@ static const char *HELP_LINES[] = {
     "Ctrl+Z撤销  Ctrl+R重做",
     "Ctrl+S保存  Ctrl+Q退出",
     "Ctrl+O润色选区",
+    "Ctrl+T折叠/展开标题",
     "Ctrl+I灵感面板",
     "Ctrl+F发送Flomo",
     "Ctrl+Y历史版本",
@@ -1022,8 +1055,33 @@ static AppState screen_editor_help_handle(int key, ScreenContext &ctx) {
 // status bar — used by the voice dictation screen as a transparent background.
 static bool s_skipStatusBarAndIme = false;
 
+// 光标落入折叠区时自动展开最近的折叠标题。放 drawEditor 入口覆盖所有重绘路径
+// (主循环尾部、搜索跳转、Ctrl+X/V 早退、idle)。
+static void reconcileFoldsForCursor() {
+    if (g_editor.foldedHeadings.empty()) return;
+    int cy = g_editor.cy;
+    const auto &mi = getMdInfo(g_settings.markdownRender());
+    if (cy < 0 || cy >= (int)mi.size()) return;
+    int hideLevel = 0, foldAt = -1;
+    for (int li = 0; li <= cy; li++) {
+        int lvl = mi[li].headingLevel;
+        bool isH = lvl > 0 && !mi[li].inCodeBlock;
+        if (hideLevel != 0 && !(isH && lvl <= hideLevel)) continue;
+        if (isH) {
+            if (g_editor.foldedHeadings.count(li)) { hideLevel = lvl; foldAt = li; }
+            else { hideLevel = 0; foldAt = -1; }
+        }
+    }
+    // foldAt == cy 时光标在折叠标题行本身(可见边界),不算落入折叠区
+    if (hideLevel != 0 && foldAt >= 0 && foldAt != cy) {
+        g_editor.foldedHeadings.erase(foldAt);
+        g_editor.vrowsDirty = true;
+    }
+}
+
 static void drawEditor() {
     g_editor.drawnOnce = true;
+    reconcileFoldsForCursor();
     int y = FONT_H;
 
     if (g_editor.promptMode && !g_editor.promptText.empty()) {
@@ -1080,8 +1138,10 @@ static void drawEditor() {
     for (int i = 0; i < visibleVrows && (g_editor.scroll + i) < (int)vrows.size(); i++) {
         auto &vr = vrows[g_editor.scroll + i];
         int mdCursor = (vr.lineIdx == g_editor.cy) ? g_editor.cx : -1;
+        bool folded = !g_editor.foldedHeadings.empty() &&
+                      g_editor.foldedHeadings.count(vr.lineIdx);
         mdDrawVrow(4, y + i * LINE_SPACING, g_editor.lines[vr.lineIdx], vr.start, vr.end,
-                   mdInfo[vr.lineIdx], vr.indentCells, mdCursor);
+                   mdInfo[vr.lineIdx], vr.indentCells, mdCursor, folded);
     }
 
     // Selection highlight
@@ -1643,6 +1703,17 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         }
     }
 
+    // ── Heading fold toggle (Ctrl+T) ─────────────────────────────────
+    if (key == 0x14) { // Ctrl+T — 折叠/展开当前标题下的正文
+        const auto &mi = getMdInfo(g_settings.markdownRender());
+        if (g_editor.cy >= 0 && g_editor.cy < (int)mi.size() && mi[g_editor.cy].headingLevel > 0) {
+            if (!g_editor.foldedHeadings.erase(g_editor.cy))
+                g_editor.foldedHeadings.insert(g_editor.cy);
+            g_editor.vrowsDirty = true;  // 纯视图态,不进撤销快照
+        }
+        ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
+    }
+
     // ── Clipboard operations (Ctrl+C, Ctrl+X, Ctrl+V) ────────────────
     if (key == 0x03) { // Ctrl+C — copy
         if (g_editor.hasSelection) {
@@ -1795,6 +1866,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.lines[g_editor.cy] = g_editor.lines[g_editor.cy].substr(0, g_editor.cx);
         g_editor.cx = 0; g_editor.cy++;
         g_editor.lines.insert(g_editor.lines.begin() + g_editor.cy, prefix + rest);
+        foldLinesInserted(g_editor.cy, 1);
         g_editor.cx = (int)prefix.length();  // 光标落在续行标记之后
         g_editor.targetCx = -1;
         markDirty();
@@ -1815,6 +1887,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.cx = (int)g_editor.lines[g_editor.cy-1].length();
             g_editor.lines[g_editor.cy-1] += g_editor.lines[g_editor.cy];
             g_editor.lines.erase(g_editor.lines.begin() + g_editor.cy);
+            foldLinesErased(g_editor.cy, 1);
             g_editor.cy--;
         }
         g_editor.targetCx = -1;
@@ -2094,6 +2167,7 @@ void editorReplaceSelection(const std::string &text) {
             for (size_t i = 1; i < ins.size() - 1; i++)
                 g_editor.lines.insert(g_editor.lines.begin() + insertAt++, ins[i]);
             g_editor.lines.insert(g_editor.lines.begin() + insertAt, ins.back() + tail);
+            foldLinesInserted(g_editor.cy + 1, (int)ins.size() - 1);
             g_editor.cy = insertAt;
             g_editor.cx = (int)ins.back().length();
         }

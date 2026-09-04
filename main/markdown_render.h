@@ -51,7 +51,8 @@ std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines);
 // cursorBytePos >= 0 reveals the inline markdown construct containing that byte
 // as raw text; the rest of the line keeps normal hidden-marker rendering.
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
-                const MdLineInfo &info, int indentCells = 0, int cursorBytePos = -1);
+                const MdLineInfo &info, int indentCells = 0, int cursorBytePos = -1,
+                bool folded = false);
 
 // Visual x (px from the line's left edge) at which raw byte bytePos renders.
 // For heading/task/quote lines the content sits at a fixed prefix offset

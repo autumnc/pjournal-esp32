@@ -2029,6 +2029,7 @@ static const SymbolGlyph g_symbolGlyphs_16[] = {
     { 5, 5, 1, 8, 8, SYM_CIRCLE_O_16_BITS },   // U+1F786 空心圆
     { 8, 8, 0, 10, 8, SYM_BOX_BLANK_16_BITS },  // U+F0131 待办
     { 8, 8, 0, 10, 8, SYM_BOX_MARKED_16_BITS }, // U+F0132 完成
+    { 8, 10, 1, 10, 8, SYM_TRI_RIGHT_22_BITS }, // U+25B8 折叠三角
 };
 
 inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
@@ -2050,6 +2051,7 @@ inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
             case 0x1F786: return &g_symbolGlyphs_16[10];
             case 0xF0131: return &g_symbolGlyphs_16[11];
             case 0xF0132: return &g_symbolGlyphs_16[12];
+            case 0x25B8: return &g_symbolGlyphs_16[13];
             default: return nullptr;
         }
     }

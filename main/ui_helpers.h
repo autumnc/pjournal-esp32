@@ -2,9 +2,12 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include "font_renderer.h"
 
 class IME;
+
+struct MdLineInfo;
 
 // Forward declaration matching u8g2.h so extern declarations can use u8g2_t*
 struct u8g2_struct;
@@ -53,8 +56,13 @@ std::string battery_status_text();
 std::string battery_icon_text();
 std::string battery_icon_status_text();
 
-// Word-wrap builder
-std::vector<VRow> buildVrows(const std::vector<std::string> &lines);
+// Word-wrap builder. mdInfoIn: precomputed per-line markdown info (skips
+// internal mdClassifyLines). foldedHeadings: heading line indices whose body
+// is collapsed — their vrows are omitted (editor view-state, viewer passes
+// defaults).
+std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
+                             const std::vector<MdLineInfo> *mdInfoIn = nullptr,
+                             const std::set<int> *foldedHeadings = nullptr);
 
 // IME drawing helper
 void drawIMEUI(int baseY);

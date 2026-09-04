@@ -386,7 +386,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
 }
 
 void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<MdSeg> &segs,
-                 int cursorBytePos = -1) {
+                 int cursorBytePos = -1, bool folded = false) {
     int len = (int)line.size();
     if (!s_mdEnabled) {
         segs.push_back({0, len, TextStyle{}, line});
@@ -415,6 +415,9 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
         };
         if (cursorInMarker(cursorBytePos, 0, n)) {
             segs.push_back({0, n, TextStyle{}, line.substr(0, n)});
+        } else if (folded) {
+            // ▸ + 空格 = 2 格,与级别字形槽位等宽,后续定位数学不受影响
+            segs.push_back({0, n, base, "\xE2\x96\xB8 "});
         } else {
             // Heading glyph advance is 2 cells; content starts right after it.
             segs.push_back({0, n, base, kLevelGlyph[info.headingLevel - 1]});
@@ -603,9 +606,9 @@ int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vr
 }
 
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
-                const MdLineInfo &info, int indentCells, int cursorBytePos) {
+                const MdLineInfo &info, int indentCells, int cursorBytePos, bool folded) {
     std::vector<MdSeg> segs;
-    mdParseLine(line, info, segs, cursorBytePos);
+    mdParseLine(line, info, segs, cursorBytePos, folded);
     int len = (int)line.size();
     if (end > len) end = len;
 

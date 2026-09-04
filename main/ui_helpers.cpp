@@ -221,12 +221,27 @@ static int mdIndentCells(const std::string &line) {
     return mdPrefixLen(line) > 0 ? 2 : 0;  // heading
 }
 
-std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
+std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
+                             const std::vector<MdLineInfo> *mdInfoIn,
+                             const std::set<int> *foldedHeadings) {
     std::vector<VRow> vrows;
     bool firstLineIndent = g_settings.firstLineIndent();
-    std::vector<MdLineInfo> mdInfo;
-    if (firstLineIndent) mdInfo = mdClassifyLines(lines);
+    std::vector<MdLineInfo> localInfo;
+    const std::vector<MdLineInfo> *mdInfoPtr = mdInfoIn;
+    if (!mdInfoPtr && firstLineIndent) {
+        localInfo = mdClassifyLines(lines);
+        mdInfoPtr = &localInfo;
+    }
+    bool folding = foldedHeadings && !foldedHeadings->empty();
+    int hideLevel = 0;  // >0 表示当前处于某标题的折叠区内
     for (int li = 0; li < (int)lines.size(); li++) {
+        if (folding) {
+            int lvl = mdInfoPtr ? (*mdInfoPtr)[li].headingLevel : 0;
+            bool inCode = mdInfoPtr ? (*mdInfoPtr)[li].inCodeBlock : false;
+            bool isH = lvl > 0 && !inCode;
+            if (hideLevel != 0 && !(isH && lvl <= hideLevel)) continue;  // 折叠区内且不是结束边界
+            if (isH) hideLevel = foldedHeadings->count(li) ? lvl : 0;
+        }
         const auto &line = lines[li];
         int len = (int)line.length();
         if (len == 0) {
@@ -237,8 +252,8 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines) {
         int indent = mdIndentCells(line);
         int prefixEnd = mdPrefixLen(line);
         int firstIndent = 0;
-        if (firstLineIndent) {
-            const MdLineInfo &info = mdInfo[li];
+        if (firstLineIndent && mdInfoPtr) {
+            const MdLineInfo &info = (*mdInfoPtr)[li];
             if (info.headingLevel == 0 && !info.list && !info.task &&
                 !info.quote && !info.inCodeBlock && !info.hr) {
                 firstIndent = 4;  // two Chinese-width characters
