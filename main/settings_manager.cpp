@@ -130,3 +130,5 @@ int SettingsManager::fontSize() {
 }
 
 std::string SettingsManager::appMode() { return getString("app_mode", "journal"); }
+
+std::string SettingsManager::homeView() { return getString("home_view", "week"); }

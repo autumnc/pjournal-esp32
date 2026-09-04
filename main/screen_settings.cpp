@@ -25,6 +25,7 @@ extern "C" {
 struct SettingField { const char *key; const char *label; bool masked; bool action; };
 static const SettingField SETTINGS_FIELDS[] = {
     {"_app_mode", "工作模式", false, true},
+    {"_home_view", "主页视图", false, true},
     {"_file_mgr", "文件管理", false, true},
     {"file_mgr_token", "文件管理密码", true, false},
     {"_bt_manage", "蓝牙设备管理", false, true},
@@ -365,6 +366,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.statusMessage = "切换模式需重启生效";
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_home_view") == 0) {
+                std::string next = (g_settings.homeView() == "month") ? "week" : "month";
+                g_settings.setString("home_view", next);
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_flomo_token") == 0) {
                 std::string email = g_settings.flomoEmail();
                 std::string pass = g_settings.flomoPassword();
@@ -491,6 +497,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_app_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.appMode() == "quick" ? "快捷编辑" : "个人日记");
+            } else if (strcmp(f.key, "_home_view") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         g_settings.homeView() == "month" ? "月视图" : "周视图");
             } else {
                 snprintf(buf, sizeof(buf), "▶ %s", f.label);
             }

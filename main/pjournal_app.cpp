@@ -24,6 +24,7 @@ extern "C" {
     extern void u8g2_SetDrawColor(void *g_u8g2, int color);
     extern void u8g2_DrawBox(void *g_u8g2, int x, int y, int w, int h);
     extern void u8g2_DrawHLine(void *g_u8g2, int x, int y, int w);
+    extern void u8g2_DrawFrame(void *g_u8g2, int x, int y, int w, int h);
     extern void u8g2_SetBitmapMode(void *g_u8g2, uint8_t is_transparent);
     extern void u8g2_DrawBitmap(void *g_u8g2, int x, int y, int cnt, int h, const uint8_t *bitmap);
     extern void u8g2_SendBuffer(void *g_u8g2);
@@ -223,6 +224,75 @@ void screen_main_init() {
     }
 }
 
+// 月视图主页:固定22pt绘制"当前年月 + 同宽短分割线 + 星期表头 + 当月日历网格",
+// 标题顶到屏幕上沿不留白。单元格 = 日期 + 标记(✓已写/·未写/未来无标记),全部
+// 白底黑字不反白,今日仅用细边框圈出高亮;不显示连续/总计/今日统计。行距压到
+// lh+1、分割线跟随末行,给底部图标+22pt动作标签留空间。绘制完恢复用户字号。
+static int drawMonthCalendar(time_t now_t, const struct tm *tmNow) {
+    int prevSize = g_font.fontSize();
+    if (prevSize != 22) g_font.setSize(22);
+    // localtime() 返回进程级静态 tm:下方循环里的 localtime(&d) 会覆盖同一块
+    // 内存令 tmNow 失效(isToday 恒真,每格都被当成今日)——入口先拷贝。
+    const struct tm base = *tmNow;
+    const int todayMday = base.tm_mday;
+    const int mrowH = g_font.lineHeight() + 1;  // 22pt → 23px
+    int y = g_font.ascent();         // 首行:当前年月,顶到屏幕上沿
+    char ym[40];
+    snprintf(ym, sizeof(ym), "%d年%d月", base.tm_year + 1900, base.tm_mon + 1);
+    ui_draw_text_centered(y, ym);
+    // 标题下的短分割线,宽度约等于标题文字;表头与日历随之下移让位
+    int ymW = g_font.textWidth(ym);
+    int titleDivY = y + g_font.descent() + 3;
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, (SCREEN_W - ymW) / 2, titleDivY, ymW);
+    y = titleDivY + 5 + g_font.ascent();
+    const char *dnames[7] = {"一","二","三","四","五","六","日"};
+    const int colWidth = SCREEN_W / 7;
+    const int colStartX = (SCREEN_W - colWidth * 7) / 2;
+    for (int i = 0; i < 7; i++) {
+        int cx = colStartX + i * colWidth + (colWidth - g_font.textWidth(dnames[i])) / 2;
+        g_font.drawText(cx, y, dnames[i], false);
+    }
+    y += mrowH;
+    struct tm first = base;
+    first.tm_mday = 1; first.tm_hour = 12; first.tm_min = 0; first.tm_sec = 0;
+    time_t first_t = mktime(&first);
+    struct tm *ftm = localtime(&first_t);
+    int lead = (ftm->tm_wday == 0) ? 6 : ftm->tm_wday - 1;  // 周一为首列
+    struct tm nxt = first;
+    if (++nxt.tm_mon > 11) { nxt.tm_mon = 0; nxt.tm_year++; }
+    int dim = (int)((mktime(&nxt) - first_t) / 86400);
+    int rows = (lead + dim + 6) / 7;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < 7; c++) {
+            int day = r * 7 + c - lead + 1;
+            if (day < 1 || day > dim) continue;
+            time_t d = first_t + (day - 1) * 86400;
+            struct tm *dtm = localtime(&d);
+            char ds[16]; strftime(ds, sizeof(ds), "%Y-%m-%d", dtm);
+            bool has = g_journal.hasEntry(ds);
+            bool isToday = (day == todayMday);
+            // d 取当日正午,减 12h 得当日零点,保证今天上午也带 · 标记
+            char cell[24];
+            if (has) snprintf(cell, sizeof(cell), "%d✓", day);
+            else if (d - 43200 <= now_t) snprintf(cell, sizeof(cell), "%d·", day);
+            else snprintf(cell, sizeof(cell), "%d", day);
+            int cx = colStartX + c * colWidth + (colWidth - g_font.textWidth(cell)) / 2;
+            g_font.drawText(cx, y, cell, false);
+            if (isToday) {
+                // 今日高亮:细边框紧贴当日"日期+标记"字形,不波及相邻行
+                u8g2_SetDrawColor(g_u8g2, 0);
+                u8g2_DrawFrame(g_u8g2, cx - 3, y - g_font.ascent(),
+                               g_font.textWidth(cell) + 6, g_font.ascent() + 2);
+            }
+        }
+        y += mrowH;
+    }
+    int dividerY = y - mrowH + g_font.descent() + 6;
+    if (prevSize != 22) g_font.setSize(prevSize);
+    return dividerY;
+}
+
 AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = FONT_H;
     const int rowH = LINE_SPACING;
@@ -245,53 +315,78 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
 
     time_t now_t; time(&now_t); struct tm *tm = localtime(&now_t);
     char dateStr[32]; strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm);
-    y += rowH;
-    int daysSinceMon = (tm->tm_wday == 0) ? 6 : tm->tm_wday - 1;
-    time_t monday = now_t - daysSinceMon * 86400;
-    const char *dnames[7] = {"一","二","三","四","五","六","日"};
-    const int colWidth = SCREEN_W / 7;
-    const int colStartX = (SCREEN_W - colWidth * 7) / 2;
-    for (int i = 0; i < 7; i++) {
-        time_t d = monday + i * 86400; struct tm *dtm = localtime(&d);
-        char ds[16]; strftime(ds, sizeof(ds), "%Y-%m-%d", dtm);
-        bool isToday = (i == daysSinceMon);
-        bool has = g_journal.hasEntry(ds);
-        char dayStr[8];
-        if (isToday) snprintf(dayStr, sizeof(dayStr), "[%s]", dnames[i]);
-        else snprintf(dayStr, sizeof(dayStr), " %s ", dnames[i]);
-        int cx = colStartX + i * colWidth + (colWidth - g_font.textWidth(dayStr)) / 2;
-        g_font.drawText(cx, y, dayStr, false);
-        const char *mark = has ? "✓" : (d <= now_t ? "·" : " ");
-        int mx = colStartX + i * colWidth + (colWidth - g_font.textWidth(mark)) / 2;
-        g_font.drawText(mx, y + rowH, mark, false);
+    bool monthView = g_settings.homeView() == "month";
+    int dividerY;
+    if (monthView) {
+        dividerY = drawMonthCalendar(now_t, tm);
+    } else {
+        y += rowH;
+        int daysSinceMon = (tm->tm_wday == 0) ? 6 : tm->tm_wday - 1;
+        time_t monday = now_t - daysSinceMon * 86400;
+        const char *dnames[7] = {"一","二","三","四","五","六","日"};
+        const int colWidth = SCREEN_W / 7;
+        const int colStartX = (SCREEN_W - colWidth * 7) / 2;
+        for (int i = 0; i < 7; i++) {
+            time_t d = monday + i * 86400; struct tm *dtm = localtime(&d);
+            char ds[16]; strftime(ds, sizeof(ds), "%Y-%m-%d", dtm);
+            bool isToday = (i == daysSinceMon);
+            bool has = g_journal.hasEntry(ds);
+            char dayStr[8];
+            if (isToday) snprintf(dayStr, sizeof(dayStr), "[%s]", dnames[i]);
+            else snprintf(dayStr, sizeof(dayStr), " %s ", dnames[i]);
+            int cx = colStartX + i * colWidth + (colWidth - g_font.textWidth(dayStr)) / 2;
+            g_font.drawText(cx, y, dayStr, false);
+            const char *mark = has ? "✓" : (d <= now_t ? "·" : " ");
+            int mx = colStartX + i * colWidth + (colWidth - g_font.textWidth(mark)) / 2;
+            g_font.drawText(mx, y + rowH, mark, false);
+        }
+        y += rowH * 2;
+
+        char buf[48]; snprintf(buf, sizeof(buf), "连续:%d天 总计:%d篇", g_journal.getStreak(), g_journal.totalEntries());
+        ui_draw_text_centered(y, buf); y += rowH;
+        int tc = g_journal.countToday();
+        int todayBaseline = y;
+        if (tc > 0) { snprintf(buf, sizeof(buf), "✓ 今日已写%d篇", tc); ui_draw_text_centered(y, buf, false, true); }
+        else ui_draw_text_centered(y, "今日尚未写日记");
+        dividerY = todayBaseline + g_font.descent() + 14;
     }
-    y += rowH * 2;
 
-    char buf[48]; snprintf(buf, sizeof(buf), "连续:%d天 总计:%d篇", g_journal.getStreak(), g_journal.totalEntries());
-    ui_draw_text_centered(y, buf); y += rowH;
-    int tc = g_journal.countToday();
-    int todayBaseline = y;
-    if (tc > 0) { snprintf(buf, sizeof(buf), "✓ 今日已写%d篇", tc); ui_draw_text_centered(y, buf, false, true); }
-    else ui_draw_text_centered(y, "今日尚未写日记");
-
-    int dividerY = todayBaseline + g_font.descent() + 14;
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 24, dividerY, SCREEN_W - 48);
 
     int slotW = SCREEN_W / actionCount;
-    int iconTop = dividerY + 14;
+    // 月视图:底部要容纳 图标+22pt动作标签,图标距分割线更近
+    int iconTop = dividerY + (monthView ? 4 : 14);
     for (int i = 0; i < actionCount; i++) {
         const MainMenuAction &action = kMainActions[mainMenuActionIndex(i, hasEntries)];
         int cx = i * slotW + slotW / 2;
         drawMainMenuIcon(cx, iconTop, action.icon, i == g_mainMenu.selection);
     }
-    y = iconTop + 48 + rowH;
-
     const MainMenuAction &selected = kMainActions[mainMenuActionIndex(g_mainMenu.selection, hasEntries)];
-    char selectedText[48];
-    snprintf(selectedText, sizeof(selectedText), "[%c] %s", selected.key, selected.name);
-    ui_draw_text_centered(y, selectedText, false, true);
-    y += rowH;
+    if (!monthView) {
+        y = iconTop + 48 + rowH;
+        char selectedText[48];
+        snprintf(selectedText, sizeof(selectedText), "[%c] %s", selected.key, selected.name);
+        ui_draw_text_centered(y, selectedText, false, true);
+        y += rowH;
+    } else {
+        // 月视图动作标签固定 22pt(与日历一致);6 行日历等放不下时退 16pt
+        int statusTop = SCREEN_H - g_font.lineHeight() - 2;  // 用户字号下的状态栏上沿
+        int prevSize = g_font.fontSize();
+        g_font.setSize(22);
+        int labelY = iconTop + 48 + 2 + g_font.ascent();
+        if (labelY + g_font.descent() > statusTop - 2) {
+            g_font.setSize(16);
+            labelY = iconTop + 48 + 2 + g_font.ascent();
+            if (labelY + g_font.descent() > statusTop - 2) labelY = -1;
+        }
+        if (labelY > 0) {
+            char selectedText[48];
+            snprintf(selectedText, sizeof(selectedText), "[%c] %s", selected.key, selected.name);
+            ui_draw_text_centered(labelY, selectedText, false, true);
+        }
+        g_font.setSize(prevSize);
+    }
 
     std::string batteryGroup = battery_status_text();
     g_font.drawText(4, STATUS_Y + g_font.ascent(), dateStr, false);
