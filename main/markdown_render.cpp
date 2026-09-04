@@ -86,8 +86,8 @@ bool isCnNumChar(const std::string &line, int at) {
 
 // List-family marker geometry. Skips leading whitespace so nested lists work.
 // cells = content offset in cells from marker start: unordered/task bullet is 3
-// cells (" • " / " ☐ "), ordered keeps its digits+separator width (bytes==cells
-// for ASCII `.`/`)`, `、` is 2 cells, 3 bytes).
+// cells (" • "/" ○ "/" ☐ ", marker glyph is 1 cell), ordered keeps its
+// digits+separator width (bytes==cells for ASCII `.`/`)`, `、` is 2 cells, 3 bytes).
 MdListMarker mdListMarker(const std::string &line) {
     MdListMarker m;
     int len = (int)line.size();
@@ -429,7 +429,8 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
             } else if (m.task) {
                 bool checked = (m.start + 3 < len) &&
                                (line[m.start + 3] == 'x' || line[m.start + 3] == 'X');
-                std::string repl = checked ? " \xE2\x9C\x93 " : " \xE2\x98\x90 ";  // ☐/✓, content after marker
+                // U+F0132 完成(实心带勾) / U+F0131 待办(空框), content after marker
+                std::string repl = checked ? " \xF3\xB0\x84\xB2 " : " \xF3\xB0\x84\xB1 ";
                 segs.push_back({0, mend, base, line.substr(0, m.start) + repl});
             } else if (m.ordered) {
                 TextStyle nst = base;
@@ -437,7 +438,9 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
                 // 前导补1格:序号(阿拉伯或中文)随整体右移1格,与无序列表一致(无序子弹在1格处)
                 segs.push_back({0, mend, nst, std::string(" ") + line.substr(0, mend)});
             } else {
-                segs.push_back({0, mend, base, line.substr(0, m.start) + " \xE2\x80\xA2 "});  // bullet
+                // 次级列表(缩进)用空心圆 U+1F786,顶级用实心圆点 U+2022
+                const char *glyph = m.start > 0 ? " \xF0\x9F\x9E\x86 " : " \xE2\x80\xA2 ";
+                segs.push_back({0, mend, base, line.substr(0, m.start) + glyph});
             }
             pos = mend;
         }

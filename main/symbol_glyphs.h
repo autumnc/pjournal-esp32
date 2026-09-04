@@ -209,12 +209,25 @@ static const uint8_t SYM_FW_RPAREN_28_BITS[] = {
 
 // Markdown symbols • ☐ ✓ ■ (hand-added from NF-Mono.ttf, see scripts/add_md_symbols.py)
 static const uint8_t SYM_BULLET_28_BITS[] = {
-    0x30,
-    0x78,
-    0xFC,
-    0xFC,
-    0x78,
-    0x30,
+    0x3C,
+    0x7E,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0x7E,
+    0x3C,
+};
+// U+1F786 空心圆(次级列表) + U+F0131 待办 + U+F0132 完成 (NF-Mono.ttf, bullet 同尺寸对齐)
+static const uint8_t SYM_CIRCLE_O_28_BITS[] = {
+    0x7E,
+    0x81,
+    0x81,
+    0x81,
+    0x81,
+    0x81,
+    0x81,
+    0x7E,
 };
 static const uint8_t SYM_CHECKBOX_28_BITS[] = {
     0xFF,
@@ -287,6 +300,38 @@ static const uint8_t SYM_SQUARE_28_BITS[] = {
     0xC0,
     0xFF,
     0xC0,
+};
+static const uint8_t SYM_BOX_BLANK_28_BITS[] = {
+    0xFF, 0xFC,
+    0xFF, 0xFC,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xC0, 0x0C,
+    0xFF, 0xFC,
+    0xFF, 0xFC,
+};
+static const uint8_t SYM_BOX_MARKED_28_BITS[] = {
+    0xFF, 0xFC,
+    0xFF, 0xFC,
+    0xFF, 0xFC,
+    0xFF, 0xEC,
+    0xFF, 0xCC,
+    0xFF, 0x9C,
+    0xDF, 0x3C,
+    0xCE, 0x7C,
+    0xE4, 0xFC,
+    0xF1, 0xFC,
+    0xFB, 0xFC,
+    0xFF, 0xFC,
+    0xFF, 0xFC,
+    0xFF, 0xFC,
 };
 
 static const uint8_t SYM_HL1_28_BITS[] = {
@@ -988,7 +1033,7 @@ static const SymbolGlyph g_symbolGlyphs_28[] = {
     // U+E00B PROG7
     { 14, 14, 0, 17, 14, SYM_PROG8_28_BITS },
     // U+E00C PROG8
-    { 6, 6, 4, 12, 14, SYM_BULLET_28_BITS },
+    { 8, 8, 3, 13, 14, SYM_BULLET_28_BITS },
     // U+2022 BULLET
     { 12, 13, 1, 16, 14, SYM_CHECKBOX_28_BITS },
     // U+2610 CHECKBOX
@@ -1002,6 +1047,9 @@ static const SymbolGlyph g_symbolGlyphs_28[] = {
     { 25, 25, 0, 22, 28, SYM_HL5_28_BITS },  // U+F03B1
     { 25, 25, 0, 22, 28, SYM_HL6_28_BITS },  // U+F03B3
     // U+25A0 SQUARE
+    { 8, 8, 3, 13, 14, SYM_CIRCLE_O_28_BITS },  // U+1F786 空心圆
+    { 14, 14, 0, 17, 14, SYM_BOX_BLANK_28_BITS },  // U+F0131 待办
+    { 14, 14, 0, 17, 14, SYM_BOX_MARKED_28_BITS },  // U+F0132 完成
 };
 
 // --- 22pt (ascent=17) ---
@@ -1308,10 +1356,24 @@ static const uint8_t SYM_BT_BAT_100_22_BITS[] = {
 
 // Markdown symbols • ☐ ✓ ■ (hand-added from NF-Mono.ttf, see scripts/add_md_symbols.py)
 static const uint8_t SYM_BULLET_22_BITS[] = {
-    0x70,
-    0xF8,
-    0xF8,
-    0x70,
+    0x3C,
+    0x7E,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0x7E,
+    0x3C,
+};
+static const uint8_t SYM_CIRCLE_O_22_BITS[] = {
+    0x7E,
+    0x81,
+    0x81,
+    0x81,
+    0x81,
+    0x81,
+    0x81,
+    0x7E,
 };
 static const uint8_t SYM_CHECKBOX_22_BITS[] = {
     0xFF,
@@ -1368,6 +1430,30 @@ static const uint8_t SYM_SQUARE_22_BITS[] = {
     0x80,
     0xFF,
     0x80,
+};
+static const uint8_t SYM_BOX_BLANK_22_BITS[] = {
+    0xFF, 0xE0,
+    0x80, 0x20,
+    0x80, 0x20,
+    0x80, 0x20,
+    0x80, 0x20,
+    0x80, 0x20,
+    0x80, 0x20,
+    0x80, 0x20,
+    0x80, 0x20,
+    0xFF, 0xE0,
+};
+static const uint8_t SYM_BOX_MARKED_22_BITS[] = {
+    0xFF, 0xE0,
+    0xFF, 0xE0,
+    0xFF, 0x20,
+    0xFE, 0x60,
+    0xFC, 0xE0,
+    0xD9, 0xE0,
+    0xEB, 0xE0,
+    0xF7, 0xE0,
+    0xFF, 0xE0,
+    0xFF, 0xE0,
 };
 
 static const uint8_t SYM_HL1_22_BITS[] = {
@@ -1855,7 +1941,7 @@ static const SymbolGlyph g_symbolGlyphs_22[] = {
     // U+E02C BT_BAT_90
     { 20, 20, 0, 16, 20, SYM_BT_BAT_100_22_BITS },
     // U+E02D BT_BAT_100
-    { 5, 4, 3, 9, 11, SYM_BULLET_22_BITS },
+    { 8, 8, 1, 11, 11, SYM_BULLET_22_BITS },
     // U+2022 BULLET
     { 11, 10, 0, 13, 11, SYM_CHECKBOX_22_BITS },
     // U+2610 CHECKBOX
@@ -1869,12 +1955,18 @@ static const SymbolGlyph g_symbolGlyphs_22[] = {
     { 20, 20, 0, 17, 22, SYM_HL5_22_BITS },  // U+F03B1
     { 20, 20, 0, 17, 22, SYM_HL6_22_BITS },  // U+F03B3
     // U+25A0 SQUARE
+    { 8, 8, 1, 11, 11, SYM_CIRCLE_O_22_BITS },  // U+1F786 空心圆
+    { 11, 10, 0, 13, 11, SYM_BOX_BLANK_22_BITS },  // U+F0131 待办
+    { 11, 10, 0, 13, 11, SYM_BOX_MARKED_22_BITS },  // U+F0132 完成
 };
 
 // --- 16pt (ascent=14) ---
 // Markdown symbols • ☐ ✓ ■ (hand-added from NF-Mono.ttf, see scripts/add_md_symbols_16.py)
 static const uint8_t SYM_BULLET_16_BITS[] = {
-    0x60, 0xF0, 0x60,
+    0x70, 0xF8, 0xF8, 0xF8, 0x70,
+};
+static const uint8_t SYM_CIRCLE_O_16_BITS[] = {
+    0x70, 0x88, 0x88, 0x88, 0x70,
 };
 static const uint8_t SYM_CHECKBOX_16_BITS[] = {
     0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF,
@@ -1884,6 +1976,12 @@ static const uint8_t SYM_CHECK_16_BITS[] = {
 };
 static const uint8_t SYM_SQUARE_16_BITS[] = {
     0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC,
+};
+static const uint8_t SYM_BOX_BLANK_16_BITS[] = {
+    0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF,
+};
+static const uint8_t SYM_BOX_MARKED_16_BITS[] = {
+    0xFF, 0xFF, 0xFD, 0xFB, 0xB7, 0xCF, 0xFF, 0xFF,
 };
 // Heading glyphs HL1-HL6: rendered at 29px for a 15x15 box (NF-Mono.ttf),
 // yo=14 puts the top at ascent like 28/22pt; advance 16 = 2 half-cells.
@@ -1918,7 +2016,7 @@ static const uint8_t SYM_HL6_16_BITS[] = {
     0xFF, 0xFE, 0xFF, 0xFC, 0x7F, 0xFC,
 };
 static const SymbolGlyph g_symbolGlyphs_16[] = {
-    { 4, 3, 2, 7, 8, SYM_BULLET_16_BITS },     // U+2022 BULLET
+    { 5, 5, 1, 8, 8, SYM_BULLET_16_BITS },     // U+2022 BULLET
     { 8, 7, 0, 9, 8, SYM_CHECKBOX_16_BITS },   // U+2610 CHECKBOX
     { 6, 5, 1, 8, 8, SYM_CHECK_16_BITS },      // U+2713 CHECK
     { 6, 6, 1, 9, 8, SYM_SQUARE_16_BITS },     // U+25A0 SQUARE
@@ -1928,6 +2026,9 @@ static const SymbolGlyph g_symbolGlyphs_16[] = {
     { 15, 15, 0, 14, 16, SYM_HL4_16_BITS },    // U+F03AD
     { 15, 15, 0, 14, 16, SYM_HL5_16_BITS },    // U+F03B1
     { 15, 15, 0, 14, 16, SYM_HL6_16_BITS },    // U+F03B3
+    { 5, 5, 1, 8, 8, SYM_CIRCLE_O_16_BITS },   // U+1F786 空心圆
+    { 8, 8, 0, 10, 8, SYM_BOX_BLANK_16_BITS },  // U+F0131 待办
+    { 8, 8, 0, 10, 8, SYM_BOX_MARKED_16_BITS }, // U+F0132 完成
 };
 
 inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
@@ -1946,6 +2047,9 @@ inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
             case 0xF03AD: return &g_symbolGlyphs_16[7];
             case 0xF03B1: return &g_symbolGlyphs_16[8];
             case 0xF03B3: return &g_symbolGlyphs_16[9];
+            case 0x1F786: return &g_symbolGlyphs_16[10];
+            case 0xF0131: return &g_symbolGlyphs_16[11];
+            case 0xF0132: return &g_symbolGlyphs_16[12];
             default: return nullptr;
         }
     }
@@ -2039,6 +2143,9 @@ case 0xE00D: if (font_size == 22) return &g_symbolGlyphs_22[20]; return nullptr;
                 case 0xF03AD: return (font_size == 28) ? &g_symbolGlyphs_28[47] : (font_size == 22) ? &g_symbolGlyphs_22[60] : nullptr;
                 case 0xF03B1: return (font_size == 28) ? &g_symbolGlyphs_28[48] : (font_size == 22) ? &g_symbolGlyphs_22[61] : nullptr;
                 case 0xF03B3: return (font_size == 28) ? &g_symbolGlyphs_28[49] : (font_size == 22) ? &g_symbolGlyphs_22[62] : nullptr;
+                case 0x1F786: return (font_size == 28) ? &g_symbolGlyphs_28[50] : (font_size == 22) ? &g_symbolGlyphs_22[63] : nullptr;
+                case 0xF0131: return (font_size == 28) ? &g_symbolGlyphs_28[51] : (font_size == 22) ? &g_symbolGlyphs_22[64] : nullptr;
+                case 0xF0132: return (font_size == 28) ? &g_symbolGlyphs_28[52] : (font_size == 22) ? &g_symbolGlyphs_22[65] : nullptr;
 
         default: return nullptr;
     }

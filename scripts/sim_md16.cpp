@@ -57,6 +57,7 @@ static int drawTextStyled(int x, int y, const char *text, const SymbolGlyph *(*l
 
 static const SymbolGlyph *lk16(uint32_t cp) { return getSymbolGlyph(cp, 16); }
 static const SymbolGlyph *lk22(uint32_t cp) { return getSymbolGlyph(cp, 22); }
+static const SymbolGlyph *lk28(uint32_t cp) { return getSymbolGlyph(cp, 28); }
 
 static void render(const char *title, const char *text, int size, const SymbolGlyph *(*lookup)(uint32_t), int halfAdv, bool bold, bool underline) {
     memset(fb, 0, sizeof(fb));
@@ -70,13 +71,20 @@ static void render(const char *title, const char *text, int size, const SymbolGl
 }
 
 int main() {
-    // 16pt: task unchecked, task checked, bullet, heading HL1 (bold+underline)
-    render("16pt task unchecked", " \xE2\x98\x90 ", 16, lk16, 8, false, false);
-    render("16pt task checked", " \xE2\x9C\x93 ", 16, lk16, 8, false, false);
+    // U+1F786 空心圆, U+F0131 待办空框, U+F0132 完成实心带勾, U+2022 bullet(放大)
     render("16pt bullet", " \xE2\x80\xA2 ", 16, lk16, 8, false, false);
+    render("16pt circle (secondary)", " \xF0\x9F\x9E\x86 ", 16, lk16, 8, false, false);
+    render("16pt task unchecked F0131", " \xF3\xB0\x84\xB1 ", 16, lk16, 8, false, false);
+    render("16pt task done F0132", " \xF3\xB0\x84\xB2 ", 16, lk16, 8, false, false);
     render("16pt heading HL1", "\xF3\xB0\x8E\xA4", 16, lk16, 8, true, true);
-    // 22pt references (known good on device)
-    render("22pt task unchecked", " \xE2\x98\x90 ", 22, lk22, 11, false, false);
+    render("22pt bullet", " \xE2\x80\xA2 ", 22, lk22, 11, false, false);
+    render("22pt circle (secondary)", " \xF0\x9F\x9E\x86 ", 22, lk22, 11, false, false);
+    render("22pt task unchecked F0131", " \xF3\xB0\x84\xB1 ", 22, lk22, 11, false, false);
+    render("22pt task done F0132", " \xF3\xB0\x84\xB2 ", 22, lk22, 11, false, false);
     render("22pt heading HL1", "\xF3\xB0\x8E\xA4", 22, lk22, 11, true, true);
+    render("28pt bullet", " \xE2\x80\xA2 ", 28, lk28, 14, false, false);
+    render("28pt circle (secondary)", " \xF0\x9F\x9E\x86 ", 28, lk28, 14, false, false);
+    render("28pt task unchecked F0131", " \xF3\xB0\x84\xB1 ", 28, lk28, 14, false, false);
+    render("28pt task done F0132", " \xF3\xB0\x84\xB2 ", 28, lk28, 14, false, false);
     return 0;
 }
