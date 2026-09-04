@@ -225,9 +225,9 @@ void screen_main_init() {
 }
 
 // 月视图主页:固定22pt绘制"当前年月 + 同宽短分割线 + 星期表头 + 当月日历网格",
-// 标题顶到屏幕上沿不留白。单元格 = 日期 + 标记(✓已写/·未写/未来无标记),全部
-// 白底黑字不反白,今日仅用细边框圈出高亮;不显示连续/总计/今日统计。行距压到
-// lh+1、分割线跟随末行,给底部图标+22pt动作标签留空间。绘制完恢复用户字号。
+// 标题上方留5px空白。单元格 = 日期 + 标记(✓已写/·未写/未来无标记),全部白底
+// 黑字不反白,今日仅用细边框圈出高亮;不显示连续/总计/今日统计。行距压到 lh、
+// 分割线跟随末行,给底部图标+22pt动作标签留空间。绘制完恢复用户字号。
 static int drawMonthCalendar(time_t now_t, const struct tm *tmNow) {
     int prevSize = g_font.fontSize();
     if (prevSize != 22) g_font.setSize(22);
@@ -235,8 +235,8 @@ static int drawMonthCalendar(time_t now_t, const struct tm *tmNow) {
     // 内存令 tmNow 失效(isToday 恒真,每格都被当成今日)——入口先拷贝。
     const struct tm base = *tmNow;
     const int todayMday = base.tm_mday;
-    const int mrowH = g_font.lineHeight() + 1;  // 22pt → 23px
-    int y = g_font.ascent();         // 首行:当前年月,顶到屏幕上沿
+    const int mrowH = g_font.lineHeight();  // 22pt → 22px:行距收紧抵消标题下移,保证6行月份仍放得下22pt标签
+    int y = g_font.ascent() + 5;     // 首行:当前年月,顶部留5px空白
     char ym[40];
     snprintf(ym, sizeof(ym), "%d年%d月", base.tm_year + 1900, base.tm_mon + 1);
     ui_draw_text_centered(y, ym);
