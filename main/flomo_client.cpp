@@ -14,6 +14,22 @@ static const char *TAG = "Flomo";
 FlomoClient g_flomo;
 static const size_t MAX_FLOMO_RESPONSE_SIZE = 32 * 1024;
 
+static std::string htmlEscape(const std::string &text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        switch (c) {
+            case '&':  out += "&amp;"; break;
+            case '<':  out += "&lt;"; break;
+            case '>':  out += "&gt;"; break;
+            case '"':  out += "&quot;"; break;
+            case '\'': out += "&#39;"; break;
+            default:   out += c; break;
+        }
+    }
+    return out;
+}
+
 // Apply inline formatting: **bold**, __underline__, ==highlight==
 static std::string applyInlineFormats(const std::string &text) {
     std::string result = text;
@@ -65,9 +81,6 @@ static std::string applyInlineFormats(const std::string &text) {
 static std::string textToHtml(const std::string &text) {
     if (text.empty()) return "";
 
-    // If already starts with '<', assume it's already HTML
-    if (text[0] == '<') return text;
-
     std::string result;
     std::vector<std::string> lines;
 
@@ -101,7 +114,7 @@ static std::string textToHtml(const std::string &text) {
                 result += "<ul>";
                 inList = true;
             }
-            std::string content = trimmed.substr(2);
+            std::string content = htmlEscape(trimmed.substr(2));
             content = applyInlineFormats(content);
             result += "<li>" + content + "</li>";
         } else {
@@ -112,7 +125,7 @@ static std::string textToHtml(const std::string &text) {
             if (trimmed.empty()) {
                 result += "<p><br></p>";
             } else {
-                std::string content = applyInlineFormats(trimmed);
+                std::string content = applyInlineFormats(htmlEscape(trimmed));
                 result += "<p>" + content + "</p>";
             }
         }
@@ -171,14 +184,13 @@ std::string FlomoClient::login() {
     std::string sign = generateSign(params);
 
     // Build JSON body
-    char body[512];
-    snprintf(body, sizeof(body),
-        "{\"email\":\"%s\",\"password\":\"%s\",\"wechat_union_id\":\"\","
-        "\"wechat_oa_open_id\":\"\",\"timestamp\":\"%s\","
-        "\"api_key\":\"%s\",\"app_version\":\"%s\","
-        "\"platform\":\"%s\",\"webp\":\"1\",\"sign\":\"%s\"}",
-        json_escape(email_).c_str(), json_escape(password_).c_str(), ts,
-        FLOMO_API_KEY, FLOMO_APP_VERSION, FLOMO_PLATFORM, sign.c_str());
+    std::string body = "{\"email\":\"" + json_escape(email_) +
+        "\",\"password\":\"" + json_escape(password_) +
+        "\",\"wechat_union_id\":\"\",\"wechat_oa_open_id\":\"\",\"timestamp\":\"" + ts +
+        "\",\"api_key\":\"" + FLOMO_API_KEY +
+        "\",\"app_version\":\"" + FLOMO_APP_VERSION +
+        "\",\"platform\":\"" + FLOMO_PLATFORM +
+        "\",\"webp\":\"1\",\"sign\":\"" + sign + "\"}";
 
     esp_http_client_config_t cfg = {};
     cfg.url = FLOMO_API_BASE "/user/login_by_email";
@@ -195,9 +207,9 @@ std::string FlomoClient::login() {
 
     std::string response;
     std::string token;
-    esp_err_t err = esp_http_client_open(client, (int)strlen(body));
+    esp_err_t err = esp_http_client_open(client, (int)body.size());
     if (err == ESP_OK) {
-        esp_http_client_write(client, body, (int)strlen(body));
+        esp_http_client_write(client, body.c_str(), (int)body.size());
         int content_length = esp_http_client_fetch_headers(client);
         int status = esp_http_client_get_status_code(client);
         if (status == 200) {

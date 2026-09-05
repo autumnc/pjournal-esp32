@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <sys/stat.h>
 #include <esp_log.h>
 #include <esp_random.h>
@@ -14,6 +15,7 @@ static const char *BASE_DIR = "/sdcard/settings";
 SettingsManager g_settings;
 
 static std::map<std::string, std::string> s_cache;
+static std::mutex s_cacheMutex;
 
 bool SettingsManager::begin() {
     mkdir(BASE_DIR, 0777);
@@ -22,6 +24,7 @@ bool SettingsManager::begin() {
 }
 
 std::string SettingsManager::get(const std::string &key) {
+    std::lock_guard<std::mutex> lock(s_cacheMutex);
     auto it = s_cache.find(key);
     if (it != s_cache.end()) return it->second;
     std::string path = std::string(BASE_DIR) + "/" + key;
@@ -41,6 +44,7 @@ std::string SettingsManager::get(const std::string &key) {
 }
 
 void SettingsManager::set(const std::string &key, const std::string &val) {
+    std::lock_guard<std::mutex> lock(s_cacheMutex);
     mkdir(BASE_DIR, 0777);
     std::string path = std::string(BASE_DIR) + "/" + key;
     if (!safeWriteFile(path, val)) {
@@ -60,6 +64,7 @@ void SettingsManager::setString(const std::string &key, const std::string &val) 
 }
 
 void SettingsManager::erase(const std::string &key) {
+    std::lock_guard<std::mutex> lock(s_cacheMutex);
     s_cache.erase(key);
     std::string path = std::string(BASE_DIR) + "/" + key;
     remove(path.c_str());

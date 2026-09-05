@@ -349,15 +349,21 @@ static esp_err_t __attribute__((unused)) handler_download(httpd_req_t *req) {
 
     char buf[4096];
     size_t n;
+    bool sendOk = true;
     while (true) {
         n = fread(buf, 1, sizeof(buf), f);
-        if (mtx) xSemaphoreGiveRecursive(mtx);
         if (n == 0) break;
-        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) break;
+        if (mtx) xSemaphoreGiveRecursive(mtx);
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) {
+            sendOk = false;
+            if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+            break;
+        }
         if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
     }
-    httpd_resp_send_chunk(req, nullptr, 0);
     fclose(f);
+    if (mtx) xSemaphoreGiveRecursive(mtx);
+    if (sendOk) httpd_resp_send_chunk(req, nullptr, 0);
     return ESP_OK;
 }
 

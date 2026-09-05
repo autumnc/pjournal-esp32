@@ -307,13 +307,24 @@ extern "C" void app_main() {
     gpio_set_direction(PIN_BOOT, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIN_BOOT, GPIO_PULLUP_ONLY);
 
+    // Initialize the UI before any fatal error screen can be drawn.
+    g_font.begin();
+    g_font.setSize(22);
+    bool displayReady = initDisplay();
+    if (!displayReady) {
+        ESP_LOGE(TAG, "Display initialization failed! System halted.");
+        while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+
     // Initialize SD card (needed before settings on SD)
     if (!g_journal.begin()) {
         ESP_LOGE(TAG, "SD card initialization failed! System halted.");
-        ui_clear();
-        ui_draw_text_centered(100, "SD卡初始化失败");
-        ui_draw_text_centered(135, "请检查SD卡");
-        ui_commit();
+        if (displayReady) {
+            ui_clear();
+            ui_draw_text_centered(100, "SD卡初始化失败");
+            ui_draw_text_centered(135, "请检查SD卡");
+            ui_commit();
+        }
         while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
     ESP_LOGI(TAG, "Journal entries: %d", g_journal.totalEntries());
@@ -335,12 +346,6 @@ extern "C" void app_main() {
     // Initialize battery ADC
     battery_init();
 
-    // Initialize font renderer (default 22pt for non-editor screens)
-    g_font.begin();
-    g_font.setSize(22);
-
-    // Initialize display
-    initDisplay();
     ui_clear();
     ui_draw_text_centered(100, g_quickEdit ? "快捷编辑" : "个人日记");
     char ver[32];

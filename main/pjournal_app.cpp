@@ -294,6 +294,7 @@ static int drawMonthCalendar(time_t now_t, const struct tm *tmNow) {
 }
 
 AppState screen_main_handle(int key, ScreenContext &ctx) {
+    ctx.nextState = APP_MAIN;
     ui_clear(); int y = FONT_H;
     const int rowH = LINE_SPACING;
     bool hasEntries = g_journal.totalEntries() > 0;

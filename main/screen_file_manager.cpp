@@ -47,12 +47,7 @@ void screen_file_manager_init() {
         }
         std::string pass = g_settings.wifiPassword();
         g_wifi.begin();
-        g_wifi.connect(ssid.c_str(), pass.c_str());
-        for (int i = 0; i < 100; i++) {
-            if (g_wifi.isConnected()) break;
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
-        if (!g_wifi.isConnected()) {
+        if (!g_wifi.connect(ssid.c_str(), pass.c_str())) {
             ui_clear();
             ui_draw_text_centered(SCREEN_H / 2 - FONT_H / 2, "WiFi连接失败");
             ui_commit();

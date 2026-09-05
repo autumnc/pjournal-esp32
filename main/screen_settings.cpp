@@ -145,12 +145,7 @@ static bool connect_wifi_from_settings() {
     if (ssid.empty()) return false;
     std::string pass = g_settings.wifiPassword();
     g_wifi.begin();
-    g_wifi.connect(ssid.c_str(), pass.c_str());
-    for (int i = 0; i < 100; i++) {
-        if (g_wifi.isConnected()) break;
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    return g_wifi.isConnected();
+    return g_wifi.connect(ssid.c_str(), pass.c_str());
 }
 
 // ── Screen entry points ──────────────────────────────────────────────────
