@@ -4,6 +4,7 @@
 #include "pcf85063.h"
 #include "user_config.h"
 #include "json_parser.h"
+#include "typing_click.h"
 
 #include <cstdio>
 #include <cstring>
@@ -133,6 +134,8 @@ static void voice_audio_deinit() {
 }
 
 static bool voice_audio_init() {
+    // 打字音效可能占用同一 I2S 控制器与 ES8311,听写前先归还控制权。
+    typingClickRelease();
     i2c_master_bus_handle_t bus = pjournal_get_i2c_bus();
     if (bus == nullptr) {
         ESP_LOGE(TAG, "I2C bus not ready");

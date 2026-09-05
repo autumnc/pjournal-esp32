@@ -952,6 +952,20 @@ static const uint8_t SYM_HL6_28_BITS[] = {
     0x00,
 };
 
+// uF09DA 折叠标志:圆角方框内含 >(NF-Mono 渲染 50px),用于折叠标题行,
+// 紧跟标题级别图标之后,几何与标题图标一致(25x25, xo0 yo22 adv28)。
+static const uint8_t SYM_FOLD_28_BITS[] = {
+    0x7F, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x80, 0xFF, 0xFF, 0xFF, 0x80,
+    0xFF, 0xFF, 0xFF, 0x80, 0xFF, 0xBF, 0xFF, 0x80, 0xFF, 0x1F, 0xFF, 0x80,
+    0xFF, 0x0F, 0xFF, 0x80, 0xFF, 0x87, 0xFF, 0x80, 0xFF, 0xC3, 0xFF, 0x80,
+    0xFF, 0xE1, 0xFF, 0x80, 0xFF, 0xF0, 0xFF, 0x80, 0xFF, 0xF8, 0x7F, 0x80,
+    0xFF, 0xFC, 0x7F, 0x80, 0xFF, 0xF0, 0xFF, 0x80, 0xFF, 0xE1, 0xFF, 0x80,
+    0xFF, 0xC3, 0xFF, 0x80, 0xFF, 0x87, 0xFF, 0x80, 0xFF, 0x8F, 0xFF, 0x80,
+    0xFF, 0x1F, 0xFF, 0x80, 0xFF, 0x3F, 0xFF, 0x80, 0xFF, 0xFF, 0xFF, 0x80,
+    0xFF, 0xFF, 0xFF, 0x80, 0xFF, 0xFF, 0xFF, 0x80, 0xFF, 0xFF, 0xFF, 0x80,
+    0x3F, 0xFF, 0xFE, 0x00,
+};
+
 static const SymbolGlyph g_symbolGlyphs_28[] = {
     { 11, 12, 1, 16, 14, SYM_TRI_RIGHT_28_BITS },
     // U+25B8 TRI_RIGHT
@@ -1050,6 +1064,7 @@ static const SymbolGlyph g_symbolGlyphs_28[] = {
     { 8, 8, 3, 13, 14, SYM_CIRCLE_O_28_BITS },  // U+1F786 空心圆
     { 14, 14, 0, 17, 14, SYM_BOX_BLANK_28_BITS },  // U+F0131 待办
     { 14, 14, 0, 17, 14, SYM_BOX_MARKED_28_BITS },  // U+F0132 完成
+    { 25, 25, 0, 22, 28, SYM_FOLD_28_BITS },  // U+F09DA 折叠标志
 };
 
 // --- 22pt (ascent=17) ---
@@ -1834,6 +1849,15 @@ static const uint8_t SYM_HL6_22_BITS[] = {
     0xE0,
 };
 
+// uF09DA 折叠标志(NF-Mono 渲染 40px):20x20, xo0 yo17 adv22,与标题图标同几何。
+static const uint8_t SYM_FOLD_22_BITS[] = {
+    0x7F, 0xFF, 0xE0, 0xFF, 0xFF, 0xF0, 0xFF, 0xFF, 0xF0, 0xFE, 0xFF, 0xF0,
+    0xFC, 0x7F, 0xF0, 0xFE, 0x3F, 0xF0, 0xFF, 0x1F, 0xF0, 0xFF, 0x8F, 0xF0,
+    0xFF, 0xC7, 0xF0, 0xFF, 0xE3, 0xF0, 0xFF, 0xC7, 0xF0, 0xFF, 0x8F, 0xF0,
+    0xFF, 0x1F, 0xF0, 0xFE, 0x3F, 0xF0, 0xFC, 0x7F, 0xF0, 0xFE, 0xFF, 0xF0,
+    0xFF, 0xFF, 0xF0, 0xFF, 0xFF, 0xF0, 0xFF, 0xFF, 0xF0, 0x7F, 0xFF, 0xE0,
+};
+
 static const SymbolGlyph g_symbolGlyphs_22[] = {
     { 8, 10, 1, 13, 11, SYM_TRI_RIGHT_22_BITS },
     // U+25B8 TRI_RIGHT
@@ -1958,6 +1982,7 @@ static const SymbolGlyph g_symbolGlyphs_22[] = {
     { 8, 8, 1, 11, 11, SYM_CIRCLE_O_22_BITS },  // U+1F786 空心圆
     { 11, 10, 0, 13, 11, SYM_BOX_BLANK_22_BITS },  // U+F0131 待办
     { 11, 10, 0, 13, 11, SYM_BOX_MARKED_22_BITS },  // U+F0132 完成
+    { 20, 20, 0, 17, 22, SYM_FOLD_22_BITS },  // U+F09DA 折叠标志
 };
 
 // --- 16pt (ascent=14) ---
@@ -2015,6 +2040,13 @@ static const uint8_t SYM_HL6_16_BITS[] = {
     0xFB, 0xFE, 0xF8, 0x7E, 0xFB, 0x3E, 0xFB, 0x3E, 0xF8, 0x7E, 0xFC, 0x7E,
     0xFF, 0xFE, 0xFF, 0xFC, 0x7F, 0xFC,
 };
+// uF09DA 折叠标志(NF-Mono 渲染 30px):15x15, xo0 yo14 adv16,与标题图标同几何。
+static const uint8_t SYM_FOLD_16_BITS[] = {
+    0xFF, 0xFE, 0xFF, 0xFE, 0xFB, 0xFE, 0xF1, 0xFE, 0xF8, 0xFE, 0xFC, 0x7E,
+    0xFE, 0x3E, 0xFF, 0x3E, 0xFE, 0x7E, 0xFC, 0xFE, 0xF9, 0xFE, 0xFB, 0xFE,
+    0xFF, 0xFE, 0xFF, 0xFE, 0x7F, 0xFC,
+};
+
 static const SymbolGlyph g_symbolGlyphs_16[] = {
     { 5, 5, 1, 8, 8, SYM_BULLET_16_BITS },     // U+2022 BULLET
     { 8, 7, 0, 9, 8, SYM_CHECKBOX_16_BITS },   // U+2610 CHECKBOX
@@ -2030,6 +2062,7 @@ static const SymbolGlyph g_symbolGlyphs_16[] = {
     { 8, 8, 0, 10, 8, SYM_BOX_BLANK_16_BITS },  // U+F0131 待办
     { 8, 8, 0, 10, 8, SYM_BOX_MARKED_16_BITS }, // U+F0132 完成
     { 8, 10, 1, 10, 8, SYM_TRI_RIGHT_22_BITS }, // U+25B8 折叠三角
+    { 15, 15, 0, 14, 16, SYM_FOLD_16_BITS },    // U+F09DA 折叠标志
 };
 
 inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
@@ -2052,6 +2085,7 @@ inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
             case 0xF0131: return &g_symbolGlyphs_16[11];
             case 0xF0132: return &g_symbolGlyphs_16[12];
             case 0x25B8: return &g_symbolGlyphs_16[13];
+            case 0xF09DA: return &g_symbolGlyphs_16[14];
             default: return nullptr;
         }
     }
@@ -2148,6 +2182,7 @@ case 0xE00D: if (font_size == 22) return &g_symbolGlyphs_22[20]; return nullptr;
                 case 0x1F786: return (font_size == 28) ? &g_symbolGlyphs_28[50] : (font_size == 22) ? &g_symbolGlyphs_22[63] : nullptr;
                 case 0xF0131: return (font_size == 28) ? &g_symbolGlyphs_28[51] : (font_size == 22) ? &g_symbolGlyphs_22[64] : nullptr;
                 case 0xF0132: return (font_size == 28) ? &g_symbolGlyphs_28[52] : (font_size == 22) ? &g_symbolGlyphs_22[65] : nullptr;
+                case 0xF09DA: return (font_size == 28) ? &g_symbolGlyphs_28[53] : (font_size == 22) ? &g_symbolGlyphs_22[66] : nullptr;
 
         default: return nullptr;
     }

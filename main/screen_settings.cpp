@@ -6,6 +6,7 @@
 #include "ime/IME.h"
 #include "pcf85063.h"
 #include "quick_edit.h"
+#include "typing_click.h"
 #include "ui_helpers.h"
 #include <cstdio>
 #include <cstring>
@@ -26,6 +27,10 @@ struct SettingField { const char *key; const char *label; bool masked; bool acti
 static const SettingField SETTINGS_FIELDS[] = {
     {"_app_mode", "工作模式", false, true},
     {"_home_view", "主页视图", false, true},
+    {"_input_mode", "输入模式", false, true},
+    {"_click_chinese", "中文音效触发", false, true},
+    {"_click_volume", "打字音效音量", false, true},
+    {"_click_timbre", "打字音效音色", false, true},
     {"_file_mgr", "文件管理", false, true},
     {"file_mgr_token", "文件管理密码", true, false},
     {"_bt_manage", "蓝牙设备管理", false, true},
@@ -54,6 +59,61 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_sync_time", "网络同步时间", false, true},
 };
 static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);
+
+// 打字机专用设置行仅在该模式开启时显示
+static bool fieldHidden(int idx) {
+    const char *k = SETTINGS_FIELDS[idx].key;
+    if (strcmp(k, "_click_volume") == 0 || strcmp(k, "_click_timbre") == 0 ||
+        strcmp(k, "_click_chinese") == 0)
+        return g_settings.inputMode() != "typewriter";
+    return false;
+}
+
+// 打字机音色 key↔中文名,顺序即设置内循环顺序(与 typing_click.cpp TIMBRES 同步)
+struct TimbreOpt { const char *key; const char *label; };
+static const TimbreOpt TIMBRE_OPTS[] = {
+    {"mechanical", "机械"}, {"soft", "柔和"}, {"electronic", "电子"},
+    {"clack", "打字机"}, {"wooden", "木鱼"}, {"crisp", "清脆"}, {"chime", "风铃"},
+};
+static int timbreIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(TIMBRE_OPTS) / sizeof(TIMBRE_OPTS[0])); i++)
+        if (strcmp(k, TIMBRE_OPTS[i].key) == 0) return i;
+    return 0;
+}
+static const char *timbreNext(int idx) {
+    int n = (int)(sizeof(TIMBRE_OPTS) / sizeof(TIMBRE_OPTS[0]));
+    return TIMBRE_OPTS[(idx + 1) % n].key;
+}
+// 中文音效触发 key↔中文名(顺序即循环顺序)
+static const TimbreOpt CLICK_CHINESE_OPTS[] = {
+    {"key", "按键触发"}, {"count", "上屏触发(按字数)"}, {"single", "上屏触发(单声)"},
+};
+static int clickChineseIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(CLICK_CHINESE_OPTS) / sizeof(CLICK_CHINESE_OPTS[0])); i++)
+        if (strcmp(k, CLICK_CHINESE_OPTS[i].key) == 0) return i;
+    return 0;
+}
+static const char *clickChineseNext(int idx) {
+    int n = (int)(sizeof(CLICK_CHINESE_OPTS) / sizeof(CLICK_CHINESE_OPTS[0]));
+    return CLICK_CHINESE_OPTS[(idx + 1) % n].key;
+}
+// UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
+static int fieldAt(int sel) {
+    int lastVisible = -1, vis = 0;
+    for (int i = 0; i < NUM_SETTINGS; i++) {
+        if (fieldHidden(i)) continue;
+        if (vis == sel) return i;
+        lastVisible = i;
+        vis++;
+    }
+    return lastVisible >= 0 ? lastVisible : 0;
+}
+static int fieldVisibleCount() {
+    int n = 0;
+    for (int i = 0; i < NUM_SETTINGS; i++)
+        if (!fieldHidden(i)) n++;
+    return n;
+}
 
 // 布尔型开关项:显示 开/关,Enter 在 "0"/"1" 间切换
 static bool isToggleField(const char *key) {
@@ -113,7 +173,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     g_settingsState.editCursor += (int)imeOut.length();
                 }
                 ui_clear();
-                auto &f = SETTINGS_FIELDS[g_settingsState.selection];
+                auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
                 ui_draw_text_centered(28, f.label, false, true);
                 int sepY = 28 + g_font.descent() + 4;
                 u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
@@ -200,7 +260,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.imeActive = false;
             g_ime.setActive(false);
         } else if (key == 0x0A || key == 0x0D) {
-            auto &f = SETTINGS_FIELDS[g_settingsState.selection];
+            auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
             g_settings.setString(f.key, g_settingsState.editBuffer);
             g_settingsState.editing = false;
             g_settingsState.editBuffer.clear();
@@ -235,7 +295,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         }
 
         ui_clear();
-        auto &f = SETTINGS_FIELDS[g_settingsState.selection];
+        auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
         ui_draw_text_centered(28, f.label, false, true);
         int sepY = 28 + g_font.descent() + 4;
         u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
@@ -352,13 +412,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         return ctx.nextState;
     }
     if (key == 'k' || key == KEY_UP) { if (g_settingsState.selection > 0) g_settingsState.selection--; }
-    if (key == 'j' || key == KEY_DOWN) { if (g_settingsState.selection < NUM_SETTINGS-1) g_settingsState.selection++; }
+    if (key == 'j' || key == KEY_DOWN) { if (g_settingsState.selection < fieldVisibleCount()-1) g_settingsState.selection++; }
     if (key == 'd' || key == 'D') {
-        auto &f = SETTINGS_FIELDS[g_settingsState.selection];
-        if (!f.action) g_settings.erase(SETTINGS_FIELDS[g_settingsState.selection].key);
+        auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
+        if (!f.action) g_settings.erase(SETTINGS_FIELDS[fieldAt(g_settingsState.selection)].key);
     }
     if (key == 0x0A || key == 0x0D) {
-        auto &f = SETTINGS_FIELDS[g_settingsState.selection];
+        auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
         if (f.action) {
             if (strcmp(f.key, "_app_mode") == 0) {
                 std::string next = (g_settings.appMode() == "quick") ? "journal" : "quick";
@@ -466,6 +526,32 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 g_settings.setString("font_size", std::to_string(newSize));
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_input_mode") == 0) {
+                std::string next = (g_settings.inputMode() == "typewriter") ? "normal" : "typewriter";
+                g_settings.setString("input_mode", next);
+                if (next == "normal") typingClickRelease();  // 切回正常立即关喇叭
+                if (g_settingsState.selection > fieldVisibleCount() - 1)
+                    g_settingsState.selection = fieldVisibleCount() - 1;
+                return APP_SETTINGS;
+            }
+            if (strcmp(f.key, "_click_volume") == 0) {
+                static const int LV[] = {0, 20, 40, 60, 80, 100};
+                const int n = (int)(sizeof(LV) / sizeof(LV[0]));
+                int cur = g_settings.typingClickVolume(), idx = 0;
+                for (int i = 0; i < n; i++) if (LV[i] == cur) { idx = i; break; }
+                g_settings.setString("click_volume", std::to_string(LV[(idx + 1) % n]));
+                return APP_SETTINGS;
+            }
+            if (strcmp(f.key, "_click_chinese") == 0) {
+                g_settings.setString("click_chinese",
+                    clickChineseNext(clickChineseIndex(g_settings.clickChineseMode().c_str())));
+                return APP_SETTINGS;
+            }
+            if (strcmp(f.key, "_click_timbre") == 0) {
+                g_settings.setString("click_timbre",
+                    timbreNext(timbreIndex(g_settings.typingClickTimbre().c_str())));
+                return APP_SETTINGS;
+            }
         } else if (isToggleField(f.key)) {
             // 开/关切换:存 "1"(开) 或 "0"(关)
             g_settings.setString(f.key, toggleValue(f.key) ? "0" : "1");
@@ -484,9 +570,10 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     if (g_settingsState.selection >= g_settingsState.scroll + visible)
         g_settingsState.scroll = g_settingsState.selection - visible + 1;
 
-    for (int i = 0; i < visible && (g_settingsState.scroll + i) < NUM_SETTINGS; i++) {
-        int idx = g_settingsState.scroll + i; auto &f = SETTINGS_FIELDS[idx];
-        bool sel = (idx == g_settingsState.selection);
+    int rowCount = fieldVisibleCount();
+    for (int i = 0; i < visible && (g_settingsState.scroll + i) < rowCount; i++) {
+        bool sel = (g_settingsState.scroll + i == g_settingsState.selection);
+        int idx = fieldAt(g_settingsState.scroll + i); auto &f = SETTINGS_FIELDS[idx];
         char buf[80];
         if (f.action) {
             if (strcmp(f.key, "_font_size") == 0) {
@@ -500,6 +587,17 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_home_view") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.homeView() == "month" ? "月视图" : "周视图");
+            } else if (strcmp(f.key, "_input_mode") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         g_settings.inputMode() == "typewriter" ? "打字机模式" : "正常模式");
+            } else if (strcmp(f.key, "_click_chinese") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         CLICK_CHINESE_OPTS[clickChineseIndex(g_settings.clickChineseMode().c_str())].label);
+            } else if (strcmp(f.key, "_click_volume") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %d%%", f.label, g_settings.typingClickVolume());
+            } else if (strcmp(f.key, "_click_timbre") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         TIMBRE_OPTS[timbreIndex(g_settings.typingClickTimbre().c_str())].label);
             } else {
                 snprintf(buf, sizeof(buf), "▶ %s", f.label);
             }

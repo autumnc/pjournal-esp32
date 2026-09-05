@@ -6,6 +6,7 @@
 #include "wifi_manager.h"
 #include "settings_manager.h"
 #include "quick_edit.h"
+#include "typing_click.h"
 #include "ui_helpers.h"
 #include "markdown_render.h"
 #include "ime/IME.h"
@@ -131,6 +132,9 @@ static void markDirty() {
     g_editor.wordCountDirty = true;
     g_editor.mdInfoDirty = true;
 }
+
+// 打字机模式:光标居中 + 按键音效是否生效
+static bool editorTypewriter() { return g_settings.inputMode() == "typewriter"; }
 
 // 行数变化时平移折叠标题的行号,保持折叠集与缓冲区对齐。
 static void foldLinesInserted(int at, int count) {
@@ -521,6 +525,13 @@ static int utf8Prev(const std::string &s, int pos) {
     int prev = pos - 1;
     while (prev > 0 && ((unsigned char)s[prev] & 0xC0) == 0x80) prev--;
     return prev;
+}
+
+// 字符串中的 UTF-8 字符(码点)数。
+static int utf8Count(const std::string &s) {
+    int n = 0;
+    for (int i = 0; i < (int)s.length(); i = utf8Next(s, i)) n++;
+    return n;
 }
 
 static void docOffsetToPos(int off, int &cy, int &cx) {
@@ -1127,16 +1138,33 @@ static void drawEditor() {
     int effectiveVisibleVrows = composing ? (normalVisibleVrows - 2) : normalVisibleVrows;
     if (effectiveVisibleVrows < 1) effectiveVisibleVrows = 1;
 
-    if (cursorVR < g_editor.scroll) g_editor.scroll = cursorVR;
-    if (cursorVR >= g_editor.scroll + effectiveVisibleVrows)
-        g_editor.scroll = cursorVR - effectiveVisibleVrows + 1;
-    if (g_editor.scroll < 0) g_editor.scroll = 0;
+    if (editorTypewriter() && cursorVR >= 0) {
+        // 打字机模式:光标始终钉在可视区中间行。居中按「未弹出候选区」的行数
+        // (normalVisibleVrows)计算,滚动与 IME 候选面板的弹出/消失无关,光标屏上
+        // 位置稳定不动(候选面板压在底部约 2 行,居中光标不受影响)。scroll 不设
+        // clamp,文首/文末及短文档经下方绘制循环对越界下标跳过 → 自然留白。
+        int rows = normalVisibleVrows; if (rows < 1) rows = 1;
+        g_editor.scroll = cursorVR - rows / 2;
+        // 极端小屏兜底:候选区几乎占满内容区时,保证光标仍落在候选条上方的可视行,
+        // 不因居中而藏到候选面板之下。
+        if (composing && cursorVR - g_editor.scroll >= visibleVrows) {
+            g_editor.scroll = cursorVR - visibleVrows + 1;
+            if (g_editor.scroll < 0) g_editor.scroll = 0;
+        }
+    } else {
+        if (cursorVR < g_editor.scroll) g_editor.scroll = cursorVR;
+        if (cursorVR >= g_editor.scroll + effectiveVisibleVrows)
+            g_editor.scroll = cursorVR - effectiveVisibleVrows + 1;
+        if (g_editor.scroll < 0) g_editor.scroll = 0;
+    }
 
     bool mdOn = g_settings.markdownRender();
     mdSetRenderEnabled(mdOn);
     const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
-    for (int i = 0; i < visibleVrows && (g_editor.scroll + i) < (int)vrows.size(); i++) {
-        auto &vr = vrows[g_editor.scroll + i];
+    for (int i = 0; i < visibleVrows; i++) {
+        int idx = g_editor.scroll + i;
+        if (idx < 0 || idx >= (int)vrows.size()) continue;  // 打字机留白行
+        auto &vr = vrows[idx];
         int mdCursor = (vr.lineIdx == g_editor.cy) ? g_editor.cx : -1;
         bool folded = !g_editor.foldedHeadings.empty() &&
                       g_editor.foldedHeadings.count(vr.lineIdx);
@@ -1148,8 +1176,9 @@ static void drawEditor() {
     if (g_editor.hasSelection) {
         TextPos selStart, selEnd;
         getSelRange(selStart, selEnd);
-        for (int i = 0; i < visibleVrows && (g_editor.scroll + i) < (int)vrows.size(); i++) {
+        for (int i = 0; i < visibleVrows; i++) {
             int vrIdx = g_editor.scroll + i;
+            if (vrIdx < 0 || vrIdx >= (int)vrows.size()) continue;  // 打字机留白行
             auto &vr = vrows[vrIdx];
             int lineIdx = vr.lineIdx;
             int rowStart = vr.start, rowEnd = vr.end;
@@ -1161,11 +1190,13 @@ static void drawEditor() {
             if (hlStart >= hlEnd) continue;
             // Highlight range [hlStart, hlEnd) on this vrow
             const MdLineInfo &mdi = mdInfo[lineIdx];
+            bool folded = !g_editor.foldedHeadings.empty() &&
+                          g_editor.foldedHeadings.count(lineIdx);
             int mdCursor = (lineIdx == g_editor.cy) ? g_editor.cx : -1;
             int xOff = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlStart, rowStart,
-                                   vr.indentCells, mdCursor);
+                                   vr.indentCells, mdCursor, folded);
             int selEndX = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlEnd, rowStart,
-                                      vr.indentCells, mdCursor);
+                                      vr.indentCells, mdCursor, folded);
             int selW = selEndX - xOff;
             int ly = y + i * LINE_SPACING;
             u8g2_SetDrawColor(g_u8g2, 2);  // XOR mode
@@ -1178,7 +1209,10 @@ static void drawEditor() {
         auto &vr = vrows[cursorVR];
         const std::string &line = g_editor.lines[vr.lineIdx];
         const MdLineInfo &mdi = mdInfo[vr.lineIdx];
-        int cx = 4 + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells, g_editor.cx);
+        bool folded = !g_editor.foldedHeadings.empty() &&
+                      g_editor.foldedHeadings.count(vr.lineIdx);
+        int cx = 4 + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells,
+                             g_editor.cx, folded);
         int cy_draw = y + (cursorVR - g_editor.scroll) * LINE_SPACING;
         int cw = g_font.halfAdvance();
         if (g_editor.cx < (int)line.length()) {
@@ -1586,6 +1620,16 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     if (g_editor.imeActive && key != 0) {
         std::string imeOut;
         if (g_ime.handleKey(key, imeOut)) {
+            if (editorTypewriter()) {
+                // 中文音效触发:key=每个被 IME 消费的键一声;count=上屏按字数连响;single=上屏一声
+                if (g_settings.clickChineseMode() == "key") {
+                    typingClickPlay(1);
+                } else if (g_settings.clickChineseMode() == "count") {
+                    int n = utf8Count(imeOut); if (n > 0) typingClickPlay(n);
+                } else {
+                    if (!imeOut.empty()) typingClickPlay(1);
+                }
+            }
             editorInsertText(imeOut);
             ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
         }
@@ -1903,6 +1947,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         markDirty();
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
+        if (editorTypewriter()) typingClickPlay(1);
     } else if (key == KEY_LEFT) {
         clearSelection();
         if (g_editor.cx > 0) {

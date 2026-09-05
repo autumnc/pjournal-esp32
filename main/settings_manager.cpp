@@ -2,6 +2,7 @@
 #include "safe_file.h"
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <map>
 #include <sys/stat.h>
 #include <esp_log.h>
@@ -132,3 +133,17 @@ int SettingsManager::fontSize() {
 std::string SettingsManager::appMode() { return getString("app_mode", "journal"); }
 
 std::string SettingsManager::homeView() { return getString("home_view", "week"); }
+
+std::string SettingsManager::inputMode() { return getString("input_mode", "normal"); }
+
+std::string SettingsManager::clickChineseMode() { return getString("click_chinese", "key"); }
+
+int SettingsManager::typingClickVolume() {
+    std::string v = get("click_volume");
+    if (v.empty()) return 80;
+    int n = atoi(v.c_str());
+    if (n < 0 || n > 100) return 80;
+    return n;
+}
+
+std::string SettingsManager::typingClickTimbre() { return getString("click_timbre", "mechanical"); }

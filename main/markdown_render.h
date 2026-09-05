@@ -57,15 +57,16 @@ void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
 // Visual x (px from the line's left edge) at which raw byte bytePos renders.
 // For heading/task/quote lines the content sits at a fixed prefix offset
 // (2/3/4 cells) instead of its raw width. Cursor / selection must use this to
-// stay aligned with draw.
+// stay aligned with draw. A folded heading widens its prefix to 4 cells
+// (heading icon + uF09DA fold marker), shifting the title right 2 cells.
 int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos,
-              int cursorBytePos = -1);
+              int cursorBytePos = -1, bool folded = false);
 
 // Visual x (px) of bytePos within a vrow that starts at raw byte vrowStart.
 // Continuation vrows repeat the prefix indent. Use for all vrow drawing /
 // cursor / selection positioning.
 int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart,
-            int indentCells = 0, int cursorBytePos = -1);
+            int indentCells = 0, int cursorBytePos = -1, bool folded = false);
 
 // Enable/disable markdown rendering (Settings "Markdown渲染"). When disabled,
 // every line is drawn as raw text with the marker characters untouched.

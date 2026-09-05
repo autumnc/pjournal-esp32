@@ -23,6 +23,10 @@ struct MdSeg {
 
 bool s_mdEnabled = true;  // cleared when "Markdown渲染" setting is off
 
+// U+F09DA 折叠标志(NF-Mono 圆角方框内含 >),折叠标题行时紧跟级别图标之后,
+// 与级别图标同几何(advance 2 格),合起来前缀占 4 格。
+static const char *kFoldMarker = "\xF3\xB0\xA7\x9A";
+
 bool cursorInMarker(int cursorBytePos, int start, int end) {
     return cursorBytePos >= start && cursorBytePos < end;
 }
@@ -416,8 +420,12 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
         if (cursorInMarker(cursorBytePos, 0, n)) {
             segs.push_back({0, n, TextStyle{}, line.substr(0, n)});
         } else if (folded) {
-            // ▸ + 空格 = 2 格,与级别字形槽位等宽,后续定位数学不受影响
-            segs.push_back({0, n, base, "\xE2\x96\xB8 "});
+            // 保留级别图标,紧跟 uF09DA 折叠标志(各 advance 2 格)→ 前缀共 4 格,
+            // 标题内容右移 2 格。mdVisualX/mdVrowX/mdContinuationPrefix 同按折叠态
+            // 输出 4 格前缀,光标/选中/折行定位与此一致。
+            std::string glyph(kLevelGlyph[info.headingLevel - 1]);
+            glyph += kFoldMarker;
+            segs.push_back({0, n, base, glyph});
         } else {
             // Heading glyph advance is 2 cells; content starts right after it.
             segs.push_back({0, n, base, kLevelGlyph[info.headingLevel - 1]});
@@ -473,9 +481,9 @@ int segWidthToByte(const MdSeg &seg, int bytePos) {
 }
 
 int mdParsedX(const std::string &line, const MdLineInfo &info, int bytePos,
-              int cursorBytePos) {
+              int cursorBytePos, bool folded = false) {
     std::vector<MdSeg> segs;
-    mdParseLine(line, info, segs, cursorBytePos);
+    mdParseLine(line, info, segs, cursorBytePos, folded);
     int px = 0;
     for (auto &seg : segs) {
         if (bytePos >= seg.end) px += g_font.textWidth(seg.drawText.c_str());
@@ -484,8 +492,9 @@ int mdParsedX(const std::string &line, const MdLineInfo &info, int bytePos,
     return px;
 }
 
-int mdContinuationPrefix(const std::string &line, const MdLineInfo &info, int cursorBytePos) {
-    if (info.headingLevel > 0) return mdParsedX(line, info, info.headingLevel, cursorBytePos);
+int mdContinuationPrefix(const std::string &line, const MdLineInfo &info, int cursorBytePos,
+                         bool folded = false) {
+    if (info.headingLevel > 0) return mdParsedX(line, info, info.headingLevel, cursorBytePos, folded);
     if (info.quote) return mdParsedX(line, info, 2, cursorBytePos);
     if (info.list || info.task) {
         MdListMarker m = mdListMarker(line);
@@ -548,14 +557,15 @@ std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines) {
 }
 
 int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos,
-              int cursorBytePos) {
+              int cursorBytePos, bool folded) {
     if (!s_mdEnabled) return g_font.textWidth(line.substr(0, bytePos).c_str());
-    if (cursorBytePos >= 0) return mdParsedX(line, info, bytePos, cursorBytePos);
+    if (cursorBytePos >= 0) return mdParsedX(line, info, bytePos, cursorBytePos, folded);
     if (info.inCodeBlock || info.hr) return g_font.textWidth(line.substr(0, bytePos).c_str());
     int cell = g_font.halfAdvance();
     if (info.headingLevel > 0) {
+        int prefixCells = folded ? 4 : 2;  // 折叠时:级别图标 + uF09DA 折叠标志
         if (bytePos >= info.headingLevel)
-            return 2 * cell + mdContentWidth(line, info.headingLevel, bytePos);
+            return prefixCells * cell + mdContentWidth(line, info.headingLevel, bytePos);
         return 0;
     }
     if (info.list || info.task) {
@@ -583,26 +593,27 @@ int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos,
 // prefix indent so wrapped text stays aligned under the first line. Without
 // this, wrapped lines were placed at their whole-line x, i.e. off-screen.
 int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vrowStart,
-            int indentCells, int cursorBytePos) {
+            int indentCells, int cursorBytePos, bool folded) {
     int extra = indentCells * g_font.halfAdvance();
     if (!s_mdEnabled)
         return extra + g_font.textWidth(line.substr(vrowStart, bytePos - vrowStart).c_str());
     if (cursorBytePos >= 0) {
-        int prefix = vrowStart > 0 ? mdContinuationPrefix(line, info, cursorBytePos) : 0;
-        return extra + mdVisualX(line, info, bytePos, cursorBytePos) -
-               mdVisualX(line, info, vrowStart, cursorBytePos) + prefix;
+        int prefix = vrowStart > 0 ? mdContinuationPrefix(line, info, cursorBytePos, folded) : 0;
+        return extra + mdVisualX(line, info, bytePos, cursorBytePos, folded) -
+               mdVisualX(line, info, vrowStart, cursorBytePos, folded) + prefix;
     }
     int cell = g_font.halfAdvance();
     int prefix = 0;
     if (vrowStart > 0) {
-        if (info.headingLevel > 0) prefix = 2 * cell;
+        if (info.headingLevel > 0) prefix = (folded ? 4 : 2) * cell;
         else if (info.quote) prefix = 4 * cell + 2;
         else if (info.list || info.task) {
             MdListMarker m = mdListMarker(line);
             if (m.ok) prefix = (m.start + m.cells) * cell;
         }
     }
-    return extra + mdVisualX(line, info, bytePos) - mdVisualX(line, info, vrowStart) + prefix;
+    return extra + mdVisualX(line, info, bytePos, -1, folded) -
+           mdVisualX(line, info, vrowStart, -1, folded) + prefix;
 }
 
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
@@ -619,7 +630,7 @@ void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
         if (seg.end <= start) continue;
         int s = std::max(seg.start, start);
         int e = std::min(seg.end, end);
-        int cx = x + mdVrowX(line, info, s, start, indentCells, cursorBytePos);
+        int cx = x + mdVrowX(line, info, s, start, indentCells, cursorBytePos, folded);
         std::string draw = sliceDraw(seg, s, e);
         if (!draw.empty()) g_font.drawTextStyled(cx, y, draw.c_str(), seg.ts);
     }

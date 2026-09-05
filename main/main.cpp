@@ -19,6 +19,7 @@
 #include "screen_polish.h"
 #include "screen_polish_prompt.h"
 #include "voice_input.h"
+#include "typing_click.h"
 #include "u8g2_st7305.h"
 #include "pcf85063.h"
 
@@ -205,6 +206,9 @@ static void enterLightSleep(void) {
         if (retain) gpio_sleep_sel_dis(display_pins[i]);
         else        gpio_sleep_sel_en(display_pins[i]);
     }
+
+    // 休眠前停掉打字音效的 I2S/ES8311/PA,避免休眠期 MCLK 耗电与 light-sleep 冲突
+    typingClickRelease();
 
     // 完全关断 BLE 射频(若键盘已连接,deinit 会同时断开 HID 连接)
     g_bt.deinit();

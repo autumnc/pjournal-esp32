@@ -250,6 +250,12 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
         }
         int maxc = SCREEN_W / g_font.halfAdvance();
         int indent = mdIndentCells(line);
+        // 折叠标题行渲染为「级别图标 + uF09DA 折叠标志」共 4 格,比未折叠多 2 格;
+        // 折行预留须同步加宽,否则换行处内容会画到屏幕右缘之外。
+        if (folding && mdInfoPtr && (*mdInfoPtr)[li].headingLevel > 0 &&
+            !(*mdInfoPtr)[li].inCodeBlock && foldedHeadings->count(li)) {
+            indent = 4;
+        }
         int prefixEnd = mdPrefixLen(line);
         int firstIndent = 0;
         if (firstLineIndent && mdInfoPtr) {
