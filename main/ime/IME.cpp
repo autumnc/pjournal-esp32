@@ -4,6 +4,8 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <ctime>
+#include <cstdlib>
 #include <esp_log.h>
 #include <sys/stat.h>
 
@@ -12,7 +14,42 @@ static const uint8_t IME_MAGIC[4] = {'I', 'M', 'E', '3'};
 
 // 用户词典持久化到 SD 卡(与设置同目录)。NVS 分区仅 24KB 且写入失败会静默
 // 丢失/启动时整区擦除,改用 SD 文件后容量无上限,重启与重刷固件均保留。
-static const char *USERDICT_PATH = "/sdcard/settings/userdict.txt";
+static const char *USERDICT_DYNAMIC_PATH = "/sdcard/settings/userdict.txt";
+static const char *USERDICT_FIXED_PATH = "/sdcard/settings/userdict_fixed.txt";
+static const char *ENGLISHDICT_PATH = "/sdcard/settings/englishdict.txt";
+static const size_t USERDICT_FIXED_LIMIT = 500;
+static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
+static const size_t ENGLISHDICT_LIMIT = 10000;
+static const int IME_KEY_UP = 0x80;
+static const int IME_KEY_DOWN = 0x81;
+
+static const char *BUILTIN_ENGLISH_WORDS[] = {
+    "about", "after", "again", "also", "android", "api", "app", "apple",
+    "backup", "because", "before", "between", "build", "cache", "calendar",
+    "change", "cloud", "code", "commit", "config", "content", "context",
+    "data", "debug", "device", "document", "editor", "email", "error",
+    "event", "export", "feature", "file", "filter", "firmware", "flash",
+    "format", "function", "github", "hello", "history", "image", "import",
+    "input", "issue", "journal", "keyboard", "local", "manager", "markdown",
+    "memory", "message", "network", "note", "openai", "output", "password",
+    "plugin", "project", "prompt", "python", "release", "request", "screen",
+    "search", "setting", "storage", "sync", "system", "task", "today",
+    "token", "update", "upload", "user", "version", "voice", "wifi", "word",
+    "work", "write"
+};
+
+static const char *V_PUNCT_CANDIDATES[] = {
+    "，", "。", "、", "？", "！", "：", "；", "…", "……", "—", "——", "·",
+    "“", "”", "“”", "‘", "’", "‘’", "「", "」", "「」", "『", "』", "『』",
+    "（", "）", "（）", "【", "】", "【】", "［", "］", "［］", "〔", "〕", "〔〕",
+    "｛", "｝", "｛｝", "《", "》", "《》", "〈", "〉", "〈〉", "〖", "〗", "〖〗",
+    "〝", "〞", "〝〞",
+    "．", "／", "＼", "～", "｜", "＃", "＠", "＆", "％", "＊", "＋", "－", "＝",
+    "＿", "＾", "＄", "＜", "＞",
+    ",", ".", "?", "!", ":", ";", "'", "\"", "(", ")", "[", "]", "{", "}",
+    "<", ">", "/", "\\", "-", "_", "+", "=", "*", "#", "@", "&", "%", "$",
+    "^", "~", "`", "|"
+};
 
 static void appendUtf8(uint32_t cp, std::string &out) {
     if (cp < 0x80) {
@@ -61,6 +98,10 @@ extern const uint8_t ime_table_pinyin_bin_end[]   asm("_binary_ime_table_pinyin_
 // Embedded liangfen dictionary
 extern const uint8_t liangfen_bin_start[] asm("_binary_liangfen_bin_start");
 extern const uint8_t liangfen_bin_end[]   asm("_binary_liangfen_bin_end");
+
+// Embedded English word list
+extern const uint8_t english_words_txt_start[] asm("_binary_english_words_txt_start");
+extern const uint8_t english_words_txt_end[]   asm("_binary_english_words_txt_end");
 
 static inline std::string str_trim(const std::string &s) {
     size_t start = s.find_first_not_of(" \t\r\n");
@@ -143,17 +184,17 @@ bool IME::begin() {
         return false;
     }
     _loaded = true;
-    loadUserDict();
     static const char *NAMES[] = {"Wubi", "Pinyin", "Shuangpin"};
     ESP_LOGI(IME_TAG, "ready: %s, %u records, codeLen %d",
              NAMES[_scheme <= SHUANGPIN ? _scheme : 0], (unsigned)_count, _codeLen);
     return true;
 }
 
-void IME::loadUserDict() {
-    _userWords.clear();
-    FILE *f = fopen(USERDICT_PATH, "r");
-    if (!f) return;
+bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
+                           bool &dirty, size_t maxEntries) {
+    entries.clear();
+    FILE *f = fopen(path, "r");
+    if (!f) { dirty = false; return false; }
 
     // Read the whole file
     std::string allData;
@@ -161,7 +202,7 @@ void IME::loadUserDict() {
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) allData.append(buf, n);
     fclose(f);
-    if (allData.empty()) return;
+    if (allData.empty()) { dirty = false; return true; }
 
     // Parse lines (same format as before: "code word count" per line)
     const size_t MAX_READ = 64 * 1024;
@@ -213,7 +254,7 @@ void IME::loadUserDict() {
         }
         if (code.length() >= 1 && word.length() >= 2) {
             bool isDup = false;
-            for (auto &existing : _userWords) {
+            for (auto &existing : entries) {
                 if (existing.code == code && existing.word == word && existing.trad == trad) {
                     isDup = true;
                     hadDuplicates = true;
@@ -221,30 +262,47 @@ void IME::loadUserDict() {
                     break;
                 }
             }
-            if (!isDup) _userWords.push_back({code, word, count, trad});
+            if (!isDup) {
+                if (entries.size() >= maxEntries) {
+                    entries.erase(entries.begin());
+                    hadDuplicates = true;
+                }
+                entries.push_back({code, word, count, trad});
+            }
         }
     }
     if (hadDuplicates) {
         // 只在真正合并了计数时才需要保存
-        _userDirty = true;
-        saveUserDict();
+        dirty = true;
+        saveUserDictFile(path, entries, dirty);
     } else {
-        _userDirty = false;  // 无重复，无需保存
+        dirty = false;  // 无重复，无需保存
     }
-    if (_userWords.size() > 0)
-        ESP_LOGI(IME_TAG, "loaded %zu user words", _userWords.size());
+    if (entries.size() > 0)
+        ESP_LOGI(IME_TAG, "loaded %zu user words from %s", entries.size(), path);
+    return true;
 }
 
-void IME::saveUserDict() {
-    if (!_userDirty) return;
+void IME::loadUserDict() {
+    loadUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
+    loadUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
+    _userDictLoaded = true;
+}
+
+void IME::ensureUserDictLoaded() {
+    if (!_userDictLoaded) loadUserDict();
+}
+
+void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty) {
+    if (!dirty) return;
     mkdir("/sdcard/settings", 0777);
-    FILE *f = fopen(USERDICT_PATH, "w");
+    FILE *f = fopen(path, "w");
     if (!f) {
-        ESP_LOGE(IME_TAG, "failed to open userdict file %s", USERDICT_PATH);
+        ESP_LOGE(IME_TAG, "failed to open userdict file %s", path);
         return;
     }
 
-    for (auto &p : _userWords) {
+    for (auto &p : entries) {
         std::string line = p.code + " " + p.word + " " + std::to_string(p.count)
                          + (p.trad ? " 1" : "") + "\n";
         fwrite(line.data(), 1, line.size(), f);
@@ -252,48 +310,304 @@ void IME::saveUserDict() {
 
     if (fclose(f) != 0)
         ESP_LOGE(IME_TAG, "failed to flush userdict file");
-    _userDirty = false;
+    dirty = false;
 }
 
 void IME::addUserWord(const std::string &code, const std::string &word) {
+    ensureUserDictLoaded();
     if (word.length() < 3 || code.length() == 0) return;
-    for (auto &p : _userWords)
+    for (auto &p : _fixedUserWords)
         if (p.code == code && p.word == word && p.trad == _trad) return;
-    if (_userWords.size() >= 1000)
-        _userWords.erase(_userWords.begin());
-    _userWords.push_back({code, word, 0, _trad});
-    _userDirty = true;
-    saveUserDict();
+    for (auto &p : _dynamicUserWords)
+        if (p.code == code && p.word == word && p.trad == _trad) return;
+    if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT)
+        _dynamicUserWords.erase(_dynamicUserWords.begin());
+    _dynamicUserWords.push_back({code, word, 0, _trad});
+    _dynamicUserDirty = true;
+    saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
 }
 
 void IME::removeUserWord(const std::string &code, const std::string &word) {
-    for (auto it = _userWords.begin(); it != _userWords.end(); ++it) {
+    ensureUserDictLoaded();
+    for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
         if (it->code == code && it->word == word && it->trad == _trad) {
-            _userWords.erase(it);
-            _userDirty = true;
-            saveUserDict();
+            _dynamicUserWords.erase(it);
+            _dynamicUserDirty = true;
+            saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
             return;
         }
     }
 }
 
 void IME::clearUserDict() {
-    if (_userWords.empty()) return;
-    _userWords.clear();
-    _userDirty = true;
-    saveUserDict();
+    ensureUserDictLoaded();
+    if (_dynamicUserWords.empty()) return;
+    _dynamicUserWords.clear();
+    _dynamicUserDirty = true;
+    saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
 }
 
 void IME::pruneUserDict(int minCount) {
-    size_t before = _userWords.size();
-    auto it = _userWords.begin();
-    while (it != _userWords.end()) {
+    ensureUserDictLoaded();
+    auto it = _dynamicUserWords.begin();
+    while (it != _dynamicUserWords.end()) {
         if (it->count < minCount) {
-            it = _userWords.erase(it);
-            _userDirty = true;
+            it = _dynamicUserWords.erase(it);
+            _dynamicUserDirty = true;
         } else ++it;
     }
-    if (_userDirty) saveUserDict();
+    if (_dynamicUserDirty) saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
+}
+
+const std::vector<IME::UserEntryView> IME::userDictEntries(UserDictKind kind) const {
+    const std::vector<UserEntry> &src = (kind == FIXED_DICT) ? _fixedUserWords : _dynamicUserWords;
+    std::vector<UserEntryView> out;
+    out.reserve(src.size());
+    for (auto &p : src) out.push_back({p.code, p.word, p.count, p.trad});
+    return out;
+}
+
+bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word) {
+    ensureUserDictLoaded();
+    if (word.length() < 3 || code.length() == 0) return false;
+    std::vector<UserEntry> &entries = (kind == FIXED_DICT) ? _fixedUserWords : _dynamicUserWords;
+    bool &dirty = (kind == FIXED_DICT) ? _fixedUserDirty : _dynamicUserDirty;
+    const char *path = (kind == FIXED_DICT) ? USERDICT_FIXED_PATH : USERDICT_DYNAMIC_PATH;
+    size_t limit = (kind == FIXED_DICT) ? USERDICT_FIXED_LIMIT : USERDICT_DYNAMIC_LIMIT;
+    for (auto &p : entries) {
+        if (p.code == code && p.word == word && p.trad == _trad) {
+            p.count++;
+            dirty = true;
+            saveUserDictFile(path, entries, dirty);
+            return true;
+        }
+    }
+    if (entries.size() >= limit) {
+        if (kind == FIXED_DICT) return false;
+        entries.erase(entries.begin());
+    }
+    entries.push_back({code, word, 1, _trad});
+    dirty = true;
+    saveUserDictFile(path, entries, dirty);
+    return true;
+}
+
+void IME::removeUserDictEntries(UserDictKind kind, const std::vector<int> &indices) {
+    ensureUserDictLoaded();
+    std::vector<UserEntry> &entries = (kind == FIXED_DICT) ? _fixedUserWords : _dynamicUserWords;
+    bool &dirty = (kind == FIXED_DICT) ? _fixedUserDirty : _dynamicUserDirty;
+    const char *path = (kind == FIXED_DICT) ? USERDICT_FIXED_PATH : USERDICT_DYNAMIC_PATH;
+    for (int n = (int)entries.size() - 1; n >= 0; n--) {
+        if (std::find(indices.begin(), indices.end(), n) != indices.end()) {
+            entries.erase(entries.begin() + n);
+            dirty = true;
+        }
+    }
+    if (dirty) saveUserDictFile(path, entries, dirty);
+}
+
+size_t IME::userDictSize(UserDictKind kind) const {
+    return (kind == FIXED_DICT) ? _fixedUserWords.size() : _dynamicUserWords.size();
+}
+
+void IME::loadEnglishDict() {
+    if (_englishDictLoaded) return;
+    _englishDictLoaded = true;
+    _englishWords.clear();
+
+    auto addWord = [&](const std::string &raw) {
+        std::string w = str_trim(raw);
+        if (w.empty() || _englishWords.size() >= ENGLISHDICT_LIMIT) return;
+        bool ok = true;
+        for (char c : w) {
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  c == '\'' || c == '-' || c == '_')) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            for (char &c : w) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            _englishWords.push_back(w);
+        }
+    };
+
+    FILE *f = fopen(ENGLISHDICT_PATH, "r");
+    if (f) {
+        char buf[128];
+        while (fgets(buf, sizeof(buf), f) && _englishWords.size() < ENGLISHDICT_LIMIT) {
+            addWord(buf);
+        }
+        fclose(f);
+    }
+
+    const char *embeddedStart = (const char *)english_words_txt_start;
+    const char *embeddedEnd = (const char *)english_words_txt_end;
+    if (_englishWords.empty() && embeddedEnd > embeddedStart) {
+        const char *p = embeddedStart;
+        const char *end = embeddedEnd;
+        std::string line;
+        while (p < end && _englishWords.size() < ENGLISHDICT_LIMIT) {
+            char c = *p++;
+            if (c == '\n' || c == '\r') {
+                addWord(line);
+                line.clear();
+            } else {
+                line += c;
+            }
+        }
+        addWord(line);
+    }
+
+    if (_englishWords.empty()) {
+        for (auto w : BUILTIN_ENGLISH_WORDS) _englishWords.push_back(w);
+    }
+    std::sort(_englishWords.begin(), _englishWords.end());
+    _englishWords.erase(std::unique(_englishWords.begin(), _englishWords.end()), _englishWords.end());
+}
+
+static std::string chineseDigits(uint64_t n, bool financial) {
+    static const char *LOW[] = {"零","一","二","三","四","五","六","七","八","九"};
+    static const char *FIN[] = {"零","壹","贰","叁","肆","伍","陆","柒","捌","玖"};
+    static const char *UNIT_LOW[] = {"","十","百","千"};
+    static const char *UNIT_FIN[] = {"","拾","佰","仟"};
+    static const char *GROUP[] = {"","万","亿","兆"};
+    const char **D = financial ? FIN : LOW;
+    const char **U = financial ? UNIT_FIN : UNIT_LOW;
+    if (n == 0) return D[0];
+
+    auto groupText = [&](int g) {
+        std::string out;
+        bool zeroPending = false;
+        for (int pos = 3; pos >= 0; pos--) {
+            int base = 1;
+            for (int i = 0; i < pos; i++) base *= 10;
+            int digit = (g / base) % 10;
+            if (digit == 0) {
+                if (!out.empty()) zeroPending = true;
+                continue;
+            }
+            if (zeroPending) {
+                out += D[0];
+                zeroPending = false;
+            }
+            if (!(pos == 1 && digit == 1 && out.empty() && !financial)) out += D[digit];
+            out += U[pos];
+        }
+        return out;
+    };
+
+    std::vector<int> groups;
+    while (n > 0 && groups.size() < 4) {
+        groups.push_back((int)(n % 10000));
+        n /= 10000;
+    }
+    std::string out;
+    bool zeroBetween = false;
+    for (int i = (int)groups.size() - 1; i >= 0; i--) {
+        if (groups[i] == 0) {
+            if (!out.empty()) zeroBetween = true;
+            continue;
+        }
+        if (zeroBetween || (!out.empty() && groups[i] < 1000)) {
+            out += D[0];
+            zeroBetween = false;
+        }
+        out += groupText(groups[i]);
+        out += GROUP[i];
+    }
+    return out;
+}
+
+static std::string romanNumber(int n) {
+    struct R { int v; const char *s; };
+    static const R MAP[] = {{90,"XC"},{50,"L"},{40,"XL"},{10,"X"},{9,"IX"},{5,"V"},{4,"IV"},{1,"I"}};
+    std::string out;
+    for (auto &r : MAP) {
+        while (n >= r.v) { out += r.s; n -= r.v; }
+    }
+    return out;
+}
+
+static bool parseDateParts(const std::string &s, int &y, int &m, int &d) {
+    std::vector<int> nums;
+    std::string cur;
+    for (char c : s) {
+        if (c >= '0' && c <= '9') cur += c;
+        else if (c == '.' || c == '-' || c == '/') {
+            if (cur.empty()) return false;
+            nums.push_back(atoi(cur.c_str()));
+            cur.clear();
+        } else return false;
+    }
+    if (!cur.empty()) nums.push_back(atoi(cur.c_str()));
+    if (nums.size() == 3) {
+        y = nums[0]; m = nums[1]; d = nums[2];
+    } else if (nums.size() == 1 && s.length() == 8) {
+        y = atoi(s.substr(0, 4).c_str());
+        m = atoi(s.substr(4, 2).c_str());
+        d = atoi(s.substr(6, 2).c_str());
+    } else {
+        return false;
+    }
+    return y >= 1 && m >= 1 && m <= 12 && d >= 1 && d <= 31;
+}
+
+static std::string chineseYear(int y) {
+    static const char *D[] = {"零","一","二","三","四","五","六","七","八","九"};
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%04d", y);
+    std::string out;
+    for (char c : buf) out += D[c - '0'];
+    return out;
+}
+
+static std::string chineseDayMonth(int n) {
+    static const char *D[] = {"零","一","二","三","四","五","六","七","八","九"};
+    if (n <= 10) return n == 10 ? "十" : D[n];
+    if (n < 20) return std::string("十") + D[n % 10];
+    if (n % 10 == 0) return std::string(D[n / 10]) + "十";
+    return std::string(D[n / 10]) + "十" + D[n % 10];
+}
+
+static std::string capFirst(const std::string &w) {
+    if (w.empty() || w[0] < 'a' || w[0] > 'z') return w;
+    std::string r = w;
+    r[0] = (char)(r[0] - 'a' + 'A');
+    return r;
+}
+
+// v/time / v/date / v/week 的候选:当前时刻按 纯数字/数字加中文/纯中文(星期为 英文/中文)生成
+static std::vector<std::string> vTimeDateWeek(const std::string &body) {
+    std::vector<std::string> out;
+    time_t now;
+    time(&now);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char buf[48];
+    if (body == "/time") {
+        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+        out.push_back(buf);
+        snprintf(buf, sizeof(buf), "%02d时%02d分%02d秒", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+        out.push_back(buf);
+        snprintf(buf, sizeof(buf), "%s时%s分%s秒", chineseDayMonth(tmv.tm_hour).c_str(),
+                 chineseDayMonth(tmv.tm_min).c_str(), chineseDayMonth(tmv.tm_sec).c_str());
+        out.push_back(buf);
+    } else if (body == "/date") {
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
+        out.push_back(buf);
+        snprintf(buf, sizeof(buf), "%d年%d月%d日", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
+        out.push_back(buf);
+        snprintf(buf, sizeof(buf), "%s年%s月%s日", chineseYear(tmv.tm_year + 1900).c_str(),
+                 chineseDayMonth(tmv.tm_mon + 1).c_str(), chineseDayMonth(tmv.tm_mday).c_str());
+        out.push_back(buf);
+    } else if (body == "/week") {
+        static const char *EN[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+        static const char *CN[] = {"星期日","星期一","星期二","星期三","星期四","星期五","星期六"};
+        out.push_back(EN[tmv.tm_wday]);
+        out.push_back(CN[tmv.tm_wday]);
+    }
+    return out;
 }
 
 void IME::loadLfDict() {
@@ -340,17 +654,21 @@ bool IME::readLfHanzi(uint16_t i, char out[4]) {
 }
 
 void IME::bumpFrequency(const std::string &code, const std::string &word) {
-    for (auto it = _userWords.begin(); it != _userWords.end(); ++it) {
+    ensureUserDictLoaded();
+    for (auto &p : _fixedUserWords) {
+        if (p.code == code && p.word == word && p.trad == _trad) return;
+    }
+    for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
         if (it->code == code && it->word == word) {
             it->count++;
-            _userDirty = true;
-            saveUserDict();
+            _dynamicUserDirty = true;
+            saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
             return;
         }
     }
     if (word.length() >= 3 && code.length() >= 1) {
         addUserWord(code, word);
-        for (auto &p : _userWords)
+        for (auto &p : _dynamicUserWords)
             if (p.code == code && p.word == word) { p.count++; break; }
     }
 }
@@ -382,7 +700,7 @@ uint8_t IME::readLfFlag(uint16_t i) {
 
 void IME::setActive(bool on) {
     _active = on;
-    if (on) loadUserDict();
+    if (on) ensureUserDictLoaded();
     reset();
 }
 
@@ -402,6 +720,8 @@ void IME::reset() {
     _remainder.clear();
     _lfMode = false;
     _deleteMode = false;
+    _vMode = false;
+    _englishCompose = false;
 }
 
 int IME::pinyinPrefixLen(const std::string &code) {
@@ -435,7 +755,7 @@ void IME::lookup() {
     _maxMatchLen = 0;
     if (_prefix.length() == 0) _codeOrig = _code;
     static bool dictLoaded = false;
-    if (!dictLoaded) { dictLoaded = true; loadUserDict(); loadLfDict(); }
+    if (!dictLoaded) { dictLoaded = true; ensureUserDictLoaded(); loadLfDict(); }
 
     if (!_loaded || (_code.length() == 0 && !_deleteMode)) {
         buildPage();
@@ -497,7 +817,7 @@ void IME::lookup() {
 
     if (_deleteMode) {
         std::vector< std::pair<int, std::string> > userMatches;
-        for (auto &p : _userWords) {
+        for (auto &p : _dynamicUserWords) {
             if (p.trad != _trad) continue;
             if (qlen == 0 ||
                 ((int)p.code.length() >= qlen && strncmp(p.code.c_str(), q, qlen) == 0)) {
@@ -529,7 +849,8 @@ void IME::lookup() {
     std::vector< std::pair<int, std::string> > userWordFreq;
     {
         std::vector< std::pair<int, std::string> > userSingleFreq;
-        for (auto &p : _userWords) {
+        auto scanUserWords = [&](const std::vector<UserEntry> &entries) {
+        for (auto &p : entries) {
             if (p.trad != _trad) continue;
             if ((int)p.code.length() < qlen) continue;
             if (strncmp(p.code.c_str(), q, qlen) != 0) continue;
@@ -557,6 +878,9 @@ void IME::lookup() {
                 if (!found) userWordFreq.push_back({p.count, p.word});
             }
         }
+        };
+        scanUserWords(_fixedUserWords);
+        scanUserWords(_dynamicUserWords);
         std::sort(userSingleFreq.begin(), userSingleFreq.end(),
             [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
                 return a.first > b.first;
@@ -715,9 +1039,10 @@ void IME::lookup() {
     if (_all.size() >= MAX_CANDIDATES) { buildPage(); return; }
 
     // Phase 5: user dict initial match
-    if (!hasVowel && _userWords.size() > 0) {
+    if (!hasVowel && (_fixedUserWords.size() > 0 || _dynamicUserWords.size() > 0)) {
         std::vector< std::pair<int, std::string> > userInitFreq;
-        for (auto &p : _userWords) {
+        auto scanInitialWords = [&](const std::vector<UserEntry> &entries) {
+        for (auto &p : entries) {
             if (p.trad != _trad) continue;
             if (p.code.find('\'') != std::string::npos) continue;  // 撇号码只在分词路径匹配
             int cl = (int)p.code.length();
@@ -758,6 +1083,9 @@ void IME::lookup() {
                 if (!found) userInitFreq.push_back({p.count, p.word});
             }
         }
+        };
+        scanInitialWords(_fixedUserWords);
+        scanInitialWords(_dynamicUserWords);
         std::sort(userInitFreq.begin(), userInitFreq.end(),
             [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
                 return a.first > b.first;
@@ -999,6 +1327,130 @@ void IME::lookup() {
     buildPage();
 }
 
+void IME::lookupEnglishMode() {
+    _all.clear();
+    _candLen.clear();
+    _pageStart = 0;
+    _curPage = 0;
+    loadEnglishDict();
+    std::string q = _code;
+    std::string lower = q;
+    for (char &c : lower) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    // 输入首字母大写时,命中的英文词条首字母跟随大写
+    bool upper = !q.empty() && q[0] >= 'A' && q[0] <= 'Z';
+    auto it = std::lower_bound(_englishWords.begin(), _englishWords.end(), lower);
+    for (; it != _englishWords.end(); ++it) {
+        if (_all.size() >= MAX_CANDIDATES) break;
+        if (it->find(lower) != 0) break;
+        _all.push_back(upper ? capFirst(*it) : *it);
+        _candLen.push_back((int)q.length());
+    }
+    bool exact = false;
+    for (auto &w : _all) if (w == q) { exact = true; break; }
+    if (!exact && !_code.empty()) {
+        _all.insert(_all.begin(), q);
+        _candLen.insert(_candLen.begin(), (int)q.length());
+    }
+    buildPage();
+}
+
+void IME::lookupVMode() {
+    _all.clear();
+    _candLen.clear();
+    _pageStart = 0;
+    _curPage = 0;
+    std::string body = _code.length() > 1 ? _code.substr(1) : "";
+    if (body.empty()) {
+        for (auto p : V_PUNCT_CANDIDATES) {
+            _all.push_back(p);
+            _candLen.push_back(1);
+        }
+        buildPage();
+        return;
+    }
+
+    if (body == "/time" || body == "/date" || body == "/week") {
+        for (auto &s : vTimeDateWeek(body)) {
+            _all.push_back(s);
+            _candLen.push_back((int)_code.length());
+        }
+        buildPage();
+        return;
+    }
+
+    if (body.length() > 1 && body[0] == '/') {
+        std::string num = body.substr(1);
+        bool allDigits = !num.empty();
+        for (char c : num) if (c < '0' || c > '9') { allDigits = false; break; }
+        if (allDigits) {
+            uint64_t n = 0;
+            for (char c : num) n = n * 10 + (uint64_t)(c - '0');
+            _all.push_back(chineseDigits(n, false));
+            _candLen.push_back((int)_code.length());
+            _all.push_back(chineseDigits(n, true));
+            _candLen.push_back((int)_code.length());
+            if (n >= 1 && n <= 99) {
+                _all.push_back(romanNumber((int)n));
+                _candLen.push_back((int)_code.length());
+            }
+        }
+        buildPage();
+        return;
+    }
+
+    int y = 0, m = 0, d = 0;
+    bool isDate = parseDateParts(body, y, m, d);
+    if (isDate) {
+        char arabic[32];
+        snprintf(arabic, sizeof(arabic), "%d年%d月%d日", y, m, d);
+        bool dup = false;
+        for (auto &e : _all) if (e == arabic) { dup = true; break; }
+        if (!dup) {
+            _all.push_back(arabic);
+            _candLen.push_back((int)_code.length());
+        }
+        std::string cn = chineseYear(y) + "年" + chineseDayMonth(m) + "月" + chineseDayMonth(d) + "日";
+        dup = false;
+        for (auto &e : _all) if (e == cn) { dup = true; break; }
+        if (!dup) {
+            _all.push_back(cn);
+            _candLen.push_back((int)_code.length());
+        }
+    }
+
+    bool allAlpha = true;
+    for (char c : body) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) { allAlpha = false; break; }
+    }
+    if (allAlpha) {
+        loadEnglishDict();
+        std::string lower = body;
+        for (char &c : lower) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        // 输入首字母大写时,命中的英文词条首字母跟随大写
+        bool upper = body[0] >= 'A' && body[0] <= 'Z';
+        auto it = std::lower_bound(_englishWords.begin(), _englishWords.end(), lower);
+        for (; it != _englishWords.end(); ++it) {
+            if (_all.size() >= MAX_CANDIDATES) break;
+            if (it->find(lower) != 0) break;
+            std::string w = upper ? capFirst(*it) : *it;
+            bool dup = false;
+            for (auto &e : _all) if (e == w) { dup = true; break; }
+            if (!dup) {
+                _all.push_back(w);
+                _candLen.push_back((int)_code.length());
+            }
+        }
+        bool dup = false;
+        for (auto &e : _all) if (e == body) { dup = true; break; }
+        if (!dup) {
+            _all.insert(_all.begin(), body);
+            _candLen.insert(_candLen.begin(), (int)_code.length());
+        }
+    }
+
+    buildPage();
+}
+
 // 单引号分词查词: 编码形如 "xi'an" / "an'guang", 按 ' 切成音节段。
 // 1) 补充词典表(seg_table.h) 分段前缀匹配; 2) 用户词典带撇号码精确匹配;
 // 3) 主词典词组: 拼接码精确匹配且字数=段数;
@@ -1053,7 +1505,8 @@ void IME::lookupSegmented() {
     }
 
     // 2) 用户词典: 带撇号码的整码精确匹配(用户曾用该分段码提交过的词)
-    for (auto &p : _userWords) {
+    auto scanSegmentedUserWords = [&](const std::vector<UserEntry> &entries) {
+    for (auto &p : entries) {
         if (_all.size() >= MAX_CANDIDATES) break;
         if (p.trad != _trad) continue;
         if (p.code.find('\'') == std::string::npos) continue;
@@ -1065,6 +1518,9 @@ void IME::lookupSegmented() {
             _candLen.push_back(fullLen);
         }
     }
+    };
+    scanSegmentedUserWords(_fixedUserWords);
+    scanSegmentedUserWords(_dynamicUserWords);
 
     // 3) 主词典词组: 拼接码精确匹配 + 字数/3 == 段数
     if (_wordCount > 0 && _wordData && q.length() >= 2 && _all.size() < MAX_CANDIDATES) {
@@ -1231,15 +1687,33 @@ void IME::buildPage() {
     }
 }
 
+bool IME::pagePrev() {
+    if (_curPage <= 0) return false;
+    _curPage--;
+    buildPage();
+    return true;
+}
+
+bool IME::pageNext() {
+    if (_curPage + 1 >= (int)_pageStarts.size()) return false;
+    _curPage++;
+    buildPage();
+    return true;
+}
+
 bool IME::commit(int idx, std::string &out) {
     if (idx < 0 || idx >= (int)_page.size()) return false;
     out = _page[idx];
+    if (_vMode || _englishCompose) {
+        reset();
+        return true;
+    }
     if (_deleteMode) {
-        for (auto it = _userWords.begin(); it != _userWords.end(); ++it) {
+        for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
             if (it->word == out && it->trad == _trad) {
-                _userWords.erase(it);
-                _userDirty = true;
-                saveUserDict();
+                _dynamicUserWords.erase(it);
+                _dynamicUserDirty = true;
+                saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
                 break;
             }
         }
@@ -1385,7 +1859,90 @@ bool IME::handleFullwidthChar(int key, std::string &out) {
 
 bool IME::handleKey(int key, std::string &out) {
     if (!_active) return false;
-    if (_english) return false;  // 临时英文模式: 按键直接透传给编辑器
+    if (_english && !_englishCompose) {
+        if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
+            _englishCompose = true;
+            _code = (char)key;
+            _displayCodeDirty = true;
+            lookupEnglishMode();
+            return true;
+        }
+        return false;
+    }
+    if (_englishCompose) {
+        if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
+            key == '\'' || key == '-' || key == '_') {
+            if ((int)_code.length() < 32) {
+                _code += (char)key;
+                _displayCodeDirty = true;
+                lookupEnglishMode();
+            }
+            return true;
+        }
+        if (key >= '1' && key <= '9') { commit(key - '1', out); return true; }
+        if (key == ' ') {
+            if (_page.size() > 0) commit(0, out);
+            else { out = _code; reset(); }
+            return true;
+        }
+        if (key == '\n') { out = _code; reset(); return true; }
+        if (key == '\b') {
+            if (_code.length() > 0) _code.erase(_code.length() - 1);
+            _displayCodeDirty = true;
+            if (_code.empty()) reset();
+            else lookupEnglishMode();
+            return true;
+        }
+        if (key == 27) { reset(); return true; }
+        if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
+        if (key == IME_KEY_DOWN || key == '=' || key == '.') { pageNext(); return true; }
+        if (_page.size() > 0) commit(0, out);
+        else out = _code;
+        reset();
+        return true;
+    }
+    if (_vMode) {
+        if (_code == "v" && key >= 0x21 && key <= 0x7E &&
+            !((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
+              (key >= '0' && key <= '9') || key == '/')) {
+            out.assign(1, (char)key);
+            reset();
+            return true;
+        }
+        if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
+            (key >= '0' && key <= '9') || key == '.' || key == '-' ||
+            key == '/' || key == '!') {
+            if ((int)_code.length() < 32) {
+                _code += (char)key;
+                _displayCodeDirty = true;
+                lookupVMode();
+            }
+            return true;
+        }
+        if (key >= '1' && key <= '9') { commit(key - '1', out); return true; }
+        if (key == ' ') {
+            if (_page.size() > 0) commit(0, out);
+            else { out = _code.length() > 1 ? _code.substr(1) : ""; reset(); }
+            return true;
+        }
+        if (key == '\n') {
+            out = _page.size() > 0 ? _page[0] : (_code.length() > 1 ? _code.substr(1) : "");
+            reset();
+            return true;
+        }
+        if (key == '\b') {
+            if (_code.length() > 1) {
+                _code.erase(_code.length() - 1);
+                _displayCodeDirty = true;
+                lookupVMode();
+            } else reset();
+            return true;
+        }
+        if (key == 27) { reset(); return true; }
+        if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
+        if (key == IME_KEY_DOWN || key == '=' || key == '\'') { pageNext(); return true; }
+        return true;
+    }
     if (_predicting) {
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
             _predicting = false;
@@ -1409,14 +1966,8 @@ bool IME::handleKey(int key, std::string &out) {
             }
             return true;
         }
-        if (key == '-' || key == ';' || key == ',') {
-            if (_curPage > 0) { _curPage--; buildPage(); }
-            return true;
-        }
-        if (key == '=' || key == '\'' || key == '.') {
-            if (_curPage + 1 < (int)_pageStarts.size()) { _curPage++; buildPage(); }
-            return true;
-        }
+        if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
+        if (key == IME_KEY_DOWN || key == '=' || key == '\'' || key == '.') { pageNext(); return true; }
         if (key == '\b' || key == 27 || key == '\n') {
             _predicting = false;
             return true;
@@ -1425,7 +1976,7 @@ bool IME::handleKey(int key, std::string &out) {
         return false;
     }
     // In fullwidth mode with no composition, output letters/digits/space as fullwidth
-    if (_fullwidth && _code.length() == 0 && !_deleteMode && !_lfMode) {
+    if (_fullwidth && _code.length() == 0 && !_deleteMode && !_lfMode && !_vMode) {
         if (((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) ||
             (key >= '0' && key <= '9') || key == ' ') {
             return handleFullwidthChar(key, out);
@@ -1434,12 +1985,19 @@ bool IME::handleKey(int key, std::string &out) {
     if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
         char cl = (char)tolower(key);
         char c = (char)key;
+        if (_code.length() == 0 && !_deleteMode && !_lfMode && key >= 'A' && key <= 'Z') {
+            _englishCompose = true;
+            _code = (char)key;
+            _displayCodeDirty = true;
+            lookupEnglishMode();
+            return true;
+        }
         if (_code.length() == 0 && !_deleteMode && !_lfMode && cl == 'v') {
-            if (_userWords.size() > 0) {
-                _deleteMode = true;
-                lookup();
-                return true;
-            }
+            _vMode = true;
+            _code = "v";
+            _displayCodeDirty = true;
+            lookupVMode();
+            return true;
         }
         if (_code.length() == 0 && !_deleteMode && !_lfMode && cl == 'u') {
             loadLfDict();
@@ -1506,14 +2064,8 @@ bool IME::handleKey(int key, std::string &out) {
         reset();
         return true;
     }
-    if (key == '-' || key == ';' || key == ',') {
-        if (_curPage > 0) { _curPage--; buildPage(); }
-        return true;
-    }
-    if (key == '=' || key == '.') {
-        if (_curPage + 1 < (int)_pageStarts.size()) { _curPage++; buildPage(); }
-        return true;
-    }
+    if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
+    if (key == IME_KEY_DOWN || key == '=' || key == '.') { pageNext(); return true; }
     if (_page.size() > 0) {
         commit(0, out);
         return true;

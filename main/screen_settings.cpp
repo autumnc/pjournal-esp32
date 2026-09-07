@@ -11,6 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <algorithm>
+#include <set>
+#include <vector>
 #include <esp_timer.h>
 #include <esp_sntp.h>
 
@@ -32,6 +35,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_click_volume", "打字音效音量", false, true},
     {"_click_timbre", "打字音效音色", false, true},
     {"_file_mgr", "文件管理", false, true},
+    {"_dict_mgr", "词库管理", false, true},
     {"file_mgr_token", "文件管理密码", true, false},
     {"_bt_manage", "蓝牙设备管理", false, true},
     {"deepseek_key", "Deepseek Key", false, false},
@@ -131,6 +135,8 @@ static bool toggleValue(const char *key) {
     return v == "1";  // auto_save: 默认关
 }
 
+enum SettingsScreenMode { SETTINGS_BROWSE, SETTINGS_DICT_CHOOSE, SETTINGS_DICT_LIST, SETTINGS_DICT_ADD };
+
 static struct {
     int selection = 0;
     int scroll = 0;
@@ -138,7 +144,181 @@ static struct {
     std::string editBuffer;
     int editCursor = 0;
     bool imeActive = false;
+    SettingsScreenMode mode = SETTINGS_BROWSE;
+    IME::UserDictKind dictKind = IME::FIXED_DICT;
+    int dictSelection = 0;
+    int dictScroll = 0;
+    std::set<int> dictSelected;
+    std::string dictAddBuffer;
+    int dictAddCursor = 0;
+    bool dictAddImeActive = false;
+    bool dictSearching = false;
+    std::string dictSearchBuffer;
+    int dictSearchCursor = 0;
+    bool dictSearchImeActive = false;
 } g_settingsState;
+
+static const char *dictKindLabel(IME::UserDictKind kind) {
+    return kind == IME::FIXED_DICT ? "固定词库" : "动态词库";
+}
+
+static std::string settingsTrim(const std::string &s) {
+    size_t start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    size_t end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+static void moveCursorLeft(std::string &s, int &cursor) {
+    if (cursor <= 0) return;
+    cursor--;
+    while (cursor > 0 && ((unsigned char)s[cursor] & 0xC0) == 0x80) cursor--;
+}
+
+static void moveCursorRight(std::string &s, int &cursor) {
+    if (cursor >= (int)s.length()) return;
+    cursor++;
+    while (cursor < (int)s.length() && ((unsigned char)s[cursor] & 0xC0) == 0x80) cursor++;
+}
+
+static void eraseBeforeCursor(std::string &s, int &cursor) {
+    if (cursor <= 0) return;
+    int prev = cursor - 1;
+    while (prev > 0 && ((unsigned char)s[prev] & 0xC0) == 0x80) prev--;
+    s.erase(prev, cursor - prev);
+    cursor = prev;
+}
+
+static std::vector<int> dictFilteredIndices(const std::vector<IME::UserEntryView> &entries);
+
+static void drawDictChoose() {
+    ui_clear();
+    ui_draw_text_centered(FONT_H, "词库管理", false, true);
+    ui_draw_text(8, FONT_H * 3, "固定词库", g_settingsState.dictSelection == 0);
+    ui_draw_text(8, FONT_H * 4, "动态词库", g_settingsState.dictSelection == 1);
+    ui_draw_status("Enter进入 Esc返回", "");
+    ui_commit();
+}
+
+static void drawDictList(bool doCommit = true) {
+    auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
+    auto filtered = dictFilteredIndices(entries);
+    int total = (int)filtered.size();
+    if (g_settingsState.dictSelection >= total) g_settingsState.dictSelection = total - 1;
+    if (g_settingsState.dictSelection < 0) g_settingsState.dictSelection = 0;
+
+    ui_clear();
+    char title[64];
+    snprintf(title, sizeof(title), "%s %d/%d", dictKindLabel(g_settingsState.dictKind),
+             (int)entries.size(), g_settingsState.dictKind == IME::FIXED_DICT ? 500 : 1000);
+    ui_draw_text_centered(FONT_H, title, false, true);
+
+    // 表格底部贴住状态栏分割线:由最后一行单元格底边=STATUS_Y反推表头基线,
+    // 空出的顶部余量让表头整体下移,能多放一行就多放一行
+    int lastBase = STATUS_Y - FONT_H + g_font.ascent();
+    int visible = (lastBase - FONT_H * 2) / FONT_H;
+    int startY = lastBase - visible * FONT_H;
+    if (visible < 1) visible = 1;
+    if (g_settingsState.dictSelection < g_settingsState.dictScroll)
+        g_settingsState.dictScroll = g_settingsState.dictSelection;
+    if (g_settingsState.dictSelection >= g_settingsState.dictScroll + visible)
+        g_settingsState.dictScroll = g_settingsState.dictSelection - visible + 1;
+
+    if (total == 0) {
+        ui_draw_text_centered(FONT_H * 4, entries.empty() ? "暂无词条" : "无匹配词条");
+    } else {
+        u8g2_SetDrawColor(g_u8g2, 0);
+        ui_draw_text(8, startY, "  编码", false, true);
+        ui_draw_text(120, startY, "候选词", false, true);
+        ui_draw_text(320, startY, "频次", false, true);
+        for (int i = 0; i < visible && g_settingsState.dictScroll + i < total; i++) {
+            int viewIdx = g_settingsState.dictScroll + i;
+            int idx = filtered[viewIdx];
+            bool sel = viewIdx == g_settingsState.dictSelection;
+            bool marked = g_settingsState.dictSelected.count(idx) > 0;
+            int rowY = startY + (i + 1) * FONT_H;
+            if (rowY >= STATUS_Y) break;
+            if (sel) {
+                u8g2_SetDrawColor(g_u8g2, 0);
+                u8g2_DrawBox(g_u8g2, 0, rowY - g_font.ascent(), SCREEN_W, FONT_H);
+                u8g2_SetDrawColor(g_u8g2, 1);
+            } else {
+                u8g2_SetDrawColor(g_u8g2, 0);
+            }
+            char mark[2] = { marked ? '*' : ' ', 0 };
+            char count[16];
+            snprintf(count, sizeof(count), "%d", entries[idx].count);
+            g_font.drawText(8, rowY, mark, false);
+            g_font.drawText(28, rowY, entries[idx].code.c_str(), false);
+            g_font.drawText(120, rowY, entries[idx].word.c_str(), false);
+            g_font.drawText(320, rowY, count, false);
+            u8g2_SetDrawColor(g_u8g2, 0);
+        }
+    }
+    char left[48];
+    snprintf(left, sizeof(left), "a添加 d删 /搜 已选%d", (int)g_settingsState.dictSelected.size());
+    std::string right = g_settingsState.dictSearchBuffer.empty() ? "Space多选" : ("/" + g_settingsState.dictSearchBuffer);
+    ui_draw_status(left, right.c_str());
+    if (doCommit) ui_commit();
+}
+
+static void drawDictSearch() {
+    drawDictList(false);
+    bool composing = g_settingsState.dictSearchImeActive && g_ime.composing();
+    // 上移6px:面板底边不压状态栏分割线(面板高 FONT_H*2+8,原底边超出分割线4px)
+    int y = composing ? (STATUS_Y - 67 - FONT_H * 2 - 10) : (STATUS_Y - FONT_H * 2 - 10);
+    if (y < FONT_H * 2) y = FONT_H * 2;
+    // ui_draw_status 结束时 draw color=1(白),此处必须显式设色:白底黑字
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, 0, y, SCREEN_W, FONT_H * 2 + 8);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    ui_draw_text(4, y + FONT_H, "搜索编码或候选词");
+    std::string display = g_settingsState.dictSearchBuffer.empty() ? " " : g_settingsState.dictSearchBuffer;
+    ui_draw_text(4, y + FONT_H * 2, display.c_str());
+    int cx = g_font.textWidth(display.substr(0, g_settingsState.dictSearchCursor).c_str());
+    u8g2_DrawBox(g_u8g2, 4 + cx, y + FONT_H * 2 + 4, 8, 3);
+    u8g2_SetDrawColor(g_u8g2, 1);
+    if (composing) drawIMEUI(STATUS_Y - 67, true);
+    ui_commit();
+}
+
+static void drawDictAdd() {
+    ui_clear();
+    char title[64];
+    snprintf(title, sizeof(title), "添加%s", dictKindLabel(g_settingsState.dictKind));
+    ui_draw_text_centered(FONT_H, title, false, true);
+    ui_draw_text(4, FONT_H * 3, "格式: code word");
+    std::string display = g_settingsState.dictAddBuffer.empty() ? " " : g_settingsState.dictAddBuffer;
+    ui_draw_text(4, FONT_H * 4, display.c_str());
+    int cx = g_font.textWidth(display.substr(0, g_settingsState.dictAddCursor).c_str());
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawBox(g_u8g2, 4 + cx, FONT_H * 4 + 4, 8, 3);
+    u8g2_SetDrawColor(g_u8g2, 1);
+    ui_draw_status("Enter确定 Esc取消", "Ctrl+Space中文");
+    if (g_settingsState.dictAddImeActive && g_ime.composing())
+        drawIMEUI(STATUS_Y - 67, true);
+    ui_commit();
+}
+
+static bool parseDictAdd(const std::string &line, std::string &code, std::string &word) {
+    std::string s = settingsTrim(line);
+    size_t sp = s.find(' ');
+    if (sp == std::string::npos) return false;
+    code = settingsTrim(s.substr(0, sp));
+    word = settingsTrim(s.substr(sp + 1));
+    return !code.empty() && !word.empty();
+}
+
+static std::vector<int> dictFilteredIndices(const std::vector<IME::UserEntryView> &entries) {
+    std::vector<int> out;
+    std::string q = settingsTrim(g_settingsState.dictSearchBuffer);
+    for (int i = 0; i < (int)entries.size(); i++) {
+        if (q.empty() || entries[i].code.find(q) != std::string::npos ||
+            entries[i].word.find(q) != std::string::npos)
+            out.push_back(i);
+    }
+    return out;
+}
 
 static bool connect_wifi_from_settings() {
     std::string ssid = g_settings.wifiSsid();
@@ -155,9 +335,169 @@ void screen_settings_init() {
     g_settingsState.editBuffer.clear();
     g_settingsState.editCursor = 0;
     g_settingsState.imeActive = false;
+    g_settingsState.mode = SETTINGS_BROWSE;
+    g_settingsState.dictKind = IME::FIXED_DICT;
+    g_settingsState.dictSelection = 0;
+    g_settingsState.dictScroll = 0;
+    g_settingsState.dictSelected.clear();
+    g_settingsState.dictAddBuffer.clear();
+    g_settingsState.dictAddCursor = 0;
+    g_settingsState.dictAddImeActive = false;
+    g_settingsState.dictSearching = false;
+    g_settingsState.dictSearchBuffer.clear();
+    g_settingsState.dictSearchCursor = 0;
+    g_settingsState.dictSearchImeActive = false;
 }
 
 AppState screen_settings_handle(int key, ScreenContext &ctx) {
+    // ── User dictionary manager ───────────────────────────────────────
+    if (g_settingsState.mode == SETTINGS_DICT_CHOOSE) {
+        if (key == 0x1B || key == 'q' || key == 'Q') {
+            g_settingsState.mode = SETTINGS_BROWSE;
+        } else if (key == KEY_UP || key == 'k' || key == KEY_DOWN || key == 'j') {
+            g_settingsState.dictSelection = 1 - g_settingsState.dictSelection;
+        } else if (key == 0x0A || key == 0x0D) {
+            g_settingsState.dictKind = g_settingsState.dictSelection == 0 ? IME::FIXED_DICT : IME::DYNAMIC_DICT;
+            g_settingsState.dictSelection = 0;
+            g_settingsState.dictScroll = 0;
+            g_settingsState.dictSelected.clear();
+            g_settingsState.dictSearchBuffer.clear();
+            g_settingsState.dictSearchCursor = 0;
+            g_settingsState.mode = SETTINGS_DICT_LIST;
+        }
+        drawDictChoose();
+        return APP_SETTINGS;
+    }
+
+    if (g_settingsState.mode == SETTINGS_DICT_LIST && g_settingsState.dictSearching) {
+        if (g_settingsState.dictSearchImeActive && key != 0) {
+            std::string imeOut;
+            if (g_ime.handleKey(key, imeOut)) {
+                if (!imeOut.empty()) {
+                    g_settingsState.dictSearchBuffer.insert(g_settingsState.dictSearchCursor, imeOut);
+                    g_settingsState.dictSearchCursor += (int)imeOut.length();
+                }
+                drawDictSearch();
+                return APP_SETTINGS;
+            }
+        }
+        if (key == KEY_IME_TOGGLE) {
+            g_settingsState.dictSearchImeActive = !g_settingsState.dictSearchImeActive;
+            g_ime.setActive(g_settingsState.dictSearchImeActive);
+        } else if (key == 0x1B) {
+            g_settingsState.dictSearching = false;
+            g_settingsState.dictSearchImeActive = false;
+            g_ime.setActive(false);
+        } else if (key == 0x0A || key == 0x0D) {
+            g_settingsState.dictSearching = false;
+            g_settingsState.dictSelection = 0;
+            g_settingsState.dictScroll = 0;
+            g_settingsState.dictSearchImeActive = false;
+            g_ime.setActive(false);
+        } else if (key == 0x7F || key == 0x08) {
+            eraseBeforeCursor(g_settingsState.dictSearchBuffer, g_settingsState.dictSearchCursor);
+            g_settingsState.dictSelection = 0;
+            g_settingsState.dictScroll = 0;
+        } else if (key == KEY_LEFT) {
+            moveCursorLeft(g_settingsState.dictSearchBuffer, g_settingsState.dictSearchCursor);
+        } else if (key == KEY_RIGHT) {
+            moveCursorRight(g_settingsState.dictSearchBuffer, g_settingsState.dictSearchCursor);
+        } else if (key >= 0x20 && key <= 0x7E) {
+            g_settingsState.dictSearchBuffer.insert(g_settingsState.dictSearchCursor, 1, (char)key);
+            g_settingsState.dictSearchCursor++;
+            g_settingsState.dictSelection = 0;
+            g_settingsState.dictScroll = 0;
+        }
+        drawDictSearch();
+        return APP_SETTINGS;
+    }
+
+    if (g_settingsState.mode == SETTINGS_DICT_LIST) {
+        auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
+        auto filtered = dictFilteredIndices(entries);
+        int total = (int)filtered.size();
+        if (key == 0x1B || key == 'q' || key == 'Q') {
+            g_settingsState.mode = SETTINGS_DICT_CHOOSE;
+            g_settingsState.dictSelected.clear();
+            g_settingsState.dictSearchBuffer.clear();
+        } else if (key == KEY_UP || key == 'k') {
+            if (g_settingsState.dictSelection > 0) g_settingsState.dictSelection--;
+        } else if (key == KEY_DOWN || key == 'j') {
+            if (g_settingsState.dictSelection < total - 1) g_settingsState.dictSelection++;
+        } else if (key == '/') {
+            g_settingsState.dictSearching = true;
+            g_settingsState.dictSearchCursor = (int)g_settingsState.dictSearchBuffer.length();
+            g_settingsState.dictSearchImeActive = false;
+        } else if (key == 'a' || key == 'A') {
+            g_settingsState.mode = SETTINGS_DICT_ADD;
+            g_settingsState.dictAddBuffer.clear();
+            g_settingsState.dictAddCursor = 0;
+            g_settingsState.dictAddImeActive = false;
+            g_ime.setActive(false);
+        } else if (key == ' ' && total > 0) {
+            int realIdx = filtered[g_settingsState.dictSelection];
+            if (g_settingsState.dictSelected.count(realIdx)) g_settingsState.dictSelected.erase(realIdx);
+            else g_settingsState.dictSelected.insert(realIdx);
+        } else if ((key == 'd' || key == 'D') && total > 0) {
+            std::vector<int> indices;
+            if (g_settingsState.dictSelected.empty()) {
+                indices.push_back(filtered[g_settingsState.dictSelection]);
+            } else {
+                for (int idx : g_settingsState.dictSelected) indices.push_back(idx);
+            }
+            g_ime.removeUserDictEntries(g_settingsState.dictKind, indices);
+            g_settingsState.dictSelected.clear();
+            if (g_settingsState.dictSelection >= total - (int)indices.size())
+                g_settingsState.dictSelection = std::max(0, total - (int)indices.size() - 1);
+        }
+        drawDictList();
+        return APP_SETTINGS;
+    }
+
+    if (g_settingsState.mode == SETTINGS_DICT_ADD) {
+        if (g_settingsState.dictAddImeActive && key != 0) {
+            std::string imeOut;
+            if (g_ime.handleKey(key, imeOut)) {
+                if (!imeOut.empty()) {
+                    g_settingsState.dictAddBuffer.insert(g_settingsState.dictAddCursor, imeOut);
+                    g_settingsState.dictAddCursor += (int)imeOut.length();
+                }
+                drawDictAdd();
+                return APP_SETTINGS;
+            }
+        }
+        if (key == KEY_IME_TOGGLE) {
+            g_settingsState.dictAddImeActive = !g_settingsState.dictAddImeActive;
+            g_ime.setActive(g_settingsState.dictAddImeActive);
+        } else if (key == 0x1B) {
+            g_settingsState.mode = SETTINGS_DICT_LIST;
+            g_settingsState.dictAddBuffer.clear();
+            g_settingsState.dictAddCursor = 0;
+            g_settingsState.dictAddImeActive = false;
+            g_ime.setActive(false);
+        } else if (key == 0x0A || key == 0x0D) {
+            std::string code, word;
+            if (parseDictAdd(g_settingsState.dictAddBuffer, code, word))
+                g_ime.addUserDictEntry(g_settingsState.dictKind, code, word);
+            g_settingsState.mode = SETTINGS_DICT_LIST;
+            g_settingsState.dictAddBuffer.clear();
+            g_settingsState.dictAddCursor = 0;
+            g_settingsState.dictAddImeActive = false;
+            g_ime.setActive(false);
+        } else if (key == 0x7F || key == 0x08) {
+            eraseBeforeCursor(g_settingsState.dictAddBuffer, g_settingsState.dictAddCursor);
+        } else if (key == KEY_LEFT) {
+            moveCursorLeft(g_settingsState.dictAddBuffer, g_settingsState.dictAddCursor);
+        } else if (key == KEY_RIGHT) {
+            moveCursorRight(g_settingsState.dictAddBuffer, g_settingsState.dictAddCursor);
+        } else if (key >= 0x20 && key <= 0x7E) {
+            g_settingsState.dictAddBuffer.insert(g_settingsState.dictAddCursor, 1, (char)key);
+            g_settingsState.dictAddCursor++;
+        }
+        drawDictAdd();
+        return APP_SETTINGS;
+    }
+
     // ── Edit mode ──────────────────────────────────────────────────────
     if (g_settingsState.editing) {
         if (g_settingsState.imeActive && key != 0) {
@@ -506,6 +846,16 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "_file_mgr") == 0) {
                 ctx.nextState = APP_FILE_MANAGER;
                 return APP_FILE_MANAGER;
+            }
+            if (strcmp(f.key, "_dict_mgr") == 0) {
+                g_ime.ensureUserDictLoaded();
+                g_settingsState.mode = SETTINGS_DICT_CHOOSE;
+                g_settingsState.dictSelection = 0;
+                g_settingsState.dictScroll = 0;
+                g_settingsState.dictSelected.clear();
+                g_settingsState.dictSearchBuffer.clear();
+                drawDictChoose();
+                return APP_SETTINGS;
             }
             if (strcmp(f.key, "_bt_manage") == 0) {
                 ctx.nextState = APP_BT_MANAGE;

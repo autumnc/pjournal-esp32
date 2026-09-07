@@ -34,6 +34,7 @@ idf_component_register(SRCS
     EMBED_FILES
         "ime/ime_table_pinyin.bin"
         "ime/liangfen.bin"
+        "ime/english_words.txt"
         "terminus28.fnt"
         "terminus22.fnt"
         "terminus16.fnt"
@@ -62,4 +63,4 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.4.1")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.5.0")

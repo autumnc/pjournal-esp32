@@ -38,6 +38,10 @@ void ui_draw_status(const char *left, const char *right);
 void ui_draw_title(const char *title);
 void ui_clear();
 void ui_commit();
+// 只发送缓冲不更新快照(休眠提示用:唤醒后需按快照恢复,快照须保持提示前画面)
+void ui_send_buffer();
+// 用快照恢复缓冲并整屏发送(休眠唤醒后清除"休眠中"提示)
+void ui_restore_snapshot();
 void ui_invalidate_snapshot();
 int  ui_text_width(const char *text);
 void ui_draw_text(int x, int y, const char *text, bool invert = false, bool bold = false);
@@ -65,7 +69,7 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
                              const std::set<int> *foldedHeadings = nullptr);
 
 // IME drawing helper
-void drawIMEUI(int baseY);
+void drawIMEUI(int baseY, bool anchorBottom = false);
 
 // WiFi helper functions
 bool ensure_wifi_connected();

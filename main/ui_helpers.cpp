@@ -313,7 +313,7 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
 IME &g_ime = IME::getInstance();
 
 // ── IME drawing helper ────────────────────────────────────────────────────
-void drawIMEUI(int baseY) {
+void drawIMEUI(int baseY, bool anchorBottom) {
     if (!g_ime.composing()) return;
 
     std::string code = g_ime.displayCode();
@@ -329,22 +329,36 @@ void drawIMEUI(int baseY) {
     u8g2_DrawBox(g_u8g2, 0, baseY, SCREEN_W, 67);
     u8g2_SetDrawColor(g_u8g2, 1);
 
+    // anchorBottom: 行位与编辑器 compose 条一致(候选行贴面板底边,
+    // 基线离底 descent+3,分割线、编码行依次向上),词库管理等面板型调用用
+    int codeBase, sepY, candBase;
+    if (anchorBottom) {
+        int bottom = baseY + 67;
+        candBase = bottom - g_font.descent() - 3;
+        sepY = bottom - (2 * FONT_H - g_font.ascent()) - 4;
+        codeBase = sepY - 7;
+    } else {
+        codeBase = baseY + 4 + g_font.ascent();
+        sepY = baseY + FONT_H + 4;
+        candBase = baseY + FONT_H + 8 + g_font.ascent();
+    }
+
     int cw = g_font.textWidth(code.c_str()) + 8;
-    u8g2_DrawBox(g_u8g2, 4, baseY + 4, cw, FONT_H);
+    u8g2_DrawBox(g_u8g2, 4, codeBase - g_font.ascent(), cw, FONT_H);
     u8g2_SetDrawColor(g_u8g2, 0);
-    g_font.drawText(4, baseY + 4 + g_font.ascent(), code.c_str(), false);
+    g_font.drawText(4, codeBase, code.c_str(), false);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     int tw = g_font.textWidth(pageInfo);
     int pw = tw + 8;
     int px = SCREEN_W - pw - 4;
-    u8g2_DrawBox(g_u8g2, px, baseY + 4, pw, FONT_H);
+    u8g2_DrawBox(g_u8g2, px, codeBase - g_font.ascent(), pw, FONT_H);
     u8g2_SetDrawColor(g_u8g2, 0);
-    g_font.drawText(px + 4, baseY + 4 + g_font.ascent(), pageInfo, false);
+    g_font.drawText(px + 4, codeBase, pageInfo, false);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     u8g2_SetDrawColor(g_u8g2, 0);
-    u8g2_DrawHLine(g_u8g2, 0, baseY + FONT_H + 4, SCREEN_W);
+    u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     std::string candLine;
@@ -359,9 +373,9 @@ void drawIMEUI(int baseY) {
     }
     if (!candLine.empty()) {
         int candW = g_font.textWidth(candLine.c_str()) + 8;
-        u8g2_DrawBox(g_u8g2, 4, baseY + FONT_H + 8, candW, FONT_H);
+        u8g2_DrawBox(g_u8g2, 4, candBase - g_font.ascent(), candW, FONT_H);
         u8g2_SetDrawColor(g_u8g2, 0);
-        g_font.drawText(4, baseY + FONT_H + 8 + g_font.ascent(), candLine.c_str(), false);
+        g_font.drawText(4, candBase, candLine.c_str(), false);
         u8g2_SetDrawColor(g_u8g2, 0);
     }
 }
@@ -418,6 +432,18 @@ void ui_invalidate_snapshot() {
         s_frame_snapshot = nullptr;
     }
     s_last_send_us = 0;
+}
+
+void ui_send_buffer() {
+    if (!g_u8g2) return;
+    u8g2_SendBuffer(g_u8g2);
+}
+
+void ui_restore_snapshot() {
+    if (!g_u8g2 || !s_frame_snapshot) return;
+    memcpy(u8g2_GetBufferPtr(g_u8g2), s_frame_snapshot, u8g2_GetBufferSize(g_u8g2));
+    u8g2_SendBuffer(g_u8g2);
+    s_last_send_us = esp_timer_get_time();
 }
 
 int ui_text_width(const char *text) { return g_font.textWidth(text); }

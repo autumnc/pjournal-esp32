@@ -195,7 +195,8 @@ static void enterLightSleep(void) {
     g_font.drawText((SCREEN_W - g_font.textWidth(hint)) / 2,
                     STATUS_Y + 1 + g_font.ascent(), hint, false);
     u8g2_SetDrawColor(g_u8g2, 1);
-    ui_commit();
+    // 只发送不更新快照:快照保持提示前画面,唤醒后据此恢复缓冲
+    ui_send_buffer();
 
     // 休眠屏保策略:保留画面(开)时让显示相关 GPIO 在休眠期间保持原状态,
     // 防止 GPIO 隔离工作区把面板 RST 浮空导致复位清空 GRAM;白屏(关)则恢复隔离(默认)。
@@ -231,10 +232,11 @@ static void enterLightSleep(void) {
     }
 
     // 白屏模式下休眠时面板被隔离复位,必须重新初始化;保留画面模式下面板未复位,
-    // 但统一重新初始化 + 强制整屏重绘也无害,保证画面回到当前 UI
+    // 但统一重新初始化 + 强制整屏重绘也无害,保证画面回到当前 UI。
+    // 用快照恢复缓冲并整屏发送,立即清除"休眠中"提示、还原休眠前画面
     u8g2_InitDisplay(g_u8g2);
     u8g2_SetPowerSave(g_u8g2, 0);
-    ui_invalidate_snapshot();
+    ui_restore_snapshot();
 
     // 软件时钟在休眠期间冻结,从电池供电的 RTC 重同步,保证日记时间戳正确
     time_t t = g_rtc.getTime();
@@ -480,23 +482,28 @@ extern "C" void app_main() {
         g_bt.checkKeyRepeat();
 
         // Global Ctrl+Space IME toggle (only for editor)
+        // 切换后标记重绘:编辑器空闲路径不重绘,状态栏的输入法标签须立即刷新
         if (key == KEY_IME_TOGGLE && currentState == APP_EDITOR && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_ime();
+            screen_editor_reset_drawn();
             key = 0;
         }
         // Shift+Space fullwidth toggle (only when IME active in editor)
         if (key == KEY_FULLWIDTH_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_fullwidth();
+            screen_editor_reset_drawn();
             key = 0;
         }
         // Ctrl+Shift+F simplified/traditional toggle (only when IME active in editor)
         if (key == KEY_TRAD_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_trad();
+            screen_editor_reset_drawn();
             key = 0;
         }
         // Left Shift tap → temp English mode toggle (only when IME active in editor)
         if (key == KEY_LSHIFT_TAP && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_english();
+            screen_editor_reset_drawn();
             key = 0;
         }
 

@@ -39,7 +39,7 @@ public:
     }
     const std::string &composition() const { return _code; }
     const std::vector<std::string> &candidates() const { return _page; }
-    bool composing() const { return _code.length() > 0 || _predicting || _lfMode || _deleteMode; }
+    bool composing() const { return _code.length() > 0 || _predicting || _lfMode || _deleteMode || _vMode || _englishCompose; }
 
     bool isLfMode() const { return _lfMode; }
     bool isDeleteMode() const { return _deleteMode; }
@@ -49,10 +49,18 @@ public:
     bool predicting() const { return _predicting; }
     void cancelComposition() { reset(); }
 
+    enum UserDictKind { FIXED_DICT = 0, DYNAMIC_DICT = 1 };
+    struct UserEntryView { std::string code; std::string word; int count; bool trad = false; };
+    const std::vector<UserEntryView> userDictEntries(UserDictKind kind) const;
+    bool addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word);
+    void removeUserDictEntries(UserDictKind kind, const std::vector<int> &indices);
+    size_t userDictSize(UserDictKind kind) const;
+    void ensureUserDictLoaded();
+
     void removeUserWord(const std::string &code, const std::string &word);
     void clearUserDict();
     void pruneUserDict(int minCount = 0);
-    size_t userDictSize() const { return _userWords.size(); }
+    size_t userDictSize() const { return _dynamicUserWords.size(); }
 
     static IME &getInstance() {
         static IME instance;
@@ -114,14 +122,22 @@ private:
     std::string _codeOrig;
 
     struct UserEntry { std::string code; std::string word; int count; bool trad = false; };
-    std::vector<UserEntry> _userWords;
-    bool _userDirty = false;
+    std::vector<UserEntry> _fixedUserWords;
+    std::vector<UserEntry> _dynamicUserWords;
+    bool _fixedUserDirty = false;
+    bool _dynamicUserDirty = false;
+    bool _userDictLoaded = false;
     void loadUserDict();
-    void saveUserDict();
+    bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
+    void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
     void addUserWord(const std::string &code, const std::string &word);
     void bumpFrequency(const std::string &code, const std::string &word);
 
     bool _deleteMode = false;
+    bool _vMode = false;
+    bool _englishCompose = false;
+    bool _englishDictLoaded = false;
+    std::vector<std::string> _englishWords;
     bool _lfMode = false;
     const uint8_t *_lfBlob = nullptr;
     uint32_t _lfCount = 0;
@@ -163,8 +179,13 @@ private:
     void reset();
     void lookup();
     void lookupSegmented();  // 单引号分词编码的查词路径
+    void lookupVMode();
+    void lookupEnglishMode();
+    void loadEnglishDict();
     void appendSingleCharCandidates(const std::string &prefix, int candLen);  // 主词典单字前缀候选
     void buildPage();
+    bool pagePrev();
+    bool pageNext();
     bool commit(int idx, std::string &out);
     bool handleFullwidthPunct(int key, std::string &out);
     bool handleFullwidthChar(int key, std::string &out);
