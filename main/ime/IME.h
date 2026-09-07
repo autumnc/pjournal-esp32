@@ -39,6 +39,8 @@ public:
     }
     const std::string &composition() const { return _code; }
     const std::vector<std::string> &candidates() const { return _page; }
+    // 页内高亮候选下标(v 模式左右方向键选择,渲染反白用)
+    int highlightIdx() const { return _vSel; }
     bool composing() const { return _code.length() > 0 || _predicting || _lfMode || _deleteMode || _vMode || _englishCompose; }
 
     bool isLfMode() const { return _lfMode; }
@@ -135,6 +137,7 @@ private:
 
     bool _deleteMode = false;
     bool _vMode = false;
+    int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
     std::vector<std::string> _englishWords;

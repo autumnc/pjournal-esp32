@@ -22,6 +22,8 @@ static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
 static const size_t ENGLISHDICT_LIMIT = 10000;
 static const int IME_KEY_UP = 0x80;
 static const int IME_KEY_DOWN = 0x81;
+static const int IME_KEY_LEFT = 0x82;
+static const int IME_KEY_RIGHT = 0x83;
 
 static const char *BUILTIN_ENGLISH_WORDS[] = {
     "about", "after", "again", "also", "android", "api", "app", "apple",
@@ -558,7 +560,8 @@ static std::string chineseYear(int y) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%04d", y);
     std::string out;
-    for (char c : buf) out += D[c - '0'];
+    // 只遍历数字字符:按数组长度遍历会把 '\0' 和未初始化字节当下标,越界读指针导致崩溃
+    for (char *p = buf; *p; p++) out += D[*p - '0'];
     return out;
 }
 
@@ -721,6 +724,7 @@ void IME::reset() {
     _lfMode = false;
     _deleteMode = false;
     _vMode = false;
+    _vSel = 0;
     _englishCompose = false;
 }
 
@@ -1369,8 +1373,10 @@ void IME::lookupVMode() {
         return;
     }
 
-    if (body == "/time" || body == "/date" || body == "/week") {
-        for (auto &s : vTimeDateWeek(body)) {
+    // 闭合命令(v/time/ 等,以 / 结尾):出候选,数字键/方向键选择。
+    // 未闭合(v/time)不出候选,避免选词歧义。
+    if (body == "/time/" || body == "/date/" || body == "/week/") {
+        for (auto &s : vTimeDateWeek(body.substr(0, body.size() - 1))) {
             _all.push_back(s);
             _candLen.push_back((int)_code.length());
         }
@@ -1645,6 +1651,7 @@ void IME::beginPredict(const std::string &text) {
 
 void IME::buildPage() {
     _page.clear();
+    _vSel = 0;  // 换页/重新查词后高亮回到首个候选
     if (_all.empty()) {
         _pageStart = 0;
         _curPage = 0;
@@ -1909,6 +1916,9 @@ bool IME::handleKey(int key, std::string &out) {
             reset();
             return true;
         }
+        // 闭合命令(v/time/ v/date/ v/week/):数字键直选候选,先于输入分支拦截
+        bool closedCmd = _code == "v/time/" || _code == "v/date/" || _code == "v/week/";
+        if (closedCmd && key >= '1' && key <= '9') { commit(key - '1', out); return true; }
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
             (key >= '0' && key <= '9') || key == '.' || key == '-' ||
             key == '/' || key == '!') {
@@ -1919,14 +1929,21 @@ bool IME::handleKey(int key, std::string &out) {
             }
             return true;
         }
-        if (key >= '1' && key <= '9') { commit(key - '1', out); return true; }
+        if (key == IME_KEY_LEFT) {
+            if (!_page.empty()) _vSel = (_vSel + (int)_page.size() - 1) % (int)_page.size();
+            return true;
+        }
+        if (key == IME_KEY_RIGHT) {
+            if (!_page.empty()) _vSel = (_vSel + 1) % (int)_page.size();
+            return true;
+        }
         if (key == ' ') {
-            if (_page.size() > 0) commit(0, out);
+            if (_page.size() > 0) commit(_vSel, out);
             else { out = _code.length() > 1 ? _code.substr(1) : ""; reset(); }
             return true;
         }
         if (key == '\n') {
-            out = _page.size() > 0 ? _page[0] : (_code.length() > 1 ? _code.substr(1) : "");
+            out = _page.size() > 0 ? _page[_vSel] : (_code.length() > 1 ? _code.substr(1) : "");
             reset();
             return true;
         }

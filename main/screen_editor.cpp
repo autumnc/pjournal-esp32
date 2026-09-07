@@ -1263,23 +1263,25 @@ static void drawEditor() {
         u8g2_SetDrawColor(g_u8g2, 1);
 
         auto &cands = g_ime.candidates();
-        std::string candLine;
+        int hl = g_ime.highlightIdx();
+        int candX = 4;
         for (int i = 0; i < (int)cands.size(); i++) {
             char idx[16];
             snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
             std::string part = std::string(" ") + idx + cands[i];
-            int curW = g_font.textWidth(candLine.c_str());
             int partW = g_font.textWidth(part.c_str());
-            if (curW + partW + 8 > SCREEN_W) break;
-            candLine += part;
-        }
-        {
-            int cw = g_font.textWidth(candLine.c_str()) + 8;
+            if (candX + partW + 8 > SCREEN_W) break;
             u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, IME_CAND_Y - g_font.ascent(), cw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, IME_CAND_Y, candLine.c_str(), false);
-            u8g2_SetDrawColor(g_u8g2, 1);
+            u8g2_DrawBox(g_u8g2, candX, IME_CAND_Y - g_font.ascent(), partW, FONT_H);
+            if (i == hl) {
+                u8g2_SetDrawColor(g_u8g2, 0);
+                u8g2_DrawBox(g_u8g2, candX, IME_CAND_Y - g_font.ascent(), partW, FONT_H);
+                u8g2_SetDrawColor(g_u8g2, 1);
+            } else {
+                u8g2_SetDrawColor(g_u8g2, 0);
+            }
+            g_font.drawText(candX, IME_CAND_Y, part.c_str(), false);
+            candX += partW;
         }
     }
 

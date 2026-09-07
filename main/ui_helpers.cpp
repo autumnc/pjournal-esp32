@@ -361,22 +361,26 @@ void drawIMEUI(int baseY, bool anchorBottom) {
     u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
     u8g2_SetDrawColor(g_u8g2, 1);
 
-    std::string candLine;
+    int hl = g_ime.highlightIdx();
+    int x = 4;
     for (int i = 0; i < (int)cands.size(); i++) {
         char idx[16];
         snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
         std::string part = std::string(" ") + idx + cands[i];
-        int curW = g_font.textWidth(candLine.c_str());
         int partW = g_font.textWidth(part.c_str());
-        if (curW + partW + 8 > SCREEN_W) break;
-        candLine += part;
-    }
-    if (!candLine.empty()) {
-        int candW = g_font.textWidth(candLine.c_str()) + 8;
-        u8g2_DrawBox(g_u8g2, 4, candBase - g_font.ascent(), candW, FONT_H);
-        u8g2_SetDrawColor(g_u8g2, 0);
-        g_font.drawText(4, candBase, candLine.c_str(), false);
-        u8g2_SetDrawColor(g_u8g2, 0);
+        if (x + partW + 8 > SCREEN_W) break;
+        // 白底清出该段区域,高亮候选反白(黑底白字)
+        u8g2_SetDrawColor(g_u8g2, 1);
+        u8g2_DrawBox(g_u8g2, x, candBase - g_font.ascent(), partW, FONT_H);
+        if (i == hl) {
+            u8g2_SetDrawColor(g_u8g2, 0);
+            u8g2_DrawBox(g_u8g2, x, candBase - g_font.ascent(), partW, FONT_H);
+            u8g2_SetDrawColor(g_u8g2, 1);
+        } else {
+            u8g2_SetDrawColor(g_u8g2, 0);
+        }
+        g_font.drawText(x, candBase, part.c_str(), false);
+        x += partW;
     }
 }
 
