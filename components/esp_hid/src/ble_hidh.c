@@ -662,9 +662,13 @@ gattc_fail:
 esp_err_t esp_ble_hidh_deinit(void)
 {
     ESP_RETURN_ON_FALSE(s_ble_hidh_cb_semaphore, ESP_ERR_INVALID_STATE, TAG, "Already deinitialized");
-    ESP_RETURN_ON_ERROR(
-        esp_ble_gattc_app_unregister(hid_gattc_if),
-        TAG, "App Unregister Failed");
+    esp_err_t ret = esp_ble_gattc_app_unregister(hid_gattc_if);
+    if (ret != ESP_OK) {
+        // 调用方可能已先关 bluedroid(如休眠 deinit 需先结束在飞的连接尝试),
+        // 此时注销必然失败;若在这里提前返回,信号量泄漏会导致下次
+        // esp_hidh_init 报 Already initialized 而永远初始化失败
+        ESP_LOGW(TAG, "App unregister failed (%d), continue deinit", ret);
+    }
 
     if (s_ble_hidh_cb_semaphore) {
         vSemaphoreDelete(s_ble_hidh_cb_semaphore);

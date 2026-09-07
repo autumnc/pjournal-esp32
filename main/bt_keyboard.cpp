@@ -91,6 +91,7 @@ static bool s_connected = false;
 static bool s_init_done = false;   // set once esp_hidh init completes
 static bool s_scanning = false;
 static bool s_connecting = false;  // 新增：标记正在连接中
+static bool s_deiniting = false;   // deinit 进行中:阻止重连逻辑再发起新连接尝试
 static bool s_shift_tap_armed = false;  // 左Shift 单击检测武装标记
 static int s_kb_battery = -1;           // 键盘电池电量 %，-1=未知/未连接
 static uint8_t s_last_keys[MAX_KEYS] = {0};
@@ -532,10 +533,10 @@ static void connect_task(void *arg) {
     vTaskDelete(NULL);
 }
 
-// 记录连接请求并启动后台连接任务。s_connected/s_connecting 门控避免重复发起,
+// 记录连接请求并启动后台连接任务。s_connected/s_connecting/s_deiniting 门控避免重复发起,
 // 连接中状态下后续请求直接跳过。
 static void requestConnect(const uint8_t *bda, esp_ble_addr_type_t addr_type) {
-    if (s_connected || s_connecting) {
+    if (s_deiniting || s_connected || s_connecting) {
         ESP_LOGI(TAG, "Already connected or connecting, skip connect request");
         return;
     }
@@ -555,6 +556,7 @@ BtKeyboard& BtKeyboard::getInstance() {
 esp_err_t BtKeyboard::init() {
     if (s_queue) return ESP_OK;
 
+    s_deiniting = false;
     s_queue = xQueueCreate(32, sizeof(uint8_t));
     if (!s_queue) return ESP_FAIL;
 
@@ -612,7 +614,7 @@ esp_err_t BtKeyboard::init() {
 }
 
 void BtKeyboard::deinit() {
-    s_connecting = false;
+    s_deiniting = true;
     s_connect_task = nullptr;
     if (s_dev) {
         esp_hidh_dev_close(s_dev);
@@ -622,9 +624,20 @@ void BtKeyboard::deinit() {
         vTaskDelay(pdMS_TO_TICKS(200));
         s_dev = nullptr;
     }
-    esp_hidh_deinit();
+    // 先关 bluedroid:若有连接尝试在飞行中(重试失败后立即重发,休眠时刻
+    // 几乎必然撞上),它会在栈关闭过程中失败并自行从设备列表释放。等它退出后
+    // 再 esp_hidh_deinit 才能走完清理;否则 esp_hidh_deinit 因列表非空提前返回,
+    // 泄漏事件循环与信号量,唤醒后 esp_hidh_init 报 Already initialized 失败,
+    // BT 瘫到下一次完整 deinit(表现为自动休眠唤醒后键盘永远连不上)。
     esp_bluedroid_disable();
     esp_bluedroid_deinit();
+    int waited = 0;
+    while (s_connecting && waited < 3000) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        waited += 20;
+    }
+    s_connecting = false;
+    esp_hidh_deinit();
     esp_bt_controller_disable();
     esp_bt_controller_deinit();
     if (s_queue) { vQueueDelete(s_queue); s_queue = nullptr; }

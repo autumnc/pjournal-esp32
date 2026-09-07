@@ -148,16 +148,26 @@ static void flomoSendTask(void *arg) {
 // renders immediately instead of waiting ~1s for the BT controller.
 static void btInitTask(void *arg) {
     ESP_LOGI(TAG, "Starting Bluetooth...");
-    if (g_bt.init() == ESP_OK) {
-        g_bt.loadPairedDevices();
-        if (g_bt.pairedDeviceCount() > 0) {
-            ESP_LOGI(TAG, "Found %d saved keyboard(s), will auto-connect...",
-                     g_bt.pairedDeviceCount());
-            const BtPairedDevice *p = g_bt.getPairedDevice(0);
-            g_bt.connectBDA(p->bda, p->addr_type);
-        }
-    } else {
+    if (g_bt.init() != ESP_OK) {
         ESP_LOGE(TAG, "Bluetooth init failed");
+        vTaskDelete(NULL);
+        return;
+    }
+    g_bt.loadPairedDevices();
+    if (g_bt.pairedDeviceCount() == 0) {
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "Found %d saved keyboard(s), will auto-connect...",
+             g_bt.pairedDeviceCount());
+    const BtPairedDevice *p = g_bt.getPairedDevice(0);
+    // 键盘自身空闲超时断开后广播窗口很快过期,自动休眠唤醒时单次直连大概率失败。
+    // 有限重试:连接中/已连接时 requestConnect 内部自动跳过;期间按键盘任意键
+    // 把它从深度休眠唤醒,下一轮重试即可接上。60 秒后放弃,等待手动连接。
+    int64_t deadline = esp_timer_get_time() + 60 * 1000000LL;
+    while (!g_bt.isConnected() && esp_timer_get_time() < deadline) {
+        if (!g_bt.isScanning()) g_bt.connectBDA(p->bda, p->addr_type);
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
     vTaskDelete(NULL);
 }
