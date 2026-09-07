@@ -39,8 +39,8 @@ public:
     }
     const std::string &composition() const { return _code; }
     const std::vector<std::string> &candidates() const { return _page; }
-    // 页内高亮候选下标(v 模式左右方向键选择,渲染反白用)
-    int highlightIdx() const { return _vSel; }
+    // 页内高亮候选下标(v 模式左右方向键选择,渲染反白用);仅 v 模式有高亮,其余模式返回 -1
+    int highlightIdx() const { return _vMode ? _vSel : -1; }
     bool composing() const { return _code.length() > 0 || _predicting || _lfMode || _deleteMode || _vMode || _englishCompose; }
 
     bool isLfMode() const { return _lfMode; }
