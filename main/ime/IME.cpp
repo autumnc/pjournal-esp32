@@ -580,7 +580,7 @@ static std::string capFirst(const std::string &w) {
     return r;
 }
 
-// v/time / v/date / v/week 的候选:当前时刻按 纯数字/数字加中文/纯中文(星期为 英文/中文)生成
+// v/t / v/d / v/w 的候选:当前时刻按 纯数字/数字加中文/纯中文(星期为 英文/中文)生成
 static std::vector<std::string> vTimeDateWeek(const std::string &body) {
     std::vector<std::string> out;
     time_t now;
@@ -588,7 +588,7 @@ static std::vector<std::string> vTimeDateWeek(const std::string &body) {
     struct tm tmv;
     localtime_r(&now, &tmv);
     char buf[48];
-    if (body == "/time") {
+    if (body == "/t") {
         snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
         out.push_back(buf);
         snprintf(buf, sizeof(buf), "%02d时%02d分%02d秒", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
@@ -596,7 +596,7 @@ static std::vector<std::string> vTimeDateWeek(const std::string &body) {
         snprintf(buf, sizeof(buf), "%s时%s分%s秒", chineseDayMonth(tmv.tm_hour).c_str(),
                  chineseDayMonth(tmv.tm_min).c_str(), chineseDayMonth(tmv.tm_sec).c_str());
         out.push_back(buf);
-    } else if (body == "/date") {
+    } else if (body == "/d") {
         snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
         out.push_back(buf);
         snprintf(buf, sizeof(buf), "%d年%d月%d日", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
@@ -604,7 +604,7 @@ static std::vector<std::string> vTimeDateWeek(const std::string &body) {
         snprintf(buf, sizeof(buf), "%s年%s月%s日", chineseYear(tmv.tm_year + 1900).c_str(),
                  chineseDayMonth(tmv.tm_mon + 1).c_str(), chineseDayMonth(tmv.tm_mday).c_str());
         out.push_back(buf);
-    } else if (body == "/week") {
+    } else if (body == "/w") {
         static const char *EN[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
         static const char *CN[] = {"星期日","星期一","星期二","星期三","星期四","星期五","星期六"};
         out.push_back(EN[tmv.tm_wday]);
@@ -1373,9 +1373,9 @@ void IME::lookupVMode() {
         return;
     }
 
-    // 闭合命令(v/time/ 等,以 / 结尾):出候选,数字键/方向键选择。
-    // 未闭合(v/time)不出候选,避免选词歧义。
-    if (body == "/time/" || body == "/date/" || body == "/week/") {
+    // 闭合命令(v/t/ v/d/ v/w/,以 / 结尾):出候选,数字键/方向键选择。
+    // 未闭合(v/t)不出候选,避免选词歧义。
+    if (body == "/t/" || body == "/d/" || body == "/w/") {
         for (auto &s : vTimeDateWeek(body.substr(0, body.size() - 1))) {
             _all.push_back(s);
             _candLen.push_back((int)_code.length());
@@ -1916,8 +1916,8 @@ bool IME::handleKey(int key, std::string &out) {
             reset();
             return true;
         }
-        // 闭合命令(v/time/ v/date/ v/week/):数字键直选候选,先于输入分支拦截
-        bool closedCmd = _code == "v/time/" || _code == "v/date/" || _code == "v/week/";
+        // 闭合命令(v/t/ v/d/ v/w/):数字键直选候选,先于输入分支拦截
+        bool closedCmd = _code == "v/t/" || _code == "v/d/" || _code == "v/w/";
         if (closedCmd && key >= '1' && key <= '9') { commit(key - '1', out); return true; }
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
             (key >= '0' && key <= '9') || key == '.' || key == '-' ||
