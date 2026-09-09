@@ -30,6 +30,7 @@ struct SettingField { const char *key; const char *label; bool masked; bool acti
 static const SettingField SETTINGS_FIELDS[] = {
     {"_app_mode", "工作模式", false, true},
     {"_home_view", "主页视图", false, true},
+    {"_editor_orientation", "文字方向", false, true},
     {"_input_mode", "输入模式", false, true},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -766,6 +767,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 g_settings.setString("home_view", next);
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_editor_orientation") == 0) {
+                std::string next = (g_settings.editorOrientation() == "vertical") ? "horizontal" : "vertical";
+                g_settings.setString("editor_orientation", next);
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_flomo_token") == 0) {
                 std::string email = g_settings.flomoEmail();
                 std::string pass = g_settings.flomoPassword();
@@ -867,7 +873,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             }
             if (strcmp(f.key, "_font_size") == 0) {
                 int curSize = g_settings.fontSize();
-                int newSize = (curSize == 28) ? 22 : (curSize == 22) ? 16 : 28;
+                int newSize = (curSize == 22) ? 18 : 22;
                 g_settings.setString("font_size", std::to_string(newSize));
                 return APP_SETTINGS;
             }
@@ -932,6 +938,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_home_view") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.homeView() == "month" ? "月视图" : "周视图");
+            } else if (strcmp(f.key, "_editor_orientation") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         g_settings.editorOrientation() == "vertical" ? "竖排" : "横排");
             } else if (strcmp(f.key, "_input_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.inputMode() == "typewriter" ? "打字机模式" : "正常模式");

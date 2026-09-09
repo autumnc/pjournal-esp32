@@ -30,14 +30,14 @@ idf_component_register(SRCS
     "screen_polish_prompt.cpp"
     "voice_input.cpp"
     "markdown_render.cpp"
+    "vertical_layout.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES
         "ime/ime_table_pinyin.bin"
         "ime/liangfen.bin"
         "ime/english_words.txt"
-        "terminus28.fnt"
         "terminus22.fnt"
-        "terminus16.fnt"
+        "fontlibrary18.fnt"
     PRIV_REQUIRES
         spi_flash
         nvs_flash
@@ -63,4 +63,4 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.5.0")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.6.0")

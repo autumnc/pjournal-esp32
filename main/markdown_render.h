@@ -1,7 +1,10 @@
 #pragma once
 
+#include <set>
 #include <string>
 #include <vector>
+
+#include "font_renderer.h"
 
 // Markdown live rendering for the editor.
 // Block markers (#, -, >, task) are width-preserving: replaced by same-width
@@ -45,6 +48,31 @@ std::string mdCnNumeral(int n);
 
 // Classify every line of the document in one pass.
 std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines);
+
+// Shared heading-fold semantics: hidden[li]=1 for every line swallowed by a
+// folded heading (nested folds, inner folded headings inside a fold region
+// stay hidden). Returns all zeros when mdInfo is null or nothing is folded.
+// Used by both horizontal buildVrows and vertical buildVerticalCols so the
+// two layouts hide exactly the same lines.
+std::vector<char> mdFoldHiddenLines(const std::vector<std::string> &lines,
+                                    const std::vector<MdLineInfo> *mdInfo,
+                                    const std::set<int> *foldedHeadings);
+
+// Fold marker appended to a folded heading (uF09DA).
+extern const char *kFoldMarker;
+
+// Vertical-mode cell decomposition of a line. Block/inline markers become
+// replacement glyph cells (heading icon, bullet, task box) or are dropped
+// entirely — hidden marker bytes (** , ~~ , ` , >_ , link brackets) occupy no
+// cell, so cursor mapping is cell-based (see vertical_layout.h). Inline style
+// flags are kept per visible cell and rendered by vertical_layout.
+struct MdVCell {
+    int start = 0, end = 0;  // byte range in the raw line
+    std::string glyph;       // text drawn in this cell (usually one char)
+    TextStyle ts;            // bold/underline/strike/invert/emph for this cell
+};
+std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &info,
+                                     bool folded = false);
 
 // Draw the [start, end) byte slice of `line` (a vrow) at (x, y) with markdown
 // styles. y is the text baseline. Byte offsets match buildVrows output.

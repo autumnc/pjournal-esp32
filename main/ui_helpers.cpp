@@ -232,16 +232,10 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
         localInfo = mdClassifyLines(lines);
         mdInfoPtr = &localInfo;
     }
+    std::vector<char> hidden = mdFoldHiddenLines(lines, mdInfoPtr, foldedHeadings);
     bool folding = foldedHeadings && !foldedHeadings->empty();
-    int hideLevel = 0;  // >0 表示当前处于某标题的折叠区内
     for (int li = 0; li < (int)lines.size(); li++) {
-        if (folding) {
-            int lvl = mdInfoPtr ? (*mdInfoPtr)[li].headingLevel : 0;
-            bool inCode = mdInfoPtr ? (*mdInfoPtr)[li].inCodeBlock : false;
-            bool isH = lvl > 0 && !inCode;
-            if (hideLevel != 0 && !(isH && lvl <= hideLevel)) continue;  // 折叠区内且不是结束边界
-            if (isH) hideLevel = foldedHeadings->count(li) ? lvl : 0;
-        }
+        if (folding && hidden[li]) continue;
         const auto &line = lines[li];
         int len = (int)line.length();
         if (len == 0) {
@@ -326,14 +320,16 @@ void drawIMEUI(int baseY, bool anchorBottom) {
     char pageInfo[32];
     snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
 
-    u8g2_DrawBox(g_u8g2, 0, baseY, SCREEN_W, 67);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     // anchorBottom: 行位与编辑器 compose 条一致(候选行贴面板底边,
-    // 基线离底 descent+3,分割线、编码行依次向上),词库管理等面板型调用用
+    // 基线离底 descent+3,分割线、编码行依次向上),词库管理等面板型调用用。
+    // 底边锚定状态栏分割线 STATUS_BAR_Y 而非 baseY+67(=STATUS_Y,随字号浮动):
+    // 16pt 时 STATUS_Y=282 压过分割线(候选行贴住状态栏),28pt 时 STATUS_Y=270
+    // 偏高浪费正文空间;锚定后与编辑器横排自绘条(IME_CODE_Y/IME_CAND_Y)全字号对齐
     int codeBase, sepY, candBase;
     if (anchorBottom) {
-        int bottom = baseY + 67;
+        int bottom = STATUS_BAR_Y;
         candBase = bottom - g_font.descent() - 3;
         sepY = bottom - (2 * FONT_H - g_font.ascent()) - 4;
         codeBase = sepY - 7;
@@ -342,6 +338,12 @@ void drawIMEUI(int baseY, bool anchorBottom) {
         sepY = baseY + FONT_H + 4;
         candBase = baseY + FONT_H + 8 + g_font.ascent();
     }
+
+    // 白底清出候选条区域;anchorBottom 清到分割线为止,不抹掉状态栏
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, 0, baseY, SCREEN_W,
+                 (anchorBottom ? STATUS_BAR_Y : baseY + 67) - baseY);
+    u8g2_SetDrawColor(g_u8g2, 1);
 
     int cw = g_font.textWidth(code.c_str()) + 8;
     u8g2_DrawBox(g_u8g2, 4, codeBase - g_font.ascent(), cw, FONT_H);
@@ -484,22 +486,21 @@ void ui_draw_text_centered(int y, const char *text, bool invert, bool bold) {
 }
 
 void ui_draw_status(const char *left, const char *right) {
-    // 状态栏始终用22号字体;画完恢复原字号,不影响同帧后续绘制(如编辑器保存确认框)
-    int prev_size = g_font.fontSize();
-    if (prev_size != STATUS_BAR_FONT_SIZE) g_font.setSize(STATUS_BAR_FONT_SIZE);
+    // 状态栏使用当前字号;编辑器的字号设置应同时影响正文和状态栏。
     int y = STATUS_BAR_Y;
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 0, y, SCREEN_W);
     u8g2_SetDrawColor(g_u8g2, 1);
     u8g2_DrawBox(g_u8g2, 0, y + 1, SCREEN_W, FONT_H + 3);
     u8g2_SetDrawColor(g_u8g2, 0);
-    if (left) g_font.drawText(4, y + 1 + g_font.ascent(), left, false);
+    // 文字在22px高的状态栏内垂直居中:22pt偏移0(与旧版一致),16pt下移3px
+    int textY = y + 1 + (STATUS_BAR_H - g_font.lineHeight()) / 2 + g_font.ascent();
+    if (left) g_font.drawText(4, textY, left, false);
     if (right) {
         int rw = g_font.textWidth(right);
-        g_font.drawText(SCREEN_W - rw - 4, y + 1 + g_font.ascent(), right, false);
+        g_font.drawText(SCREEN_W - rw - 4, textY, right, false);
     }
     u8g2_SetDrawColor(g_u8g2, 1);
-    if (g_font.fontSize() != prev_size) g_font.setSize(prev_size);
 }
 
 void ui_show_message_centered(const char *msg) {

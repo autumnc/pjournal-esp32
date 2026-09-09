@@ -9,6 +9,7 @@
 #include "typing_click.h"
 #include "ui_helpers.h"
 #include "markdown_render.h"
+#include "vertical_layout.h"
 #include "ime/IME.h"
 #include <cstdio>
 #include <cstring>
@@ -135,6 +136,7 @@ static void markDirty() {
 
 // 打字机模式:光标居中 + 按键音效是否生效
 static bool editorTypewriter() { return g_settings.inputMode() == "typewriter"; }
+static bool editorVertical() { return g_settings.editorOrientation() == "vertical"; }
 
 // 行数变化时平移折叠标题的行号,保持折叠集与缓冲区对齐。
 static void foldLinesInserted(int at, int count) {
@@ -532,6 +534,65 @@ static int utf8Count(const std::string &s) {
     int n = 0;
     for (int i = 0; i < (int)s.length(); i = utf8Next(s, i)) n++;
     return n;
+}
+
+static void moveCursorVerticalInline(int step) {
+    if (step < 0) {
+        if (g_editor.cx > 0) {
+            g_editor.cx = utf8Prev(g_editor.lines[g_editor.cy], g_editor.cx);
+        } else if (g_editor.cy > 0) {
+            g_editor.cy--;
+            g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
+        }
+    } else if (step > 0) {
+        if (g_editor.cx < (int)g_editor.lines[g_editor.cy].length()) {
+            g_editor.cx = utf8Next(g_editor.lines[g_editor.cy], g_editor.cx);
+        } else if (g_editor.cy < (int)g_editor.lines.size() - 1) {
+            g_editor.cy++;
+            g_editor.cx = 0;
+        }
+    }
+    g_editor.targetCx = -1;
+}
+
+static void moveCursorVerticalColumn(int dir, const VerticalData &data) {
+    int curCol = verticalFindCol(data, g_editor.lines, g_editor.cy, g_editor.cx);
+    if (curCol < 0) return;
+    int row = verticalCellRow(data.cells[g_editor.cy], g_editor.cx) - data.cols[curCol].start;
+    int dstCol = curCol + dir;
+    if (dstCol < 0) dstCol = 0;
+    if (dstCol >= (int)data.cols.size()) dstCol = (int)data.cols.size() - 1;
+    const auto &dst = data.cols[dstCol];
+    g_editor.cy = dst.lineIdx;
+    g_editor.cx = verticalRowToByte(data.cells[dst.lineIdx], dst.start, dst.end, row);
+    g_editor.targetCx = -1;
+}
+
+// 竖排选区高亮:对 [hStart, hEnd) 范围内的字符格做 XOR 反白
+// (与横排选区同机制,draw color 2),格 = 整个字身方(线高×线高)
+static void drawVerticalHighlight(const VerticalData &data,
+                                  int scrollCol, const VerticalLayoutMetrics &vm,
+                                  TextPos hStart, TextPos hEnd) {
+    int cell = g_font.lineHeight();
+    for (int ci = 0; ci < vm.cols; ci++) {
+        int colIdx = scrollCol + ci;
+        if (colIdx < 0 || colIdx >= (int)data.cols.size()) continue;
+        const auto &col = data.cols[colIdx];
+        if (col.lineIdx < hStart.cy || col.lineIdx > hEnd.cy) continue;
+        const auto &cells = data.cells[col.lineIdx];
+        int x = vm.x + vm.w - vm.colAdvance - ci * vm.colAdvance;
+        for (int i = col.start; i < col.end; i++) {
+            int b = cells[i].start;
+            bool geStart = col.lineIdx > hStart.cy || (col.lineIdx == hStart.cy && b >= hStart.cx);
+            bool ltEnd = col.lineIdx < hEnd.cy || (col.lineIdx == hEnd.cy && b < hEnd.cx);
+            if (geStart && ltEnd) {
+                int row = i - col.start;
+                u8g2_SetDrawColor(g_u8g2, 2);
+                u8g2_DrawBox(g_u8g2, x, vm.y + row * vm.rowAdvance, cell, cell);
+                u8g2_SetDrawColor(g_u8g2, 1);
+            }
+        }
+    }
 }
 
 static void docOffsetToPos(int off, int &cy, int &cx) {
@@ -934,6 +995,21 @@ static AppState screen_editor_search_handle(int key, ScreenContext &ctx) {
     }
 
     if (key == KEY_SEARCH || key == 0x1B) {
+        // 关闭时把当前匹配设为选区:正文立即反显匹配位置(横竖排共用选区高亮),
+        // 不然对话框全程盖住正文,关掉后匹配处只有光标,难以定位。
+        auto &sh2 = g_editor.search;
+        if (sh2.cur >= 0 && sh2.cur < (int)sh2.matches.size()) {
+            int cy, cx;
+            docOffsetToPos(sh2.matches[sh2.cur].first, cy, cx);
+            g_editor.selAnchorCy = cy;
+            g_editor.selAnchorCx = cx;
+            docOffsetToPos(sh2.matches[sh2.cur].second, cy, cx);
+            g_editor.cy = cy;
+            g_editor.cx = cx;
+            g_editor.hasSelection = true;
+            g_editor.targetCx = -1;
+            markDirty();
+        }
         searchClose();
         ui_clear(); drawEditor(); ui_commit();
         return APP_EDITOR;
@@ -1090,39 +1166,146 @@ static void reconcileFoldsForCursor() {
     }
 }
 
+// 提示词表头折行范围。drawEditor 与 editorVerticalVm 共用,保证表头占用的
+// 行数在绘制与竖排布局计算之间一致。
+static std::vector<std::pair<const char *, const char *>> promptWrappedRowRanges() {
+    std::vector<std::pair<const char *, const char *>> rows;
+    if (!g_editor.promptMode || g_editor.promptText.empty()) return rows;
+    const int maxW = SCREEN_W - 8;
+    const char *p = g_editor.promptText.c_str();
+    while (*p) {
+        const char *rowStart = p;
+        int rowW = 0;
+        while (*p) {
+            const char *next = p;
+            uint32_t cp = FontRenderer::utf8Decode(next);
+            if (cp == 0) { p = next; continue; }
+            int cw = g_font.charWidth(cp);
+            if (rowW + cw > maxW && rowW > 0) break;
+            rowW += cw;
+            p = next;
+        }
+        if (p > rowStart) rows.push_back({rowStart, p});
+    }
+    return rows;
+}
+
+// 竖排布局度量。draw 与左右/PageUp/PageDown 导航必须用同一套参数,否则
+// 导航按 STATUS_Y 全高切列、绘制按候选条保留高度切列,列边界错位导致光标跳行。
+static VerticalLayoutMetrics editorVerticalVm() {
+    int y = FONT_H;
+    int pRows = (int)promptWrappedRowRanges().size();
+    if (pRows > 0) y += (pRows + 1) * LINE_SPACING;
+    bool reserveIME = g_editor.imeActive && !s_skipStatusBarAndIme;
+    int contentEndY;
+    if (reserveIME) {
+        // 候选条底边锚定分割线(276)后,编码行白框上沿 = 276-2*FONT_H-11
+        // (18pt:229 / 22pt:221)。竖排正文下探到编码行上沿附近,
+        // 行数 18/22pt = 11/9(锚定 STATUS_Y 时为 10/8)。
+        contentEndY = g_font.fontSize() == 18 ? 232 : 221;
+    } else {
+        contentEndY = STATUS_Y;
+    }
+    // 竖排首字墨迹顶边与横排首行对齐(横排首行基线 y,顶边 y-ascent);
+    // 竖排基线 = vm.y + ascent,故 vm.y 取 y-ascent,顶部不留整行空白
+    int vTop = y - g_font.ascent();
+    return verticalMetrics(6, vTop, SCREEN_W - 12, contentEndY - vTop);
+}
+
 static void drawEditor() {
     g_editor.drawnOnce = true;
     reconcileFoldsForCursor();
     int y = FONT_H;
 
     if (g_editor.promptMode && !g_editor.promptText.empty()) {
-        const int maxW = SCREEN_W - 8;
-        const char *p = g_editor.promptText.c_str();
-        while (*p) {
-            const char *rowStart = p;
-            int rowW = 0;
-            while (*p) {
-                const char *next = p;
-                uint32_t cp = FontRenderer::utf8Decode(next);
-                if (cp == 0) { p = next; continue; }
-                int cw = g_font.charWidth(cp);
-                if (rowW + cw > maxW && rowW > 0) break;
-                rowW += cw;
-                p = next;
-            }
-            std::string line(rowStart, p - rowStart);
-            if (!line.empty()) {
-                ui_draw_text(4, y, line.c_str(), false, true);
-                y += LINE_SPACING;
-            }
+        for (auto &r : promptWrappedRowRanges()) {
+            ui_draw_text(4, y, std::string(r.first, r.second - r.first).c_str(), false, true);
+            y += LINE_SPACING;
         }
         u8g2_DrawHLine(g_u8g2, 0, y, SCREEN_W);
         y += LINE_SPACING;
     }
 
+    if (editorVertical()) {
+        bool composing = g_ime.composing() && !s_skipStatusBarAndIme;
+        VerticalLayoutMetrics vm = editorVerticalVm();
+        bool mdOn = g_settings.markdownRender();
+        mdSetRenderEnabled(mdOn);
+        const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
+        auto hidden = mdFoldHiddenLines(g_editor.lines, mdOn ? &mdInfo : nullptr,
+                                        &g_editor.foldedHeadings);
+        auto data = buildVerticalData(g_editor.lines, vm.rows, &hidden,
+                                      mdOn ? &mdInfo : nullptr, &g_editor.foldedHeadings);
+        int cursorCol = verticalFindCol(data, g_editor.lines, g_editor.cy, g_editor.cx);
+        if (editorTypewriter() && cursorCol >= 0) {
+            g_editor.scroll = cursorCol - vm.cols / 2;
+        } else {
+            if (cursorCol < g_editor.scroll) g_editor.scroll = cursorCol;
+            if (cursorCol >= g_editor.scroll + vm.cols) g_editor.scroll = cursorCol - vm.cols + 1;
+            if (g_editor.scroll < 0) g_editor.scroll = 0;
+        }
+        int maxScroll = (int)data.cols.size() - vm.cols;
+        if (maxScroll < 0) maxScroll = 0;
+        if (!editorTypewriter()) {
+            if (g_editor.scroll > maxScroll) g_editor.scroll = maxScroll;
+        }
+
+        if (composing) drawIMEUI(STATUS_Y - 67, true);
+        drawVerticalCols(g_editor.lines, data, g_editor.scroll, vm);
+        // Markdown 关闭时折叠标题行末补折叠标志;开启时 mdVerticalCells 已含折叠标志格
+        if (!mdOn) {
+            for (int li : g_editor.foldedHeadings) {
+                if (li < 0 || li >= (int)g_editor.lines.size()) continue;
+                int colIdx = -1;
+                for (int i = 0; i < (int)data.cols.size(); i++)
+                    if (data.cols[i].lineIdx == li) colIdx = i;
+                if (colIdx < 0 || colIdx < g_editor.scroll || colIdx >= g_editor.scroll + vm.cols)
+                    continue;
+                const auto &col = data.cols[colIdx];
+                if (col.end != (int)data.cells[li].size()) continue;
+                int row = col.end - col.start;
+                if (row >= vm.rows) continue;
+                int ci = colIdx - g_editor.scroll;
+                int x = vm.x + vm.w - vm.colAdvance - ci * vm.colAdvance;
+                int wpx = g_font.textWidth(kFoldMarker);
+                g_font.drawText(x + (g_font.lineHeight() - wpx) / 2,
+                                vm.y + row * vm.rowAdvance + g_font.ascent(),
+                                kFoldMarker, false);
+            }
+        }
+        if (g_editor.hasSelection) {
+            TextPos selStart, selEnd;
+            getSelRange(selStart, selEnd);
+            drawVerticalHighlight(data, g_editor.scroll, vm, selStart, selEnd);
+        }
+        drawVerticalCursor(g_editor.lines, data, g_editor.scroll, vm, g_editor.cy, g_editor.cx);
+
+        if (!s_skipStatusBarAndIme) {
+            int wc = getWordCount();
+            char left[48];
+            if (inQuickFileSession()) snprintf(left, sizeof(left), "[%d] 竖排", quickEditIndex());
+            else snprintf(left, sizeof(left), "%s 竖排", g_editor.promptMode ? "提示写作" : "自由写作");
+            std::string imeLabel;
+            if (!g_editor.imeActive) imeLabel = "EN";
+            else if (g_ime.english()) imeLabel = "[英]";
+            else {
+                imeLabel = "[中]";
+                imeLabel += g_ime.fullwidth() ? "\xe2\x97\x8f" : "\xe2\x97\x90";
+                imeLabel += g_ime.trad() ? "繁" : "简";
+            }
+            std::string right = std::to_string(wc) + "字 " + imeLabel;
+            std::string bt = battery_icon_status_text();
+            if (!bt.empty()) right += " " + bt;
+            ui_draw_status(left, right.c_str());
+        }
+        return;
+    }
+
     const auto& vrows = getVrows();
     bool composing = g_ime.composing() && !s_skipStatusBarAndIme;
-    int contentEndY = composing ? IME_CODE_Y : STATUS_Y;
+    // IME 开启期间恒定保留候选条区域,选字后候选条隐藏不再引起正文重排跳动
+    bool reserveIME = g_editor.imeActive && !s_skipStatusBarAndIme;
+    int contentEndY = reserveIME ? IME_CODE_Y : STATUS_Y;
     int visibleVrows = (contentEndY - y + LINE_SPACING - 1) / LINE_SPACING;
     if (visibleVrows < 1) visibleVrows = 1;
 
@@ -1135,7 +1318,7 @@ static void drawEditor() {
     }
 
     int normalVisibleVrows = (STATUS_Y - y + LINE_SPACING - 1) / LINE_SPACING;
-    int effectiveVisibleVrows = composing ? (normalVisibleVrows - 2) : normalVisibleVrows;
+    int effectiveVisibleVrows = reserveIME ? (normalVisibleVrows - 2) : normalVisibleVrows;
     if (effectiveVisibleVrows < 1) effectiveVisibleVrows = 1;
 
     if (editorTypewriter() && cursorVR >= 0) {
@@ -1788,6 +1971,33 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             markDirty();
             g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
             g_editor.modifiedSinceSave = true;
+        }
+        ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
+    }
+
+    if (editorVertical() && (key == KEY_UP || key == KEY_DOWN || key == KEY_LEFT ||
+                             key == KEY_RIGHT || key == KEY_PAGE_UP || key == KEY_PAGE_DOWN)) {
+        clearSelection();
+        VerticalLayoutMetrics vm = editorVerticalVm();
+        bool mdOn = g_settings.markdownRender();
+        mdSetRenderEnabled(mdOn);
+        const auto &mdInfo = getMdInfo(mdOn);
+        auto hidden = mdFoldHiddenLines(g_editor.lines, mdOn ? &mdInfo : nullptr,
+                                        &g_editor.foldedHeadings);
+        auto data = buildVerticalData(g_editor.lines, vm.rows, &hidden,
+                                      mdOn ? &mdInfo : nullptr, &g_editor.foldedHeadings);
+        if (key == KEY_UP) {
+            moveCursorVerticalInline(-1);
+        } else if (key == KEY_DOWN) {
+            moveCursorVerticalInline(1);
+        } else if (key == KEY_LEFT) {
+            moveCursorVerticalColumn(1, data);
+        } else if (key == KEY_RIGHT) {
+            moveCursorVerticalColumn(-1, data);
+        } else if (key == KEY_PAGE_UP) {
+            moveCursorVerticalColumn(-vm.cols, data);
+        } else if (key == KEY_PAGE_DOWN) {
+            moveCursorVerticalColumn(vm.cols, data);
         }
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
     }

@@ -6,19 +6,18 @@ static const char *TAG = "Font";
 FontRenderer g_font;
 
 // Embedded font data from CMakeLists EMBED_FILES
-extern const uint8_t terminus28_fnt_start[] asm("_binary_terminus28_fnt_start");
-extern const uint8_t terminus28_fnt_end[]   asm("_binary_terminus28_fnt_end");
 extern const uint8_t terminus22_fnt_start[] asm("_binary_terminus22_fnt_start");
 extern const uint8_t terminus22_fnt_end[]   asm("_binary_terminus22_fnt_end");
-extern const uint8_t terminus16_fnt_start[] asm("_binary_terminus16_fnt_start");
-extern const uint8_t terminus16_fnt_end[]   asm("_binary_terminus16_fnt_end");
+extern const uint8_t fontlibrary18_fnt_start[] asm("_binary_fontlibrary18_fnt_start");
+extern const uint8_t fontlibrary18_fnt_end[]   asm("_binary_fontlibrary18_fnt_end");
 
 bool FontRenderer::begin() {
-    blob_28_ = terminus28_fnt_start;
     blob_22_ = terminus22_fnt_start;
-    blob_16_ = terminus16_fnt_start;
-    // Default to 28pt
-    return setSize(28);
+    blob_small_ = fontlibrary18_fnt_start;
+    // font_size_ 默认初始化为 22, 直接 setSize(22) 会撞上 early-return 跳过解析,
+    // loaded_ 保持 false 导致所有文字空白(仅符号表/手绘图标可见)。先置无效值强制解析。
+    font_size_ = 0;
+    return setSize(22);
 }
 
 bool FontRenderer::setSize(int fontSize) {
@@ -27,15 +26,12 @@ bool FontRenderer::setSize(int fontSize) {
     const uint8_t *blob = nullptr;
     size_t sz = 0;
 
-    if (fontSize == 28) {
-        blob = blob_28_;
-        sz = terminus28_fnt_end - terminus28_fnt_start;
-    } else if (fontSize == 22) {
+    if (fontSize == 22) {
         blob = blob_22_;
         sz = terminus22_fnt_end - terminus22_fnt_start;
-    } else if (fontSize == 16) {
-        blob = blob_16_;
-        sz = terminus16_fnt_end - terminus16_fnt_start;
+    } else if (fontSize == 18) {
+        blob = blob_small_;
+        sz = fontlibrary18_fnt_end - fontlibrary18_fnt_start;
     } else {
         return false;
     }
@@ -160,6 +156,11 @@ int FontRenderer::charWidth(uint32_t cp) {
     return m ? m->advance : line_height_;
 }
 
+static bool isSmallFontStatusSymbol(uint32_t cp);
+static int smallFontStatusSymbolAdvance(uint32_t cp);
+static void drawSmallFontStatusSymbol(int x, int y, uint32_t cp, bool invert);
+static uint32_t smallFontFallbackCodepoint(uint32_t cp);
+
 int FontRenderer::textWidth(const char *text) {
     int w = 0;
     while (*text) {
@@ -168,10 +169,18 @@ int FontRenderer::textWidth(const char *text) {
         auto *sym = getSymbolGlyph(cp, font_size_);
         if (sym) {
             w += sym->advance;
+        } else if (font_size_ == 18 && isSmallFontStatusSymbol(cp)) {
+            // 状态图标(电池/蓝牙/分割线)优先于字形表: FL18 的 E0xx PUA 区是无关字形,
+            // 22pt 的图标位图嵌在 terminus22 内, 小字号走手绘
+            w += smallFontStatusSymbolAdvance(cp);
         } else {
             auto *m = findGlyph(cp);
             if (m) {
                 w += m->advance;
+            } else if (font_size_ == 18) {
+                uint32_t fb = smallFontFallbackCodepoint(cp);
+                auto *fm = fb ? findGlyph(fb) : nullptr;
+                w += fm ? fm->advance : line_height_ / 2;
             } else {
                 w += line_height_ / 2;
             }
@@ -186,6 +195,7 @@ extern "C" {
     extern void u8g2_DrawPixel(void *u8g2, int x, int y);
     extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
     extern void u8g2_DrawHLine(void *u8g2, int x, int y, int w);
+    extern void u8g2_DrawVLine(void *u8g2, int x, int y, int h);
     // DrawBitmap is MSB-first (bit 7 = leftmost column), matching our glyph
     // data. u8g2_DrawXBM is LSB-first and would mirror every 8px block.
     extern void u8g2_SetBitmapMode(void *u8g2, uint8_t is_transparent);
@@ -195,6 +205,70 @@ extern "C" {
 struct u8g2_struct;
 typedef struct u8g2_struct u8g2_t;
 extern u8g2_t *g_u8g2;
+
+static bool isSmallFontStatusSymbol(uint32_t cp) {
+    return cp == 0xE001 || cp == 0xE002 || (cp >= 0xE018 && cp <= 0xE02D);
+}
+
+static int smallFontStatusSymbolAdvance(uint32_t cp) {
+    return (cp == 0xE001 || cp == 0xE002) ? 8 : 16;
+}
+
+static int smallFontBatteryLevel(uint32_t cp) {
+    if (cp >= 0xE018 && cp <= 0xE022) return cp - 0xE018;
+    if (cp >= 0xE023 && cp <= 0xE02D) return cp - 0xE023;
+    return 10;
+}
+
+static uint32_t smallFontFallbackCodepoint(uint32_t cp) {
+    switch (cp) {
+    case 0xFF61: return 0x3002;  // ｡ -> 。
+    case 0xFF62: return 0x300C;  // ｢ -> 「
+    case 0xFF63: return 0x300D;  // ｣ -> 」
+    case 0xFF64: return 0x3001;  // ､ -> 、
+    case 0xFF65: return 0x30FB;  // ･ -> ・
+    default: return 0;
+    }
+}
+
+static void drawSmallFontBatteryIcon(int x, int y, uint32_t cp) {
+    int top = y - 12;
+    int lvl = smallFontBatteryLevel(cp);
+    if (lvl < 0) lvl = 0;
+    if (lvl > 10) lvl = 10;
+    u8g2_DrawHLine(g_u8g2, x + 1, top + 2, 12);
+    u8g2_DrawHLine(g_u8g2, x + 1, top + 11, 12);
+    u8g2_DrawVLine(g_u8g2, x + 1, top + 2, 10);
+    u8g2_DrawVLine(g_u8g2, x + 13, top + 2, 10);
+    u8g2_DrawBox(g_u8g2, x + 14, top + 5, 2, 4);
+    if (lvl > 0) u8g2_DrawBox(g_u8g2, x + 3, top + 4, lvl, 6);
+}
+
+static void drawSmallFontBluetoothIcon(int x, int y) {
+    int top = y - 13;
+    int cx = x + 4;
+    u8g2_DrawVLine(g_u8g2, cx, top + 1, 12);
+    u8g2_DrawPixel(g_u8g2, cx + 1, top + 2);
+    u8g2_DrawPixel(g_u8g2, cx + 2, top + 3);
+    u8g2_DrawPixel(g_u8g2, cx + 1, top + 4);
+    u8g2_DrawPixel(g_u8g2, cx - 1, top + 5);
+    u8g2_DrawPixel(g_u8g2, cx - 2, top + 6);
+    u8g2_DrawPixel(g_u8g2, cx - 1, top + 7);
+    u8g2_DrawPixel(g_u8g2, cx + 1, top + 8);
+    u8g2_DrawPixel(g_u8g2, cx + 2, top + 9);
+    u8g2_DrawPixel(g_u8g2, cx + 1, top + 10);
+}
+
+static void drawSmallFontStatusSymbol(int x, int y, uint32_t cp, bool invert) {
+    if (invert) {
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawBox(g_u8g2, x, y - 14, smallFontStatusSymbolAdvance(cp), 16);
+        u8g2_SetDrawColor(g_u8g2, 1);
+    }
+    if (cp == 0xE002) drawSmallFontBluetoothIcon(x, y);
+    else drawSmallFontBatteryIcon(x, y, cp);
+    if (invert) u8g2_SetDrawColor(g_u8g2, 0);
+}
 
 // True if the glyph's ink is made only of long horizontal bars (e.g. 一、二、三).
 // Such glyphs need an extra +1px vertical stroke in bold: the horizontal shift alone
@@ -311,11 +385,23 @@ int FontRenderer::drawText(int x, int y, const char *text, bool invert) {
         if (sym) {
             drawSymbolGlyph(x, y, sym, invert);
             x += sym->advance;
+        } else if (font_size_ == 18 && isSmallFontStatusSymbol(cp)) {
+            drawSmallFontStatusSymbol(x, y, cp, invert);
+            x += smallFontStatusSymbolAdvance(cp);
         } else {
             auto *meta = findGlyph(cp);
             if (meta) {
                 drawGlyph(x, y, meta, invert);
                 x += meta->advance;
+            } else if (font_size_ == 18) {
+                uint32_t fb = smallFontFallbackCodepoint(cp);
+                auto *fm = fb ? findGlyph(fb) : nullptr;
+                if (fm) {
+                    drawGlyph(x, y, fm, invert);
+                    x += fm->advance;
+                } else {
+                    x += line_height_ / 2;
+                }
             } else {
                 x += line_height_ / 2;
             }
@@ -342,6 +428,10 @@ int FontRenderer::drawTextStyled(int x, int y, const char *text, const TextStyle
             if (ts.bold) drawSymbolGlyph(x + 1, y, sym, false);
             drawSymbolGlyph(x, y, sym, false);
             adv = sym->advance;
+        } else if (font_size_ == 18 && isSmallFontStatusSymbol(cp)) {
+            if (ts.bold) drawSmallFontStatusSymbol(x + 1, y, cp, false);
+            drawSmallFontStatusSymbol(x, y, cp, false);
+            adv = smallFontStatusSymbolAdvance(cp);
         } else {
             auto *meta = findGlyph(cp);
             if (meta) {
@@ -355,6 +445,16 @@ int FontRenderer::drawTextStyled(int x, int y, const char *text, const TextStyle
                     drawGlyph(x, y + 1, meta, false);
                 drawGlyph(x, y, meta, false);
                 adv = meta->advance;
+            } else if (font_size_ == 18) {
+                uint32_t fb = smallFontFallbackCodepoint(cp);
+                auto *fm = fb ? findGlyph(fb) : nullptr;
+                if (fm) {
+                    if (ts.bold) drawGlyph(x + 1, y, fm, false);
+                    drawGlyph(x, y, fm, false);
+                    adv = fm->advance;
+                } else {
+                    adv = line_height_ / 2;
+                }
             } else {
                 adv = line_height_ / 2;
             }

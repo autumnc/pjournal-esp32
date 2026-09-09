@@ -2066,10 +2066,10 @@ static const SymbolGlyph g_symbolGlyphs_16[] = {
 };
 
 inline const SymbolGlyph *getSymbolGlyph(uint32_t cp, int font_size) {
-    // 16pt table has its own layout (markdown symbols only); it must not serve
+    // 18pt table has its own layout (markdown symbols); it must not serve
     // the common table[N] cases below, and the early-return guard on `table`
     // would otherwise make it unreachable.
-    if (font_size == 16) {
+    if (font_size == 18) {
         switch (cp) {
             case 0x2022: return &g_symbolGlyphs_16[0];
             case 0x2610: return &g_symbolGlyphs_16[1];

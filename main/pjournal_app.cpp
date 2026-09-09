@@ -7,6 +7,7 @@
 #include "markdown_render.h"
 #include "main_menu_icons.h"
 #include "screen_editor.h"
+#include "vertical_layout.h"
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
@@ -102,6 +103,10 @@ static const std::vector<MdLineInfo>& getHistoryMdInfo(bool mdOn) {
         g_history.mdCachedOn = mdOn;
     }
     return g_history.cachedMdInfo;
+}
+
+static bool editorVertical() {
+    return g_settings.editorOrientation() == "vertical";
 }
 
 static void loadHistoryPreviewText(const std::string &content) {
@@ -371,13 +376,13 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
         ui_draw_text_centered(y, selectedText, false, true);
         y += rowH;
     } else {
-        // 月视图动作标签固定 22pt(与日历一致);6 行日历等放不下时退 16pt
+        // 月视图动作标签固定 22pt(与日历一致);6 行日历等放不下时退 18pt
         int statusTop = SCREEN_H - g_font.lineHeight() - 2;  // 用户字号下的状态栏上沿
         int prevSize = g_font.fontSize();
         g_font.setSize(22);
         int labelY = iconTop + 48 + 2 + g_font.ascent();
         if (labelY + g_font.descent() > statusTop - 2) {
-            g_font.setSize(16);
+            g_font.setSize(18);
             labelY = iconTop + 48 + 2 + g_font.ascent();
             if (labelY + g_font.descent() > statusTop - 2) labelY = -1;
         }
@@ -503,8 +508,6 @@ void screen_viewer_init(const std::string &filename) {
 
 AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     if (key == 'q' || key == 'Q' || key == 0x1B) { ctx.nextState = APP_BROWSER; return APP_BROWSER; }
-    if (key == 'j' || key == KEY_DOWN) g_viewer.scroll++;
-    if (key == 'k' || key == KEY_UP) { if (g_viewer.scroll > 0) g_viewer.scroll--; }
     if (key == 'e' || key == 'E') {
         ctx.prevState = APP_VIEWER;
         ctx.selectedEntry = g_viewer.filename;
@@ -537,12 +540,50 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
         }
     }
 
-    const auto& vrows = getViewerVrows();
-
     const int headerY = FONT_H;
     const int sepY = headerY + g_font.descent();
     const int contentY = sepY + 26;
     const int contentMaxY = STATUS_Y;
+
+    if (editorVertical()) {
+        // 竖排首字墨迹顶边对齐横排首行墨迹顶边(基线-上伸部),顶部不留整行空白
+        int vTop = contentY - g_font.ascent();
+        VerticalLayoutMetrics vm = verticalMetrics(6, vTop, SCREEN_W - 12, contentMaxY - vTop);
+        bool mdOn = g_settings.markdownRender();
+        mdSetRenderEnabled(mdOn);
+        const auto &mdInfo = getViewerMdInfo(mdOn);
+        auto data = buildVerticalData(g_viewer.lines, vm.rows, nullptr, &mdInfo);
+        int maxScroll = (int)data.cols.size() - vm.cols;
+        if (maxScroll < 0) maxScroll = 0;
+        if (key == 'j' || key == KEY_DOWN || key == KEY_LEFT) g_viewer.scroll++;
+        if (key == 'k' || key == KEY_UP || key == KEY_RIGHT) {
+            if (g_viewer.scroll > 0) g_viewer.scroll--;
+        }
+        if (key == KEY_PAGE_DOWN) g_viewer.scroll += vm.cols;
+        if (key == KEY_PAGE_UP) g_viewer.scroll -= vm.cols;
+        if (g_viewer.scroll < 0) g_viewer.scroll = 0;
+        if (g_viewer.scroll > maxScroll) g_viewer.scroll = maxScroll;
+
+        ui_clear();
+        std::string header = g_viewer.dateStr.empty() ? g_viewer.filename : g_viewer.dateStr;
+        ui_draw_text(4, headerY, header.c_str(), true);
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
+        drawVerticalCols(g_viewer.lines, data, g_viewer.scroll, vm);
+        if (g_viewer.scroll > 0 && maxScroll > 0) {
+            char pctStr[16];
+            snprintf(pctStr, sizeof(pctStr), "%d%%", (g_viewer.scroll * 100) / maxScroll);
+            int pctW = g_font.textWidth(pctStr);
+            ui_draw_text(SCREEN_W - pctW - 4, headerY, pctStr);
+        }
+        ui_draw_status("竖排阅读 e编辑 h历史", "");
+        ui_commit();
+        return APP_VIEWER;
+    }
+
+    const auto& vrows = getViewerVrows();
+    if (key == 'j' || key == KEY_DOWN) g_viewer.scroll++;
+    if (key == 'k' || key == KEY_UP) { if (g_viewer.scroll > 0) g_viewer.scroll--; }
     int visible = (contentMaxY - contentY + LINE_SPACING - 1) / LINE_SPACING;
     if (visible < 1) visible = 1;
     int maxScroll = (int)vrows.size() - visible;
@@ -655,11 +696,35 @@ static void drawHistoryList() {
 }
 
 static void drawHistoryPreview() {
-    const auto& vrows = getHistoryVrows();
     const int headerY = FONT_H;
     const int sepY = headerY + g_font.descent();
     const int contentY = sepY + 26;
     const int contentMaxY = STATUS_Y;
+    if (editorVertical()) {
+        // 竖排首字墨迹顶边对齐横排首行墨迹顶边(基线-上伸部),顶部不留整行空白
+        int vTop = contentY - g_font.ascent();
+        VerticalLayoutMetrics vm = verticalMetrics(6, vTop, SCREEN_W - 12, contentMaxY - vTop);
+        bool mdOn = g_settings.markdownRender();
+        mdSetRenderEnabled(mdOn);
+        const auto &mdInfo = getHistoryMdInfo(mdOn);
+        auto data = buildVerticalData(g_history.lines, vm.rows, nullptr, &mdInfo);
+        int maxScroll = (int)data.cols.size() - vm.cols;
+        if (maxScroll < 0) maxScroll = 0;
+        if (g_history.previewScroll > maxScroll) g_history.previewScroll = maxScroll;
+
+        ui_clear();
+        std::string header = "历史";
+        if (!g_history.versions.empty()) header = historyTimeLabel(g_history.versions[g_history.selection].filename);
+        ui_draw_text(4, headerY, header.c_str(), true);
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
+        drawVerticalCols(g_history.lines, data, g_history.previewScroll, vm);
+        ui_draw_status("竖排历史 r恢复 d删除 q返回", "");
+        ui_commit();
+        return;
+    }
+
+    const auto& vrows = getHistoryVrows();
     int visible = (contentMaxY - contentY + LINE_SPACING - 1) / LINE_SPACING;
     if (visible < 1) visible = 1;
     int maxScroll = (int)vrows.size() - visible;
@@ -748,18 +813,37 @@ AppState screen_history_handle(int key, ScreenContext &ctx) {
     }
 
     if (g_history.preview) {
-        const auto& vrows = getHistoryVrows();
-        int visible = (STATUS_Y - (FONT_H + g_font.descent() + 26) + LINE_SPACING - 1) / LINE_SPACING;
-        if (visible < 1) visible = 1;
-        int maxScroll = (int)vrows.size() - visible;
+        int visible = 1;
+        int maxScroll = 0;
+        if (editorVertical()) {
+            // 与 drawHistoryPreview 竖排参数保持一致(墨迹顶边对齐横排)
+            int contentY = FONT_H + g_font.descent() + 26;
+            int vTop = contentY - g_font.ascent();
+            VerticalLayoutMetrics vm = verticalMetrics(6, vTop, SCREEN_W - 12, STATUS_Y - vTop);
+            bool mdOn = g_settings.markdownRender();
+            mdSetRenderEnabled(mdOn);
+            auto data = buildVerticalData(g_history.lines, vm.rows, nullptr,
+                                          &getHistoryMdInfo(mdOn));
+            visible = vm.cols;
+            maxScroll = (int)data.cols.size() - visible;
+        } else {
+            const auto& vrows = getHistoryVrows();
+            visible = (STATUS_Y - (FONT_H + g_font.descent() + 26) + LINE_SPACING - 1) / LINE_SPACING;
+            if (visible < 1) visible = 1;
+            maxScroll = (int)vrows.size() - visible;
+        }
         if (maxScroll < 0) maxScroll = 0;
         if (key == 'q' || key == 'Q' || key == 0x1B) {
             g_history.preview = false;
             drawHistoryList();
             return APP_HISTORY;
         }
-        if (key == 'j' || key == KEY_DOWN) { if (g_history.previewScroll < maxScroll) g_history.previewScroll++; }
-        if (key == 'k' || key == KEY_UP) { if (g_history.previewScroll > 0) g_history.previewScroll--; }
+        if (key == 'j' || key == KEY_DOWN || (editorVertical() && key == KEY_LEFT)) {
+            if (g_history.previewScroll < maxScroll) g_history.previewScroll++;
+        }
+        if (key == 'k' || key == KEY_UP || (editorVertical() && key == KEY_RIGHT)) {
+            if (g_history.previewScroll > 0) g_history.previewScroll--;
+        }
         if (key == KEY_PAGE_DOWN) { g_history.previewScroll += visible; if (g_history.previewScroll > maxScroll) g_history.previewScroll = maxScroll; }
         if (key == KEY_PAGE_UP) { g_history.previewScroll -= visible; if (g_history.previewScroll < 0) g_history.previewScroll = 0; }
         if (key == 'r' || key == 'R') g_history.confirmRestore = true;

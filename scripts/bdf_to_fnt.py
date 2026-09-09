@@ -117,10 +117,12 @@ def parse_bdf(bdf_path):
 
     return glyphs, props
 
-def convert_bdf_to_fnt(bdf_path, output_path):
+def convert_bdf_to_fnt(bdf_path, output_path, metric_override=None):
     glyphs, props = parse_bdf(bdf_path)
     ascent = props.get('ascent', 22)
     descent = props.get('descent', 6)
+    if metric_override:
+        ascent, descent = metric_override
     line_height = ascent + descent
 
     # Separate ASCII and CJK
@@ -271,4 +273,7 @@ if __name__ == '__main__':
     import sys
     bdf_path = sys.argv[1] if len(sys.argv) > 1 else "/media/sf_share/Terminus/TerminusSongMedium-28.bdf"
     output_path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "main", "terminus28.fnt")
-    convert_bdf_to_fnt(bdf_path, os.path.abspath(output_path))
+    metric_override = None
+    if len(sys.argv) > 4:
+        metric_override = (int(sys.argv[3]), int(sys.argv[4]))
+    convert_bdf_to_fnt(bdf_path, os.path.abspath(output_path), metric_override)

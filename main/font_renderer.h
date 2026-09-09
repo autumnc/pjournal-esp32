@@ -5,7 +5,7 @@
 
 #include "symbol_glyphs.h"
 
-// Font renderer: reads from embedded terminus28.fnt / terminus22.fnt / terminus16.fnt blobs
+// Font renderer: reads from embedded terminus22.fnt / wenquanyi16.fnt blobs
 struct TextStyle {
     bool bold = false;      // synthetic bold: glyph drawn twice, 1px offset
     bool underline = false; // line below the whole segment
@@ -74,14 +74,13 @@ private:
     bool parseBlob(const uint8_t *blob, size_t sz);
 
     const uint8_t *blob_ = nullptr;
-    const uint8_t *blob_16_ = nullptr;
+    const uint8_t *blob_small_ = nullptr;  // 小字号(18pt FontLibrary18)
     const uint8_t *blob_22_ = nullptr;
-    const uint8_t *blob_28_ = nullptr;
     bool loaded_ = false;
-    int font_size_ = 28;
-    int line_height_ = 28;
-    int ascent_ = 22;
-    int descent_ = 6;
+    int font_size_ = 22;
+    int line_height_ = 22;
+    int ascent_ = 17;
+    int descent_ = 5;
     int glyph_count_ = 0;
 
     // Table pointers

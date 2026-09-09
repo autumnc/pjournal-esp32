@@ -1,6 +1,7 @@
 #include "IME.h"
 #include "seg_table.h"
 #include "trad_table.h"
+#include "kaomoji_table.h"
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -38,19 +39,6 @@ static const char *BUILTIN_ENGLISH_WORDS[] = {
     "search", "setting", "storage", "sync", "system", "task", "today",
     "token", "update", "upload", "user", "version", "voice", "wifi", "word",
     "work", "write"
-};
-
-static const char *V_PUNCT_CANDIDATES[] = {
-    "，", "。", "、", "？", "！", "：", "；", "…", "……", "—", "——", "·",
-    "“", "”", "“”", "‘", "’", "‘’", "「", "」", "「」", "『", "』", "『』",
-    "（", "）", "（）", "【", "】", "【】", "［", "］", "［］", "〔", "〕", "〔〕",
-    "｛", "｝", "｛｝", "《", "》", "《》", "〈", "〉", "〈〉", "〖", "〗", "〖〗",
-    "〝", "〞", "〝〞",
-    "．", "／", "＼", "～", "｜", "＃", "＠", "＆", "％", "＊", "＋", "－", "＝",
-    "＿", "＾", "＄", "＜", "＞",
-    ",", ".", "?", "!", ":", ";", "'", "\"", "(", ")", "[", "]", "{", "}",
-    "<", ">", "/", "\\", "-", "_", "+", "=", "*", "#", "@", "&", "%", "$",
-    "^", "~", "`", "|"
 };
 
 static void appendUtf8(uint32_t cp, std::string &out) {
@@ -1358,15 +1346,55 @@ void IME::lookupEnglishMode() {
     buildPage();
 }
 
+// v模式颜文字搜索匹配: 编码按音节表贪心切分, 查询串逐音节消费 1..音节长 个
+// 字符(全拼前缀或声母缩写均可, 如 k/ka/kai/kx 都命中 kaixin)。音节表按长度
+// 降序生成, 首个 strncmp 命中即最长音节。
+static bool vKaomojiMatch(const char *q, size_t qlen, const char *code) {
+    size_t qi = 0, ci = 0;
+    while (code[ci]) {
+        if (qi >= qlen) return true;
+        size_t slen = 0;
+        for (unsigned s = 0; s < K_KAOMOJI_SYLL_COUNT; s++) {
+            size_t l = strlen(K_KAOMOJI_SYLLS[s]);
+            if (strncmp(code + ci, K_KAOMOJI_SYLLS[s], l) == 0) { slen = l; break; }
+        }
+        if (slen == 0) slen = 1;
+        size_t k = 0;
+        while (k < slen && qi + k < qlen && code[ci + k] == q[qi + k]) k++;
+        if (k == 0) return false;
+        qi += k;
+        ci += slen;
+    }
+    return qi >= qlen;
+}
+
+void IME::lookupKaomoji(const std::string &query) {
+    if (query.empty()) return;
+    for (unsigned i = 0; i < K_KAOMOJI_COUNT && _all.size() < MAX_CANDIDATES; i++) {
+        const char *code = K_KAOMOJI_TABLE[i].code;
+        if (code[0] == '\0' || code[0] != query[0]) continue;  // 首字符过滤+跳过常用块
+        if (!vKaomojiMatch(query.data(), query.size(), code)) continue;
+        const char *face = K_KAOMOJI_TABLE[i].face;
+        bool dup = false;
+        for (auto &e : _all) if (e == face) { dup = true; break; }
+        if (!dup) {
+            _all.push_back(face);
+            _candLen.push_back((int)_code.length());
+        }
+    }
+}
+
 void IME::lookupVMode() {
     _all.clear();
     _candLen.clear();
     _pageStart = 0;
     _curPage = 0;
+    _vSel = 0;
     std::string body = _code.length() > 1 ? _code.substr(1) : "";
     if (body.empty()) {
-        for (auto p : V_PUNCT_CANDIDATES) {
-            _all.push_back(p);
+        // 裸 v: 常用文字表情(原中文标点候选改由 v/bd/ 搜索)
+        for (unsigned i = 0; i < K_KAOMOJI_HOT && i < K_KAOMOJI_COUNT; i++) {
+            _all.push_back(K_KAOMOJI_TABLE[i].face);
             _candLen.push_back(1);
         }
         buildPage();
@@ -1384,7 +1412,7 @@ void IME::lookupVMode() {
         return;
     }
 
-    if (body.length() > 1 && body[0] == '/') {
+    if (body[0] == '/') {
         std::string num = body.substr(1);
         bool allDigits = !num.empty();
         for (char c : num) if (c < '0' || c > '9') { allDigits = false; break; }
@@ -1398,6 +1426,20 @@ void IME::lookupVMode() {
             if (n >= 1 && n <= 99) {
                 _all.push_back(romanNumber((int)n));
                 _candLen.push_back((int)_code.length());
+            }
+        } else {
+            // v/编码(闭合 v/编码/ 可数字键直选): 按拼音/声母前缀搜文字表情与标点。
+            // 纯字母才进搜索; 数字/混合编码无候选。
+            std::string q = num;
+            if (!q.empty() && q.back() == '/') q.pop_back();
+            bool allAlpha = !q.empty();
+            for (char c : q) {
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) { allAlpha = false; break; }
+            }
+            if (allAlpha) {
+                std::string lq = q;
+                for (char &c : lq) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                lookupKaomoji(lq);
             }
         }
         buildPage();
@@ -1916,9 +1958,18 @@ bool IME::handleKey(int key, std::string &out) {
             reset();
             return true;
         }
-        // 闭合命令(v/t/ v/d/ v/w/):数字键直选候选,先于输入分支拦截
-        bool closedCmd = _code == "v/t/" || _code == "v/d/" || _code == "v/w/";
-        if (closedCmd && key >= '1' && key <= '9') { commit(key - '1', out); return true; }
+        // 数字键直选候选: v/字母编码(含闭合 v/编码/ 与命令 v/t/ v/d/ v/w/)。
+        // 裸v与数字/日期编码不拦截, 数字键继续进编码(如 v/5、v2026-9-7)。
+        bool vDigitSel = false;
+        if (!_page.empty() && _code.length() > 2 && _code[1] == '/') {
+            std::string q = _code.substr(2);
+            if (!q.empty() && q.back() == '/') q.pop_back();
+            vDigitSel = !q.empty();
+            for (char c : q) {
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) { vDigitSel = false; break; }
+            }
+        }
+        if (vDigitSel && key >= '1' && key <= '9') { commit(key - '1', out); return true; }
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
             (key >= '0' && key <= '9') || key == '.' || key == '-' ||
             key == '/' || key == '!') {

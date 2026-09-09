@@ -23,10 +23,6 @@ struct MdSeg {
 
 bool s_mdEnabled = true;  // cleared when "Markdown渲染" setting is off
 
-// U+F09DA 折叠标志(NF-Mono 圆角方框内含 >),折叠标题行时紧跟级别图标之后,
-// 与级别图标同几何(advance 2 格),合起来前缀占 4 格。
-static const char *kFoldMarker = "\xF3\xB0\xA7\x9A";
-
 bool cursorInMarker(int cursorBytePos, int start, int end) {
     return cursorBytePos >= start && cursorBytePos < end;
 }
@@ -505,6 +501,72 @@ int mdContinuationPrefix(const std::string &line, const MdLineInfo &info, int cu
 
 }  // namespace
 
+// U+F09DA 折叠标志(NF-Mono 圆角方框内含 >),折叠标题行时紧跟级别图标之后,
+// 与级别图标同几何(advance 2 格),合起来前缀占 4 格。编辑器竖排也用它。
+const char *kFoldMarker = "\xF3\xB0\xA7\x9A";
+
+// 竖排单元格分解。块级/行内标记替换为符号格(标题图标/列表符号/任务框)或整段
+// 隐藏(**、~~、`、>、链接括号不留空格),因此竖排的光标映射按格而非按字节。
+std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &info,
+                                     bool folded) {
+    std::vector<MdVCell> cells;
+    int len = (int)line.size();
+    if (len == 0) return cells;
+    auto nextChar = [](const std::string &s, int p) {
+        p++;
+        while (p < (int)s.size() && ((unsigned char)s[p] & 0xC0) == 0x80) p++;
+        return p;
+    };
+    auto pushRaw = [&](int from, int to, const TextStyle &ts) {
+        for (int p = from; p < to;) {
+            int n = nextChar(line, p);
+            cells.push_back({p, n, line.substr(p, n - p), ts});
+            p = n;
+        }
+    };
+
+    if (info.hr) {  // 水平线/围栏行:原样字符竖排成虚线列
+        pushRaw(0, len, TextStyle{});
+        return cells;
+    }
+    if (info.inCodeBlock) {
+        TextStyle st;
+        st.invert = true;
+        pushRaw(0, len, st);  // 围栏内整列反白
+        return cells;
+    }
+
+    std::vector<MdSeg> segs;
+    mdParseLine(line, info, segs, -1, folded);
+    for (auto &seg : segs) {
+        if (seg.drawText.empty()) continue;  // 隐藏的成对标记(**、`、~~、==)
+        std::string raw = line.substr(seg.start, seg.end - seg.start);
+        if (seg.drawText == raw) {
+            pushRaw(seg.start, seg.end, seg.ts);
+            continue;
+        }
+        bool allSpace = true;
+        for (char c : seg.drawText)
+            if (c != ' ') { allSpace = false; break; }
+        if (allSpace) {
+            // 引用行水平画左侧竖线,竖排改为一个竖线格(︱)标记引用
+            if (info.quote && seg.start == 0 && seg.end == 2)
+                cells.push_back({0, 2, "\xEF\xB8\xB1", TextStyle{}});
+            continue;  // 链接括号/引用线等占位空白不留格
+        }
+        // 替换型标记(标题图标/折叠标志/列表符号):尾部空格去掉,前导空格
+        // (嵌套列表缩进/序号右移)保留为空白格,其余逐字符成格
+        int s = 0, e = (int)seg.drawText.size();
+        while (e > s && seg.drawText[e - 1] == ' ') e--;
+        for (int p = s; p < e;) {
+            int n = nextChar(seg.drawText, p);
+            cells.push_back({seg.start, seg.end, seg.drawText.substr(p, n - p), seg.ts});
+            p = n;
+        }
+    }
+    return cells;
+}
+
 void mdSetRenderEnabled(bool on) { s_mdEnabled = on; }
 
 std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines) {
@@ -554,6 +616,30 @@ std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines) {
         if (lm.ok) { info.task = lm.task; info.list = true; }
     }
     return out;
+}
+
+std::vector<char> mdFoldHiddenLines(const std::vector<std::string> &lines,
+                                    const std::vector<MdLineInfo> *mdInfo,
+                                    const std::set<int> *foldedHeadings) {
+    std::vector<char> hidden(lines.size(), 0);
+    if (!mdInfo || !foldedHeadings || foldedHeadings->empty() ||
+        mdInfo->size() < lines.size())
+        return hidden;
+    int hideLevel = 0;
+    for (size_t li = 0; li < lines.size(); li++) {
+        int lvl = (*mdInfo)[li].headingLevel;
+        bool inCode = (*mdInfo)[li].inCodeBlock;
+        bool isH = lvl > 0 && !inCode;
+        if (hideLevel != 0) {
+            // 折叠区内部:只有同级或更高级的标题能结束折叠
+            if (!(isH && lvl <= hideLevel)) {
+                hidden[li] = 1;
+                continue;
+            }
+        }
+        if (isH) hideLevel = foldedHeadings->count((int)li) ? lvl : 0;
+    }
+    return hidden;
 }
 
 int mdVisualX(const std::string &line, const MdLineInfo &info, int bytePos,

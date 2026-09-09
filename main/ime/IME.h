@@ -183,6 +183,7 @@ private:
     void lookup();
     void lookupSegmented();  // 单引号分词编码的查词路径
     void lookupVMode();
+    void lookupKaomoji(const std::string &query);  // v/编码 拼音/声母搜索文字表情
     void lookupEnglishMode();
     void loadEnglishDict();
     void appendSingleCharCandidates(const std::string &prefix, int candLen);  // 主词典单字前缀候选

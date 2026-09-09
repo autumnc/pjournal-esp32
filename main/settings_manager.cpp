@@ -130,9 +130,10 @@ bool SettingsManager::recoveryDraft() { return get("recovery_draft") != "0"; }  
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");
-    if (v == "16") return 16;
+    // 小字号槽位已从 16pt(wenquanyi) 换为 18pt(FontLibrary18), 存量设置迁移
+    if (v == "18" || v == "16") return 18;
     if (v == "22") return 22;
-    return 28;
+    return 22;
 }
 
 std::string SettingsManager::appMode() { return getString("app_mode", "journal"); }
@@ -140,6 +141,7 @@ std::string SettingsManager::appMode() { return getString("app_mode", "journal")
 std::string SettingsManager::homeView() { return getString("home_view", "week"); }
 
 std::string SettingsManager::inputMode() { return getString("input_mode", "normal"); }
+std::string SettingsManager::editorOrientation() { return getString("editor_orientation", "horizontal"); }
 
 std::string SettingsManager::clickChineseMode() { return getString("click_chinese", "key"); }
 

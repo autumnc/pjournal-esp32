@@ -12,5 +12,8 @@ build/
 !/main/terminus22.fnt
 !/main/terminus20.fnt
 !/main/terminus16.fnt
+!/main/fontlibrary18.fnt
+*.pre-fill
+*.pre-fill[0-9]*
 managed_components/
 __pycache__/
