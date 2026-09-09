@@ -31,6 +31,13 @@ bool cursorInConstruct(int cursorBytePos, int start, int end) {
     return cursorBytePos >= start && cursorBytePos <= end;
 }
 
+bool shouldRevealInline(int cursorBytePos, int openStart, int openEnd,
+                        int closeStart, int closeEnd, bool verticalMode) {
+    if (!verticalMode) return cursorInConstruct(cursorBytePos, openStart, closeEnd);
+    return cursorInMarker(cursorBytePos, openStart, openEnd) ||
+           cursorInMarker(cursorBytePos, closeStart, closeEnd);
+}
+
 // Spaces whose width matches the raw byte range [from,to). Keeps the width
 // invariant even if the raw range contains non-ASCII bytes.
 std::string spacesForWidth(const std::string &line, int from, int to) {
@@ -313,7 +320,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
-            if (cursorInConstruct(cursorBytePos, m, cclose + n)) {
+            if (shouldRevealInline(cursorBytePos, m, m + n, cclose, cclose + n, verticalMode)) {
                 segs.push_back({m, cclose + n, base, line.substr(m, cclose + n - m)});
                 plainStart = cclose + n;
                 continue;
@@ -337,7 +344,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
-            if (cursorInConstruct(cursorBytePos, m, cclose + 2)) {
+            if (shouldRevealInline(cursorBytePos, m, m + 2, cclose, cclose + 2, verticalMode)) {
                 segs.push_back({m, cclose + 2, base, line.substr(m, cclose + 2 - m)});
                 plainStart = cclose + 2;
                 continue;
@@ -359,7 +366,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + n;
                 continue;
             }
-            if (cursorInConstruct(cursorBytePos, m, cclose + 3)) {
+            if (shouldRevealInline(cursorBytePos, m, m + 3, cclose, cclose + 3, verticalMode)) {
                 segs.push_back({m, cclose + 3, base, line.substr(m, cclose + 3 - m)});
                 plainStart = cclose + 3;
                 continue;
@@ -380,7 +387,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
-            if (cursorInConstruct(cursorBytePos, m, cclose + 1)) {
+            if (shouldRevealInline(cursorBytePos, m, m + 1, cclose, cclose + 1, verticalMode)) {
                 segs.push_back({m, cclose + 1, base, line.substr(m, cclose + 1 - m)});
                 plainStart = cclose + 1;
                 continue;
@@ -400,7 +407,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
-            if (cursorInConstruct(cursorBytePos, m, cclose + 2)) {
+            if (shouldRevealInline(cursorBytePos, m, m + 2, cclose, cclose + 2, verticalMode)) {
                 segs.push_back({m, cclose + 2, base, line.substr(m, cclose + 2 - m)});
                 plainStart = cclose + 2;
                 continue;
@@ -420,7 +427,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
                 plainStart = m + 1;
                 continue;
             }
-            if (cursorInConstruct(cursorBytePos, m, cclose + 2)) {
+            if (shouldRevealInline(cursorBytePos, m, m + 2, cclose, cclose + 2, verticalMode)) {
                 segs.push_back({m, cclose + 2, base, line.substr(m, cclose + 2 - m)});
                 plainStart = cclose + 2;
                 continue;
@@ -438,7 +445,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             if (p >= 0 && p < len) {
                 int cp = (int)line.find(')', p + 2);
                 if (cp >= 0 && cp < len) {
-                    if (cursorInConstruct(cursorBytePos, m, cp + 1)) {
+                    if (!verticalMode && cursorInConstruct(cursorBytePos, m, cp + 1)) {
                         segs.push_back({m, cp + 1, base, line.substr(m, cp + 1 - m)});
                         plainStart = cp + 1;
                         continue;
