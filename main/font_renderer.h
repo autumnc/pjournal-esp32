@@ -9,9 +9,11 @@
 struct TextStyle {
     bool bold = false;      // synthetic bold: glyph drawn twice, 1px offset
     bool underline = false; // line below the whole segment
+    bool italic = false;    // vertical-only italic marker decoration
     bool strike = false;    // line through vertical center
     bool invert = false;    // reverse video: dark box + light glyphs
     bool emph = false;      // emphasis dot (着重号) under each character
+    bool bookTitle = false; // vertical-only book title wave decoration
 };
 
 class FontRenderer {

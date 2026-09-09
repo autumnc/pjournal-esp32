@@ -65,14 +65,15 @@ extern const char *kFoldMarker;
 // replacement glyph cells (heading icon, bullet, task box) or are dropped
 // entirely — hidden marker bytes (** , ~~ , ` , >_ , link brackets) occupy no
 // cell, so cursor mapping is cell-based (see vertical_layout.h). Inline style
-// flags are kept per visible cell and rendered by vertical_layout.
+// flags are kept per visible cell and rendered by vertical_layout. When
+// cursorBytePos is inside an inline construct, that construct is emitted raw.
 struct MdVCell {
     int start = 0, end = 0;  // byte range in the raw line
     std::string glyph;       // text drawn in this cell (usually one char)
     TextStyle ts;            // bold/underline/strike/invert/emph for this cell
 };
 std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &info,
-                                     bool folded = false);
+                                     bool folded = false, int cursorBytePos = -1);
 
 // Draw the [start, end) byte slice of `line` (a vrow) at (x, y) with markdown
 // styles. y is the text baseline. Byte offsets match buildVrows output.

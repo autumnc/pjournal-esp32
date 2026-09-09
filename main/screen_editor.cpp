@@ -1235,7 +1235,8 @@ static void drawEditor() {
         auto hidden = mdFoldHiddenLines(g_editor.lines, mdOn ? &mdInfo : nullptr,
                                         &g_editor.foldedHeadings);
         auto data = buildVerticalData(g_editor.lines, vm.rows, &hidden,
-                                      mdOn ? &mdInfo : nullptr, &g_editor.foldedHeadings);
+                                      mdOn ? &mdInfo : nullptr, &g_editor.foldedHeadings,
+                                      g_editor.cy, g_editor.cx);
         int cursorCol = verticalFindCol(data, g_editor.lines, g_editor.cy, g_editor.cx);
         if (editorTypewriter() && cursorCol >= 0) {
             g_editor.scroll = cursorCol - vm.cols / 2;

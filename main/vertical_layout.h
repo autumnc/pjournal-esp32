@@ -52,7 +52,8 @@ VerticalLayoutMetrics verticalMetrics(int x, int y, int w, int h);
 VerticalData buildVerticalData(const std::vector<std::string> &lines, int rowsPerCol,
                                const std::vector<char> *hiddenLines,
                                const std::vector<MdLineInfo> *mdInfo = nullptr,
-                               const std::set<int> *foldedHeadings = nullptr);
+                               const std::set<int> *foldedHeadings = nullptr,
+                               int cursorLineIdx = -1, int cursorBytePos = -1);
 
 // bytePos 落在行内第几个格之前/所在格(全局格索引)。隐藏字节映射到其后
 // 第一个可见格;行尾映射到格总数。

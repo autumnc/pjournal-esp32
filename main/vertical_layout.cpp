@@ -109,18 +109,10 @@ static std::string verticalGlyphOrFallback(uint32_t cp, const char *fallback) {
 static void normalizeVerticalQuoteCells(std::vector<VerticalCell> &cells) {
     bool doubleOpen = true;
     bool singleOpen = true;
-    bool inBookTitle = false;
     std::vector<VerticalCell> out;
     out.reserve(cells.size());
     for (int i = 0; i < (int)cells.size(); i++) {
         auto &c = cells[i];
-        bool bookOpen = cellIsGlyph(c, "\xE3\x80\x8A") || cellIsGlyph(c, "\xE3\x80\x88");
-        bool bookClose = cellIsGlyph(c, "\xE3\x80\x8B") || cellIsGlyph(c, "\xE3\x80\x89");
-        if (bookClose) inBookTitle = false;
-        if (bookOpen || bookClose) {
-            if (bookOpen) inBookTitle = true;
-            continue;
-        }
         if (cellIsGlyph(c, "\"") || cellIsGlyph(c, "\xEF\xBC\x82")) {  // " / ＂
             c.glyph = verticalGlyphOrFallback(doubleOpen ? 0xFE41 : 0xFE42, c.glyph.c_str());
             doubleOpen = !doubleOpen;
@@ -131,7 +123,6 @@ static void normalizeVerticalQuoteCells(std::vector<VerticalCell> &cells) {
             c.glyph = verticalGlyphOrFallback(singleOpen ? 0xFE43 : 0xFE44, c.glyph.c_str());
             singleOpen = !singleOpen;
         }
-        if (inBookTitle) c.bookTitle = true;
         out.push_back(c);
     }
     cells.swap(out);
@@ -199,7 +190,8 @@ VerticalLayoutMetrics verticalMetrics(int x, int y, int w, int h) {
 VerticalData buildVerticalData(const std::vector<std::string> &lines, int rowsPerCol,
                                const std::vector<char> *hiddenLines,
                                const std::vector<MdLineInfo> *mdInfo,
-                               const std::set<int> *foldedHeadings) {
+                               const std::set<int> *foldedHeadings,
+                               int cursorLineIdx, int cursorBytePos) {
     VerticalData data;
     data.cells.resize(lines.size());
     rowsPerCol = std::max(1, rowsPerCol);
@@ -209,8 +201,9 @@ VerticalData buildVerticalData(const std::vector<std::string> &lines, int rowsPe
         auto &cs = data.cells[li];
         if (mdInfo && li < (int)mdInfo->size()) {
             bool folded = foldedHeadings && foldedHeadings->count(li) > 0;
-            for (const auto &vc : mdVerticalCells(line, (*mdInfo)[li], folded))
-                cs.push_back({vc.start, vc.end, vc.glyph, vc.ts, false});
+            int mdCursor = li == cursorLineIdx ? cursorBytePos : -1;
+            for (const auto &vc : mdVerticalCells(line, (*mdInfo)[li], folded, mdCursor))
+                cs.push_back({vc.start, vc.end, vc.glyph, vc.ts, vc.ts.bookTitle});
         } else {
             for (int p = 0; p < (int)line.size();) {
                 int n = nextUtf8Byte(line, p);
@@ -271,9 +264,11 @@ int verticalRowToByte(const std::vector<VerticalCell> &cells, int colStart, int 
 static void drawOneVerticalChar(int x, int y, const std::string &s, const TextStyle &ts) {
     TextStyle glyphStyle = ts;
     glyphStyle.underline = false;
+    glyphStyle.italic = false;
     glyphStyle.strike = false;
     glyphStyle.emph = false;
     glyphStyle.invert = false;
+    glyphStyle.bookTitle = false;
 
     u8g2_SetDrawColor(g_u8g2, 0);
     if (ts.invert) {
@@ -299,20 +294,20 @@ static void drawVerticalWave(int x, int y, int h) {
 }
 
 static void drawVerticalDecorationRun(int x, const VerticalLayoutMetrics &m,
-                                      int rowStart, int rowEnd, bool underline,
+                                      int rowStart, int rowEnd, bool italic, bool underline,
                                       bool strike, bool emph, bool bookTitle) {
     if (rowStart >= rowEnd) return;
     int y0 = m.y + rowStart * m.rowAdvance + 2;
     int h = (rowEnd - rowStart - 1) * m.rowAdvance + g_font.lineHeight() - 4;
     if (h <= 0) return;
     u8g2_SetDrawColor(g_u8g2, 0);
-    if (underline) u8g2_DrawVLine(g_u8g2, x - 3, y0, h);
+    if (italic || underline) u8g2_DrawVLine(g_u8g2, x - 2, y0, h);
     if (strike) {
         int sx = x + g_font.lineHeight() / 2;
         u8g2_DrawVLine(g_u8g2, sx, y0, h);
         u8g2_DrawVLine(g_u8g2, sx + 1, y0, h);
     }
-    if (bookTitle) drawVerticalWave(x - 7, y0, h);
+    if (bookTitle) drawVerticalWave(x - 4, y0, h);
     if (emph) {
         for (int row = rowStart; row < rowEnd; row++) {
             int cy = m.y + row * m.rowAdvance + g_font.lineHeight() / 2 - 1;
@@ -325,27 +320,29 @@ static void drawVerticalDecorations(int x, const VerticalLayoutMetrics &m,
                                     const std::vector<VerticalCell> &cells,
                                     int start, int end) {
     int runStart = -1;
-    bool ru = false, rs = false, re = false, rb = false;
+    bool ri = false, ru = false, rs = false, re = false, rb = false;
     auto flush = [&](int rowEnd) {
-        if (runStart >= 0) drawVerticalDecorationRun(x, m, runStart, rowEnd, ru, rs, re, rb);
+        if (runStart >= 0) drawVerticalDecorationRun(x, m, runStart, rowEnd, ri, ru, rs, re, rb);
         runStart = -1;
     };
 
     for (int i = start; i < end; i++) {
         const auto &cell = cells[i];
         bool blank = cell.glyph == " ";
+        bool it = cell.ts.italic;
         bool u = cell.ts.underline;
         bool s = cell.ts.strike;
         bool e = cell.ts.emph && !blank;
         bool b = cell.bookTitle && !blank;
         int row = i - start;
-        if (!u && !s && !e && !b) {
+        if (!it && !u && !s && !e && !b) {
             flush(row);
             continue;
         }
-        if (runStart < 0 || u != ru || s != rs || e != re || b != rb) {
+        if (runStart < 0 || it != ri || u != ru || s != rs || e != re || b != rb) {
             flush(row);
             runStart = row;
+            ri = it;
             ru = u;
             rs = s;
             re = e;

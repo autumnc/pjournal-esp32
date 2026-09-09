@@ -64,11 +64,25 @@ void emitPlain(const std::string &line, int from, int to, const TextStyle &base,
 }
 
 // Next inline marker byte, skipping escaped characters. Returns len if none.
-int nextMarker(const std::string &line, int from, int len) {
+bool isBookOpen(const std::string &line, int at) {
+    return at + 3 <= (int)line.size() &&
+           (line.compare(at, 3, "\xE3\x80\x8A") == 0 ||
+            line.compare(at, 3, "\xE3\x80\x88") == 0);  // 《 / 〈
+}
+
+bool isBookClose(const std::string &line, int at) {
+    return at + 3 <= (int)line.size() &&
+           (line.compare(at, 3, "\xE3\x80\x8B") == 0 ||
+            line.compare(at, 3, "\xE3\x80\x89") == 0);  // 》 / 〉
+}
+
+int nextMarker(const std::string &line, int from, int len, bool verticalMode = false) {
     for (int i = from; i < len; i++) {
         char c = line[i];
         if (c == '\\') { i++; continue; }
         if (c == '*' || c == '`' || c == '[' || c == '~' || c == '=') return i;
+        if (verticalMode && c == '_') return i;
+        if (verticalMode && (unsigned char)c == 0xE3 && isBookOpen(line, i)) return i;
     }
     return len;
 }
@@ -202,6 +216,23 @@ int findStars(const std::string &line, int from, int len, int n) {
     return -1;
 }
 
+int findRun(const std::string &line, int from, int len, char marker, int n) {
+    for (int i = from; i <= len - n; i++) {
+        bool ok = true;
+        for (int k = 0; k < n; k++) if (line[i + k] != marker) { ok = false; break; }
+        if (ok) return i;
+    }
+    return -1;
+}
+
+int findBookClose(const std::string &line, int from, int len) {
+    for (int i = from; i <= len - 3; i++) {
+        if (line[i] == '\\') { i++; continue; }
+        if (isBookClose(line, i)) return i;
+    }
+    return -1;
+}
+
 // Marker-aware visual width (px) of line[from,to): paired inline markers are
 // hidden without taking space. Links and escapes stay width-neutral. Mirrors
 // mdParseInline pairing so the cursor/selection match what's drawn.
@@ -261,11 +292,12 @@ static int mdContentWidth(const std::string &line, int from, int to) {
 
 // Scan [from, len) for paired inline markers.
 void mdParseInline(const std::string &line, int from, const TextStyle &base,
-                   std::vector<MdSeg> &segs, int cursorBytePos = -1) {
+                   std::vector<MdSeg> &segs, int cursorBytePos = -1,
+                   bool verticalMode = false) {
     int len = (int)line.size();
     int plainStart = from;
     while (plainStart < len) {
-        int m = nextMarker(line, plainStart, len);
+        int m = nextMarker(line, plainStart, len, verticalMode);
         if (m == len) break;
         if (m > plainStart)
             emitPlain(line, plainStart, m, base, segs);
@@ -289,12 +321,56 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
             TextStyle st = base;
             if (n >= 3) { st.bold = true; st.underline = true; }
             else if (n == 2) st.bold = true;
-            else st.underline = true;  // single * = italic → underline
+            else if (verticalMode) st.italic = true;  // vertical: single * = shifted underline
+            else st.underline = true;
             segs.push_back({m, m + n, base, ""});
             if (cclose > m + n)
                 emitPlain(line, m + n, cclose, st, segs);
             segs.push_back({cclose, cclose + n, base, ""});
             plainStart = cclose + n;
+            continue;
+        }
+        if (verticalMode && c == '_' && m + 1 < len && line[m + 1] == '_') {
+            int cclose = findRun(line, m + 2, len, '_', 2);
+            if (cclose < 0) {
+                segs.push_back({m, m + 1, base, line.substr(m, 1)});
+                plainStart = m + 1;
+                continue;
+            }
+            if (cursorInConstruct(cursorBytePos, m, cclose + 2)) {
+                segs.push_back({m, cclose + 2, base, line.substr(m, cclose + 2 - m)});
+                plainStart = cclose + 2;
+                continue;
+            }
+            TextStyle st = base;
+            st.italic = true;
+            segs.push_back({m, m + 2, base, ""});
+            if (cclose > m + 2)
+                emitPlain(line, m + 2, cclose, st, segs);
+            segs.push_back({cclose, cclose + 2, base, ""});
+            plainStart = cclose + 2;
+            continue;
+        }
+        if (verticalMode && (unsigned char)c == 0xE3 && isBookOpen(line, m)) {
+            int cclose = findBookClose(line, m + 3, len);
+            if (cclose < 0) {
+                int n = std::min(3, len - m);
+                segs.push_back({m, m + n, base, line.substr(m, n)});
+                plainStart = m + n;
+                continue;
+            }
+            if (cursorInConstruct(cursorBytePos, m, cclose + 3)) {
+                segs.push_back({m, cclose + 3, base, line.substr(m, cclose + 3 - m)});
+                plainStart = cclose + 3;
+                continue;
+            }
+            TextStyle st = base;
+            st.bookTitle = true;
+            segs.push_back({m, m + 3, base, ""});
+            if (cclose > m + 3)
+                emitPlain(line, m + 3, cclose, st, segs);
+            segs.push_back({cclose, cclose + 3, base, ""});
+            plainStart = cclose + 3;
             continue;
         }
         if (c == '`') {
@@ -386,7 +462,7 @@ void mdParseInline(const std::string &line, int from, const TextStyle &base,
 }
 
 void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<MdSeg> &segs,
-                 int cursorBytePos = -1, bool folded = false) {
+                 int cursorBytePos = -1, bool folded = false, bool verticalMode = false) {
     int len = (int)line.size();
     if (!s_mdEnabled) {
         segs.push_back({0, len, TextStyle{}, line});
@@ -459,7 +535,7 @@ void mdParseLine(const std::string &line, const MdLineInfo &info, std::vector<Md
         pos = 2;
     }
 
-    mdParseInline(line, pos, base, segs, cursorBytePos);
+    mdParseInline(line, pos, base, segs, cursorBytePos, verticalMode);
 }
 
 std::string sliceDraw(const MdSeg &seg, int s, int e) {
@@ -508,7 +584,7 @@ const char *kFoldMarker = "\xF3\xB0\xA7\x9A";
 // 竖排单元格分解。块级/行内标记替换为符号格(标题图标/列表符号/任务框)或整段
 // 隐藏(**、~~、`、>、链接括号不留空格),因此竖排的光标映射按格而非按字节。
 std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &info,
-                                     bool folded) {
+                                     bool folded, int cursorBytePos) {
     std::vector<MdVCell> cells;
     int len = (int)line.size();
     if (len == 0) return cells;
@@ -537,7 +613,7 @@ std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &
     }
 
     std::vector<MdSeg> segs;
-    mdParseLine(line, info, segs, -1, folded);
+    mdParseLine(line, info, segs, cursorBytePos, folded, true);
     for (auto &seg : segs) {
         if (seg.drawText.empty()) continue;  // 隐藏的成对标记(**、`、~~、==)
         std::string raw = line.substr(seg.start, seg.end - seg.start);
