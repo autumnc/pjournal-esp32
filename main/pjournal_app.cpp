@@ -569,7 +569,12 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
         ui_draw_text(4, headerY, header.c_str(), true);
         u8g2_SetDrawColor(g_u8g2, 0);
         u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
-        drawVerticalCols(g_viewer.lines, data, g_viewer.scroll, vm);
+        VerticalGuideStyle guideStyle = VerticalGuideStyle::Solid;
+        std::string guideStyleKey = g_settings.verticalReferenceLineStyle();
+        if (guideStyleKey == "dash") guideStyle = VerticalGuideStyle::Dash;
+        else if (guideStyleKey == "dot") guideStyle = VerticalGuideStyle::Dot;
+        drawVerticalCols(g_viewer.lines, data, g_viewer.scroll, vm,
+                         g_settings.verticalReferenceLine(), guideStyle);
         if (g_viewer.scroll > 0 && maxScroll > 0) {
             char pctStr[16];
             snprintf(pctStr, sizeof(pctStr), "%d%%", (g_viewer.scroll * 100) / maxScroll);
@@ -718,7 +723,12 @@ static void drawHistoryPreview() {
         ui_draw_text(4, headerY, header.c_str(), true);
         u8g2_SetDrawColor(g_u8g2, 0);
         u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
-        drawVerticalCols(g_history.lines, data, g_history.previewScroll, vm);
+        VerticalGuideStyle guideStyle = VerticalGuideStyle::Solid;
+        std::string guideStyleKey = g_settings.verticalReferenceLineStyle();
+        if (guideStyleKey == "dash") guideStyle = VerticalGuideStyle::Dash;
+        else if (guideStyleKey == "dot") guideStyle = VerticalGuideStyle::Dot;
+        drawVerticalCols(g_history.lines, data, g_history.previewScroll, vm,
+                         g_settings.verticalReferenceLine(), guideStyle);
         ui_draw_status("竖排历史 r恢复 d删除 q返回", "");
         ui_commit();
         return;

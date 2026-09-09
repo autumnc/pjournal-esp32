@@ -1251,7 +1251,12 @@ static void drawEditor() {
         }
 
         if (composing) drawIMEUI(STATUS_Y - 67, true);
-        drawVerticalCols(g_editor.lines, data, g_editor.scroll, vm);
+        VerticalGuideStyle guideStyle = VerticalGuideStyle::Solid;
+        std::string guideStyleKey = g_settings.verticalReferenceLineStyle();
+        if (guideStyleKey == "dash") guideStyle = VerticalGuideStyle::Dash;
+        else if (guideStyleKey == "dot") guideStyle = VerticalGuideStyle::Dot;
+        drawVerticalCols(g_editor.lines, data, g_editor.scroll, vm,
+                         g_settings.verticalReferenceLine(), guideStyle);
         // Markdown 关闭时折叠标题行末补折叠标志;开启时 mdVerticalCells 已含折叠标志格
         if (!mdOn) {
             for (int li : g_editor.foldedHeadings) {

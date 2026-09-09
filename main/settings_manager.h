@@ -33,11 +33,13 @@ public:
     bool firstLineIndent();
     bool versionHistory();
     bool recoveryDraft();
+    bool verticalReferenceLine();
     int fontSize();
     std::string appMode();  // "journal"(个人日记) 或 "quick"(快捷编辑)
     std::string homeView();  // "week"(周视图) 或 "month"(月视图)
     std::string inputMode();  // "normal"(正常) 或 "typewriter"(打字机)
     std::string editorOrientation();  // "horizontal"(横排) 或 "vertical"(竖排)
+    std::string verticalReferenceLineStyle();  // "solid"(实线) / "dash"(虚线) / "dot"(点状虚线)
     std::string clickChineseMode();  // "key"(每键一声) / "count"(上屏按字数) / "single"(上屏单声)
     int typingClickVolume();  // 0..100,打字机音效音量
     std::string typingClickTimbre();  // 7 种音色 key,见 typing_click.cpp TIMBRES

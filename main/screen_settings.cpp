@@ -31,6 +31,8 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_app_mode", "工作模式", false, true},
     {"_home_view", "主页视图", false, true},
     {"_editor_orientation", "文字方向", false, true},
+    {"vertical_ref_line", "竖排参考线", false, false},
+    {"_vertical_ref_line_style", "参考线样式", false, true},
     {"_input_mode", "输入模式", false, true},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -68,6 +70,10 @@ static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS
 // 打字机专用设置行仅在该模式开启时显示
 static bool fieldHidden(int idx) {
     const char *k = SETTINGS_FIELDS[idx].key;
+    if (strcmp(k, "vertical_ref_line") == 0)
+        return g_settings.editorOrientation() != "vertical";
+    if (strcmp(k, "_vertical_ref_line_style") == 0)
+        return g_settings.editorOrientation() != "vertical" || !g_settings.verticalReferenceLine();
     if (strcmp(k, "_click_volume") == 0 || strcmp(k, "_click_timbre") == 0 ||
         strcmp(k, "_click_chinese") == 0)
         return g_settings.inputMode() != "typewriter";
@@ -102,6 +108,19 @@ static const char *clickChineseNext(int idx) {
     int n = (int)(sizeof(CLICK_CHINESE_OPTS) / sizeof(CLICK_CHINESE_OPTS[0]));
     return CLICK_CHINESE_OPTS[(idx + 1) % n].key;
 }
+// 竖排参考线样式 key↔中文名
+static const TimbreOpt VERTICAL_REF_LINE_STYLE_OPTS[] = {
+    {"solid", "实线"}, {"dash", "虚线"}, {"dot", "点状虚线"},
+};
+static int verticalRefLineStyleIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(VERTICAL_REF_LINE_STYLE_OPTS) / sizeof(VERTICAL_REF_LINE_STYLE_OPTS[0])); i++)
+        if (strcmp(k, VERTICAL_REF_LINE_STYLE_OPTS[i].key) == 0) return i;
+    return 0;
+}
+static const char *verticalRefLineStyleNext(int idx) {
+    int n = (int)(sizeof(VERTICAL_REF_LINE_STYLE_OPTS) / sizeof(VERTICAL_REF_LINE_STYLE_OPTS[0]));
+    return VERTICAL_REF_LINE_STYLE_OPTS[(idx + 1) % n].key;
+}
 // UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
 static int fieldAt(int sel) {
     int lastVisible = -1, vis = 0;
@@ -125,7 +144,7 @@ static bool isToggleField(const char *key) {
     return strcmp(key, "auto_save") == 0 || strcmp(key, "auto_sleep") == 0 ||
            strcmp(key, "sleep_screen") == 0 || strcmp(key, "md_render") == 0 ||
            strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0 ||
-           strcmp(key, "recovery_draft") == 0;
+           strcmp(key, "recovery_draft") == 0 || strcmp(key, "vertical_ref_line") == 0;
 }
 
 static bool toggleValue(const char *key) {
@@ -770,6 +789,8 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "_editor_orientation") == 0) {
                 std::string next = (g_settings.editorOrientation() == "vertical") ? "horizontal" : "vertical";
                 g_settings.setString("editor_orientation", next);
+                if (g_settingsState.selection > fieldVisibleCount() - 1)
+                    g_settingsState.selection = fieldVisibleCount() - 1;
                 return APP_SETTINGS;
             }
             if (strcmp(f.key, "_flomo_token") == 0) {
@@ -903,6 +924,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     timbreNext(timbreIndex(g_settings.typingClickTimbre().c_str())));
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_vertical_ref_line_style") == 0) {
+                g_settings.setString("vertical_ref_line_style",
+                    verticalRefLineStyleNext(verticalRefLineStyleIndex(g_settings.verticalReferenceLineStyle().c_str())));
+                return APP_SETTINGS;
+            }
         } else if (isToggleField(f.key)) {
             // 开/关切换:存 "1"(开) 或 "0"(关)
             g_settings.setString(f.key, toggleValue(f.key) ? "0" : "1");
@@ -941,6 +967,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_editor_orientation") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.editorOrientation() == "vertical" ? "竖排" : "横排");
+            } else if (strcmp(f.key, "_vertical_ref_line_style") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         VERTICAL_REF_LINE_STYLE_OPTS[verticalRefLineStyleIndex(g_settings.verticalReferenceLineStyle().c_str())].label);
             } else if (strcmp(f.key, "_input_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.inputMode() == "typewriter" ? "打字机模式" : "正常模式");

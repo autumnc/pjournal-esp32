@@ -127,6 +127,7 @@ bool SettingsManager::markdownRender() { return get("md_render") != "0"; }  // d
 bool SettingsManager::firstLineIndent() { return get("first_line_indent") == "1"; }  // default off
 bool SettingsManager::versionHistory() { return get("version_history") == "1"; }  // default off
 bool SettingsManager::recoveryDraft() { return get("recovery_draft") != "0"; }  // default on
+bool SettingsManager::verticalReferenceLine() { return get("vertical_ref_line") == "1"; }  // default off
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");
@@ -142,6 +143,7 @@ std::string SettingsManager::homeView() { return getString("home_view", "week");
 
 std::string SettingsManager::inputMode() { return getString("input_mode", "normal"); }
 std::string SettingsManager::editorOrientation() { return getString("editor_orientation", "horizontal"); }
+std::string SettingsManager::verticalReferenceLineStyle() { return getString("vertical_ref_line_style", "solid"); }
 
 std::string SettingsManager::clickChineseMode() { return getString("click_chinese", "key"); }
 

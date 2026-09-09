@@ -355,10 +355,39 @@ static void drawVerticalDecorations(int x, const VerticalLayoutMetrics &m,
     flush(end - start);
 }
 
+static void drawVerticalGuideLineAt(int gx, const VerticalLayoutMetrics &m,
+                                    VerticalGuideStyle style) {
+    int y0 = m.y;
+    int h = m.h;
+    if (h <= 0) return;
+    u8g2_SetDrawColor(g_u8g2, 0);
+    if (style == VerticalGuideStyle::Solid) {
+        u8g2_DrawVLine(g_u8g2, gx, y0, h);
+    } else if (style == VerticalGuideStyle::Dash) {
+        for (int y = y0; y < y0 + h; y += 8) {
+            int seg = std::min(5, y0 + h - y);
+            if (seg > 0) u8g2_DrawVLine(g_u8g2, gx, y, seg);
+        }
+    } else {
+        for (int y = y0; y < y0 + h; y += 4)
+            u8g2_DrawPixel(g_u8g2, gx, y);
+    }
+}
+
+static void drawVerticalGuideLines(const VerticalLayoutMetrics &m, VerticalGuideStyle style) {
+    int lh = g_font.lineHeight();
+    int rightTextX = m.x + m.w - m.colAdvance;
+    int rightGuideX = rightTextX + lh + 3;
+    for (int i = 0; i <= m.cols; i++)
+        drawVerticalGuideLineAt(rightGuideX - i * m.colAdvance, m, style);
+}
+
 void drawVerticalCols(const std::vector<std::string> &lines, const VerticalData &data,
-                      int scrollCol, const VerticalLayoutMetrics &m) {
+                      int scrollCol, const VerticalLayoutMetrics &m,
+                      bool guideLine, VerticalGuideStyle guideStyle) {
     (void)lines;
     int right = m.x + m.w - m.colAdvance;
+    if (guideLine) drawVerticalGuideLines(m, guideStyle);
     for (int ci = 0; ci < m.cols; ci++) {
         int colIdx = scrollCol + ci;
         if (colIdx < 0 || colIdx >= (int)data.cols.size()) continue;

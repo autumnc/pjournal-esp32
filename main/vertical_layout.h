@@ -38,6 +38,12 @@ struct VerticalLayoutMetrics {
     int cols = 1;
 };
 
+enum class VerticalGuideStyle {
+    Solid,
+    Dash,
+    Dot,
+};
+
 VerticalLayoutMetrics verticalMetrics(int x, int y, int w, int h);
 
 // Chunk visible lines into columns of rowsPerCol cells. hiddenLines marks
@@ -59,7 +65,9 @@ int verticalFindCol(const VerticalData &data, const std::vector<std::string> &li
 int verticalRowToByte(const std::vector<VerticalCell> &cells, int colStart, int colEnd, int row);
 
 void drawVerticalCols(const std::vector<std::string> &lines, const VerticalData &data,
-                      int scrollCol, const VerticalLayoutMetrics &m);
+                      int scrollCol, const VerticalLayoutMetrics &m,
+                      bool guideLine = false,
+                      VerticalGuideStyle guideStyle = VerticalGuideStyle::Solid);
 
 void drawVerticalCursor(const std::vector<std::string> &lines, const VerticalData &data,
                         int scrollCol, const VerticalLayoutMetrics &m,
