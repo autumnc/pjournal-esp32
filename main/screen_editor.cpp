@@ -1811,6 +1811,14 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     if (g_editor.imeActive && key != 0) {
         std::string imeOut;
         if (g_ime.handleKey(key, imeOut)) {
+            // 英文模式连续上屏两个候选词且中间无空格时, 自动补空格分隔
+            if (g_ime.english() && !imeOut.empty() && !g_editor.hasSelection) {
+                const std::string &line = g_editor.lines[g_editor.cy];
+                if (g_editor.cx > 0) {
+                    char prev = line[g_editor.cx - 1];
+                    if (prev != ' ' && prev != '\t') imeOut.insert(imeOut.begin(), ' ');
+                }
+            }
             if (editorTypewriter()) {
                 // 中文音效触发:key=每个被 IME 消费的键一声;count=上屏按字数连响;single=上屏一声
                 if (g_settings.clickChineseMode() == "key") {

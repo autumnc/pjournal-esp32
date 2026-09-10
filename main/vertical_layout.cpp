@@ -289,6 +289,7 @@ static void drawVerticalWave(int x, int y, int h) {
     for (int dy = 0; dy < h; dy++) {
         int phase = dy & 7;
         int px = x + (phase < 2 ? 0 : (phase < 4 ? 1 : (phase < 6 ? 2 : 1)));
+        u8g2_DrawPixel(g_u8g2, px - 1, y + dy);
         u8g2_DrawPixel(g_u8g2, px, y + dy);
     }
 }
@@ -301,7 +302,12 @@ static void drawVerticalDecorationRun(int x, const VerticalLayoutMetrics &m,
     int h = (rowEnd - rowStart - 1) * m.rowAdvance + g_font.lineHeight() - 4;
     if (h <= 0) return;
     u8g2_SetDrawColor(g_u8g2, 0);
-    if (italic || underline) u8g2_DrawVLine(g_u8g2, x - 2, y0, h);
+    if (italic) {
+        u8g2_DrawVLine(g_u8g2, x - 2, y0, h);
+        u8g2_DrawVLine(g_u8g2, x - 1, y0, h);
+    } else if (underline) {
+        u8g2_DrawVLine(g_u8g2, x - 2, y0, h);
+    }
     if (strike) {
         int sx = x + g_font.lineHeight() / 2;
         u8g2_DrawVLine(g_u8g2, sx, y0, h);
