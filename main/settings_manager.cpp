@@ -84,6 +84,9 @@ std::string SettingsManager::personalHobbies() { return get("personal_hob"); }
 std::string SettingsManager::wifiSsid() { return get("wifi_ssid"); }
 std::string SettingsManager::wifiPassword() { return get("wifi_pass"); }
 std::string SettingsManager::xiaozhiOtaUrl() { return getString("xiaozhi_ota_url", "https://api.tenclass.net/xiaozhi/ota/"); }
+std::string SettingsManager::voiceAsrService() { return getString("voice_asr_service", "xiaozhi"); }
+std::string SettingsManager::baiduAsrApiKey() { return get("baidu_asr_api_key"); }
+std::string SettingsManager::baiduAsrSecretKey() { return get("baidu_asr_secret_key"); }
 
 std::string SettingsManager::clientId() {
     std::string id = getString("xiaozhi_client_id");

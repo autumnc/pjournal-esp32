@@ -41,6 +41,9 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_dict_mgr", "词库管理", false, true},
     {"file_mgr_token", "文件管理密码", true, false},
     {"_bt_manage", "蓝牙设备管理", false, true},
+    {"_voice_asr_service", "语音识别服务", false, true},
+    {"baidu_asr_api_key", "百度Api Key", false, false},
+    {"baidu_asr_secret_key", "百度Secret Key", true, false},
     {"deepseek_key", "Deepseek Key", false, false},
     {"_polish_prompt", "润色提示词", false, true},
     {"flomo_email", "Flomo 邮箱", false, false},
@@ -77,6 +80,8 @@ static bool fieldHidden(int idx) {
     if (strcmp(k, "_click_volume") == 0 || strcmp(k, "_click_timbre") == 0 ||
         strcmp(k, "_click_chinese") == 0)
         return g_settings.inputMode() != "typewriter";
+    if (strcmp(k, "baidu_asr_api_key") == 0 || strcmp(k, "baidu_asr_secret_key") == 0)
+        return g_settings.voiceAsrService() != "baidu";
     return false;
 }
 
@@ -120,6 +125,19 @@ static int verticalRefLineStyleIndex(const char *k) {
 static const char *verticalRefLineStyleNext(int idx) {
     int n = (int)(sizeof(VERTICAL_REF_LINE_STYLE_OPTS) / sizeof(VERTICAL_REF_LINE_STYLE_OPTS[0]));
     return VERTICAL_REF_LINE_STYLE_OPTS[(idx + 1) % n].key;
+}
+// 语音识别服务 key↔中文名
+static const TimbreOpt VOICE_ASR_SERVICE_OPTS[] = {
+    {"xiaozhi", "小智"}, {"baidu", "百度"},
+};
+static int voiceAsrServiceIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(VOICE_ASR_SERVICE_OPTS) / sizeof(VOICE_ASR_SERVICE_OPTS[0])); i++)
+        if (strcmp(k, VOICE_ASR_SERVICE_OPTS[i].key) == 0) return i;
+    return 0;
+}
+static const char *voiceAsrServiceNext(int idx) {
+    int n = (int)(sizeof(VOICE_ASR_SERVICE_OPTS) / sizeof(VOICE_ASR_SERVICE_OPTS[0]));
+    return VOICE_ASR_SERVICE_OPTS[(idx + 1) % n].key;
 }
 // UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
 static int fieldAt(int sel) {
@@ -888,6 +906,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.nextState = APP_BT_MANAGE;
                 return APP_BT_MANAGE;
             }
+            if (strcmp(f.key, "_voice_asr_service") == 0) {
+                g_settings.setString("voice_asr_service",
+                    voiceAsrServiceNext(voiceAsrServiceIndex(g_settings.voiceAsrService().c_str())));
+                if (g_settingsState.selection > fieldVisibleCount() - 1)
+                    g_settingsState.selection = fieldVisibleCount() - 1;
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_polish_prompt") == 0) {
                 ctx.nextState = APP_POLISH_PROMPT;
                 return APP_POLISH_PROMPT;
@@ -981,6 +1006,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_click_timbre") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          TIMBRE_OPTS[timbreIndex(g_settings.typingClickTimbre().c_str())].label);
+            } else if (strcmp(f.key, "_voice_asr_service") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         VOICE_ASR_SERVICE_OPTS[voiceAsrServiceIndex(g_settings.voiceAsrService().c_str())].label);
             } else {
                 snprintf(buf, sizeof(buf), "▶ %s", f.label);
             }

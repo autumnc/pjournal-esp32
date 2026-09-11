@@ -1,6 +1,7 @@
 #include "screen_voice.h"
 #include "voice_input.h"
 #include "screen_editor.h"
+#include "settings_manager.h"
 #include "ui_helpers.h"
 #include "font_renderer.h"
 
@@ -68,6 +69,9 @@ AppState screen_voice_handle(int key, ScreenContext &ctx) {
             g_voice.requestStop();
             std::string t;
             while (g_voice.popStt(t)) editorInsertText(t);
+            if (g_settings.voiceAsrService() == "baidu" && g_voice.isActive()) {
+                return APP_VOICE;
+            }
         }
         s_start_failed = false;
         return APP_EDITOR;

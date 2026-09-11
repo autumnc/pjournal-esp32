@@ -25,6 +25,9 @@ public:
     std::string timezone();
     std::string ntpServer();
     std::string xiaozhiOtaUrl();
+    std::string voiceAsrService();  // "xiaozhi" 或 "baidu"
+    std::string baiduAsrApiKey();
+    std::string baiduAsrSecretKey();
     std::string clientId();
     bool autoSave();
     bool autoSleep();

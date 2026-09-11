@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <cmath>
 #include <string>
 #include <queue>
@@ -56,6 +57,7 @@ VoiceInput g_voice;
 #define VOICE_MAX_RECONNECT     5
 #define BIND_URL                "https://xiaozhi.me"
 #define VOICE_ERROR_HOLD_MS     3000
+#define BAIDU_ASR_MAX_SECONDS   55
 
 // ── shared state (voice task <-> UI) ────────────────────────────────────────
 static TaskHandle_t s_task = nullptr;
@@ -319,7 +321,8 @@ struct HttpResult {
 };
 
 static HttpResult voice_http(const std::string &url, const std::string &method,
-                             const std::string &body, const std::vector<std::string> &headers) {
+                             const std::string &body, const std::vector<std::string> &headers,
+                             const char *content_type = "application/json") {
     HttpResult res;
     esp_http_client_config_t cfg = {};
     cfg.url = url.c_str();
@@ -332,7 +335,8 @@ static HttpResult voice_http(const std::string &url, const std::string &method,
         res.err = "HTTP初始化失败";
         return res;
     }
-    esp_http_client_set_header(client, "Content-Type", "application/json");
+    if (content_type != nullptr && content_type[0] != 0)
+        esp_http_client_set_header(client, "Content-Type", content_type);
     for (auto &h : headers) {
         size_t pos = h.find(':');
         if (pos != std::string::npos) {
@@ -371,6 +375,88 @@ static std::string voice_mac_str() {
     snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return std::string(buf);
+}
+
+static std::string url_encode(const std::string &s) {
+    static const char *hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            out += '%';
+            out += hex[c >> 4];
+            out += hex[c & 0x0F];
+        }
+    }
+    return out;
+}
+
+static std::string baidu_cuid() {
+    std::string mac = voice_mac_str();
+    std::string out = "pjournal-";
+    for (char c : mac)
+        if (c != ':') out += c;
+    return out;
+}
+
+static bool baidu_get_access_token(const std::string &api_key, const std::string &secret_key,
+                                   std::string &token, std::string &err) {
+    std::string url = "https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials"
+                      "&client_id=" + url_encode(api_key) +
+                      "&client_secret=" + url_encode(secret_key);
+    HttpResult res = voice_http(url, "GET", "", {}, nullptr);
+    if (!res.ok || res.status != 200) {
+        err = res.ok ? ("Token请求失败(" + std::to_string(res.status) + ")") : res.err;
+        return false;
+    }
+    JsonValue root = JsonValue::parse(res.body);
+    if (!root.isObject() || !root.has("access_token")) {
+        std::string desc = root.isObject() && root.has("error_description") ? root["error_description"].asString() : "";
+        err = desc.empty() ? "Token响应无效" : desc;
+        return false;
+    }
+    token = root["access_token"].asString();
+    return !token.empty();
+}
+
+static bool baidu_asr_pcm(const std::vector<int16_t> &pcm, std::string &text, std::string &err) {
+    std::string api_key = g_settings.baiduAsrApiKey();
+    std::string secret_key = g_settings.baiduAsrSecretKey();
+    if (api_key.empty() || secret_key.empty()) {
+        err = "请先设置百度Api Key和Secret Key";
+        return false;
+    }
+    std::string token;
+    if (!baidu_get_access_token(api_key, secret_key, token, err)) return false;
+    if (pcm.empty()) {
+        err = "没有录到语音";
+        return false;
+    }
+
+    std::string body((const char *)pcm.data(), pcm.size() * sizeof(int16_t));
+    std::string url = "https://vop.baidu.com/server_api?dev_pid=1537&cuid=" +
+                      url_encode(baidu_cuid()) + "&token=" + url_encode(token);
+    HttpResult res = voice_http(url, "POST", body, {}, "audio/pcm;rate=16000");
+    if (!res.ok || res.status != 200) {
+        err = res.ok ? ("百度识别失败(" + std::to_string(res.status) + ")") : res.err;
+        return false;
+    }
+    JsonValue root = JsonValue::parse(res.body);
+    int err_no = root.isObject() && root.has("err_no") ? root["err_no"].asInt(-1) : -1;
+    if (err_no != 0) {
+        std::string msg = root.isObject() && root.has("err_msg") ? root["err_msg"].asString() : "";
+        err = msg.empty() ? ("百度返回错误 " + std::to_string(err_no)) : msg;
+        return false;
+    }
+    if (root.has("result") && root["result"].isArray() && root["result"].size() > 0)
+        text = root["result"][0].asString();
+    if (text.empty()) {
+        err = "百度未识别到文字";
+        return false;
+    }
+    return true;
 }
 
 // ── activation / check-version ──────────────────────────────────────────────
@@ -589,6 +675,42 @@ static void voice_task(void *arg) {
         }
     }
     ESP_LOGI(TAG, "wifi ok, ip=%s", g_wifi.getIp().c_str());
+
+    if (g_settings.voiceAsrService() == "baidu") {
+        if (g_settings.baiduAsrApiKey().empty() || g_settings.baiduAsrSecretKey().empty()) {
+            setError("请先设置百度Api Key和Secret Key");
+            goto cleanup;
+        }
+        if (!voice_audio_init()) {
+            setError("麦克风初始化失败");
+            goto cleanup;
+        }
+        {
+            std::vector<int16_t> frame(VOICE_FRAME_SAMPLES);
+            std::vector<int16_t> pcm;
+            pcm.reserve(VOICE_SAMPLE_RATE * BAIDU_ASR_MAX_SECONDS);
+            setState(VOICE_LISTENING);
+            while (!s_stop && pcm.size() < VOICE_SAMPLE_RATE * BAIDU_ASR_MAX_SECONDS) {
+                if (!voice_audio_read_mono(frame.data(), VOICE_FRAME_SAMPLES)) {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    continue;
+                }
+                pcm.insert(pcm.end(), frame.begin(), frame.end());
+            }
+            setState(VOICE_STOPPING);
+            if (!pcm.empty()) {
+                std::string text, err;
+                if (baidu_asr_pcm(pcm, text, err)) {
+                    ESP_LOGI(TAG, "baidu stt: %s", text.c_str());
+                    pushStt(text);
+                } else if (!s_stop || err != "没有录到语音") {
+                    setError("百度识别失败: " + err);
+                }
+            }
+        }
+        voice_audio_deinit();
+        goto cleanup;
+    }
 
     // 2. OTA check-version + activation
     setState(VOICE_CONNECTING_SERVER);
