@@ -314,6 +314,26 @@ static int phraseCandidateScore(const std::string &word, int candLen, int typedL
     return score;
 }
 
+static bool phraseMatureForTyped(int fullCodeLen, int typedLen, int charCount) {
+    if (typedLen >= fullCodeLen) return true;
+    if (charCount <= 2) return typedLen >= 2;
+    if (charCount == 3) return typedLen >= std::min(fullCodeLen, 4);
+    if (charCount == 4) return typedLen >= std::min(fullCodeLen, 5);
+    int minLen = 6;
+    if (charCount >= 7) minLen = 8;
+    int ratioLen = (fullCodeLen * 3 + 4) / 5;  // about 60%
+    return typedLen >= std::min(fullCodeLen, std::max(minLen, ratioLen));
+}
+
+static bool initialPhraseMatureForTyped(int fullInitialLen, int typedLen, int charCount) {
+    if (typedLen >= fullInitialLen) return true;
+    if (charCount <= 3) return typedLen >= 2;
+    if (charCount == 4) return typedLen >= 3;
+    int minLen = charCount >= 7 ? 5 : 4;
+    int ratioLen = (fullInitialLen * 2 + 2) / 3;  // about 2/3 of initials
+    return typedLen >= std::min(fullInitialLen, std::max(minLen, ratioLen));
+}
+
 static int initialPhraseCandidateScoreFromLength(int initLen, int typedLen,
                                                  const std::string &word) {
     if (initLen < typedLen) return -1;
@@ -1697,28 +1717,42 @@ void IME::lookup() {
             std::vector<ime::PinyinSplit> moreSplits = ime::PinyinEngine::splitVariants(aliasCode, true, 4);
             aliasSplits.insert(aliasSplits.end(), moreSplits.begin(), moreSplits.end());
         }
-        for (int i = 0; i < SEG_TABLE_COUNT && _all.size() < IME_FAST_CANDIDATE_LIMIT; i++) {
+        std::vector< std::pair<int, std::pair<int, std::string> > > segMatches;
+        for (int i = 0; i < SEG_TABLE_COUNT; i++) {
             std::vector<std::string> entrySyl = splitSyllableText(SEG_TABLE[i].syllables);
-            bool matched = false;
-            auto matchSplits = [&](const std::vector<ime::PinyinSplit> &variants) -> bool {
+            int matchedLen = 0;
+            auto matchSplits = [&](const std::vector<ime::PinyinSplit> &variants) -> int {
             for (auto &split : variants) {
                 std::string entryCode;
                 for (auto &s : entrySyl) entryCode += s;
                 std::string typedCode = pinyinJoinedCode(split.tokens);
                 if ((int)typedCode.length() > (int)entryCode.length()) continue;
                 if (strncmp(entryCode.c_str(), typedCode.c_str(), typedCode.length()) != 0) continue;
-                if (pinyinSegmentsMatch(split.tokens, entrySyl)) return true;
+                if (pinyinSegmentsMatch(split.tokens, entrySyl)) return (int)typedCode.length();
             }
-            return false;
+            return 0;
             };
-            matched = matchSplits(splits);
-            if (!matched && !aliasSplits.empty())
-                matched = matchSplits(aliasSplits);
-            if (!matched) continue;
+            matchedLen = matchSplits(splits);
+            if (matchedLen == 0 && !aliasSplits.empty())
+                matchedLen = matchSplits(aliasSplits);
+            if (matchedLen == 0) continue;
             std::string w = SEG_TABLE[i].word;
-            if (appendCandidate(w, qlen)) {
-                if (qlen > _maxMatchLen) _maxMatchLen = qlen;
-            }
+            std::string entryCode;
+            for (auto &s : entrySyl) entryCode += s;
+            int chars = utf8TextCharCount(w);
+            if (!phraseMatureForTyped((int)entryCode.length(), matchedLen, chars)) continue;
+            int score = phraseCandidateScore(w, (int)entryCode.length(), matchedLen, (int)entrySyl.size());
+            segMatches.push_back({score, {(int)entryCode.length(), w}});
+        }
+        std::stable_sort(segMatches.begin(), segMatches.end(),
+            [](const std::pair<int, std::pair<int, std::string> > &a,
+               const std::pair<int, std::pair<int, std::string> > &b) {
+                return a.first > b.first;
+        });
+        for (auto &m : segMatches) {
+            if (appendCandidate(m.second.second, m.second.first) && m.second.first > _maxMatchLen)
+                _maxMatchLen = m.second.first;
+            if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
         perf.segUs += IME_PERF_NOW() - t;
     }
@@ -1775,6 +1809,11 @@ void IME::lookup() {
                     uint8_t wf = wordData[next + wl];
                     if (groupMatch) {
                         std::string w((const char *)wordData + next, wl);
+                        int chars = utf8TextCharCount(w);
+                        if (!phraseMatureForTyped((int)cl, scanLen, chars)) {
+                            next += wl + 1;
+                            continue;
+                        }
                         int consumedLen = aliasScan ? qlen : (int)cl;
                         if (wordVisible(_trad, w, wf) && appendCandidate(w, consumedLen)) {
                             if (cl > _maxMatchLen) _maxMatchLen = cl;
@@ -1855,11 +1894,13 @@ void IME::lookup() {
             if (!match && !compactMatch) continue;
             const std::string &matchedInit = match ? init : compactInit;
             int chars = utf8TextCharCount(SEG_TABLE[i].word);
+            if (!initialPhraseMatureForTyped((int)matchedInit.length(), qlen, chars)) continue;
             int score = initialPhraseCandidateScoreFromLength((int)matchedInit.length(), qlen,
                                                               SEG_TABLE[i].word);
             if ((int)matchedInit.length() == qlen) score += 5000;
             if (compactMatch) score += 500;
             if (chars >= 2) score += chars;
+            if ((int)matchedInit.length() > qlen) score -= std::min(6000, ((int)matchedInit.length() - qlen) * 900);
             segInitFreq.push_back({score, SEG_TABLE[i].word});
         }
         std::stable_sort(segInitFreq.begin(), segInitFreq.end(),
