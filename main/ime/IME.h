@@ -113,6 +113,7 @@ private:
     bool _predicting = false;
     std::string _predChar;
     std::string _lastCommitChar;
+    std::string _lastCommitText;
     int _partialStart = 0;
     int _maxMatchLen = 0;
     std::string _prefix;

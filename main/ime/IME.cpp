@@ -164,6 +164,18 @@ static const BuiltinPredictEntry BUILTIN_PREDICT[] = {
     {"待", {"办", "会", "处理", "确定", "续", "命", "机", "选", nullptr}},
     {"保", {"存", "持", "护", "留", "证", "密", "险", "守", nullptr}},
     {"搜", {"索", "寻", "到", "一下", "索结果", "索内容", "索文件", "索词", nullptr}},
+    {"输入", {"法", "方式", "模式", "内容", "文字", "拼音", "候选", "中文", nullptr}},
+    {"输入法", {"设置", "候选", "词库", "联想", "模式", "优化", "卡顿", "拼音", nullptr}},
+    {"候选", {"区", "词", "列表", "排序", "页面", "显示", "选择", "结果", nullptr}},
+    {"词库", {"管理", "优化", "同步", "导入", "导出", "更新", "文件", "词条", nullptr}},
+    {"联想", {"功能", "词库", "候选", "词", "效果", "设置", "优化", "触发", nullptr}},
+    {"蓝牙", {"键盘", "连接", "设备", "电量", "管理", "配对", "断开", "重连", nullptr}},
+    {"键盘", {"电量", "输入", "连接", "布局", "按键", "模式", "设备", "状态", nullptr}},
+    {"屏幕", {"刷新", "显示", "亮度", "内容", "方向", "界面", "保护", "状态", nullptr}},
+    {"语音", {"输入", "识别", "转写", "文件", "内容", "结果", "服务", "设置", nullptr}},
+    {"笔记", {"同步", "内容", "文件", "管理", "列表", "搜索", "导出", "整理", nullptr}},
+    {"任务", {"管理", "列表", "完成", "同步", "记录", "安排", "提醒", "状态", nullptr}},
+    {"搜索", {"结果", "内容", "文件", "词", "页面", "历史", "范围", "匹配", nullptr}},
 };
 
 static std::string pinyinJoinedCode(const std::vector<ime::PinyinToken> &tokens) {
@@ -195,6 +207,20 @@ static std::vector<std::string> splitSyllableText(const char *text) {
         }
     }
     if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+static std::string initialCodeForSyllables(const std::vector<std::string> &syllables, bool keepZhChSh) {
+    std::string out;
+    for (auto &s : syllables) {
+        if (s.empty()) continue;
+        if (keepZhChSh && s.size() >= 2 && (s[0] == 'z' || s[0] == 'c' || s[0] == 's') && s[1] == 'h') {
+            out += s[0];
+            out += s[1];
+        } else {
+            out += s[0];
+        }
+    }
     return out;
 }
 
@@ -363,6 +389,25 @@ static void addUniqueString(std::vector<std::string> &items, const std::string &
     items.push_back(value);
 }
 
+static std::string fuzzyInitialAliasCode(const std::string &code) {
+    if (code.length() < 2) return "";
+    auto withPrefix = [&](const char *from, const char *to) -> std::string {
+        size_t fl = strlen(from);
+        if (code.compare(0, fl, from) != 0) return "";
+        if (code.length() == fl) return "";
+        if (!strchr("aeiouv", code[fl])) return "";
+        return std::string(to) + code.substr(fl);
+    };
+    std::string alias;
+    if (!(alias = withPrefix("zh", "z")).empty()) return alias;
+    if (!(alias = withPrefix("ch", "c")).empty()) return alias;
+    if (!(alias = withPrefix("sh", "s")).empty()) return alias;
+    if (!(alias = withPrefix("z", "zh")).empty()) return alias;
+    if (!(alias = withPrefix("c", "ch")).empty()) return alias;
+    if (!(alias = withPrefix("s", "sh")).empty()) return alias;
+    return "";
+}
+
 static std::vector<std::string> alternateInputCodes(const std::string &code) {
     std::vector<std::string> out;
     std::string leading = leadingZeroInitialAliasCode(code);
@@ -370,6 +415,12 @@ static std::vector<std::string> alternateInputCodes(const std::string &code) {
     std::string spelling = pinyinSpellingAliasCode(code);
     addUniqueString(out, spelling);
     if (!spelling.empty()) addUniqueString(out, leadingZeroInitialAliasCode(spelling));
+    std::string fuzzy = fuzzyInitialAliasCode(code);
+    addUniqueString(out, fuzzy);
+    if (!fuzzy.empty()) {
+        addUniqueString(out, leadingZeroInitialAliasCode(fuzzy));
+        addUniqueString(out, pinyinSpellingAliasCode(fuzzy));
+    }
     return out;
 }
 
@@ -500,7 +551,15 @@ static bool isCjkChar(const std::string &text) {
 }
 
 static bool validPredictEntry(const std::string &key, const std::string &word) {
-    if (!isCjkChar(key) || !isCjkChar(utf8CharAt(word, 0))) return false;
+    if (!isCjkChar(utf8CharAt(key, 0)) || !isCjkChar(utf8CharAt(word, 0))) return false;
+    int keyChars = 0;
+    for (size_t pos = 0; pos < key.size() && keyChars <= 4; ) {
+        std::string ch = utf8CharAt(key, pos);
+        if (!isCjkChar(ch)) return false;
+        pos = utf8CharEnd(key, pos);
+        keyChars++;
+    }
+    if (keyChars < 1 || keyChars > 4) return false;
     int chars = 0;
     for (size_t pos = 0; pos < word.size() && chars <= 4; ) {
         std::string ch = utf8CharAt(word, pos);
@@ -509,6 +568,66 @@ static bool validPredictEntry(const std::string &key, const std::string &word) {
         chars++;
     }
     return chars >= 1 && chars <= 4;
+}
+
+static std::vector<std::string> cjkCharsOf(const std::string &text, int maxChars = 16) {
+    std::vector<std::string> chars;
+    for (size_t pos = 0; pos < text.size() && (int)chars.size() < maxChars; ) {
+        std::string ch = utf8CharAt(text, pos);
+        if (!isCjkChar(ch)) {
+            chars.clear();
+            return chars;
+        }
+        chars.push_back(ch);
+        pos = utf8CharEnd(text, pos);
+    }
+    return chars;
+}
+
+static std::string cjkTailText(const std::string &text, int maxChars) {
+    std::vector<std::string> chars = cjkCharsOf(text, 16);
+    if (chars.empty()) return "";
+    std::string out;
+    int start = std::max<int>(0, (int)chars.size() - maxChars);
+    for (int i = start; i < (int)chars.size(); i++) out += chars[i];
+    return out;
+}
+
+static int utf8TextCharCount(const std::string &text) {
+    int count = 0;
+    for (size_t pos = 0; pos < text.size(); ) {
+        pos = utf8CharEnd(text, pos);
+        count++;
+    }
+    return count;
+}
+
+static std::string predictKeyForCommittedText(const std::string &text) {
+    std::string tail = cjkTailText(text, 4);
+    if (!tail.empty()) return tail;
+    return lastUtf8Char(text);
+}
+
+static bool isAsciiPunctKey(int key) {
+    return key >= 0x21 && key <= 0x7E &&
+           !((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
+             (key >= '0' && key <= '9'));
+}
+
+static std::string imePunctForKey(int key) {
+    std::string out;
+    switch (key) {
+    case ',':  out = "，"; break;
+    case '.':  out = "。"; break;
+    case '?':  out = "？"; break;
+    case ';':  out = "；"; break;
+    case ':':  out = "："; break;
+    case '!':  out = "！"; break;
+    default:
+        if (key >= 0x21 && key <= 0x7E) out.assign(1, (char)key);
+        break;
+    }
+    return out;
 }
 
 // 词组是否含繁体字形(trad_table.h 位图, U+346E-U+9FD3)。
@@ -1174,18 +1293,23 @@ void IME::learnPredictPairs(const std::string &text) {
     std::vector<std::string> chars;
     int learned = 0;
     auto learnSegment = [&]() {
-        for (size_t i = 0; i + 1 < chars.size() && learned < 18; i++) {
-            std::string tail;
-            for (size_t j = i + 1; j < chars.size() && j <= i + 3 && learned < 18; j++) {
-                tail += chars[j];
-                bumpPredictFrequency(chars[i], tail, false);
-                learned++;
+        for (size_t i = 0; i + 1 < chars.size() && learned < 24; i++) {
+            std::string key;
+            for (size_t k = i; k < chars.size() && k <= i + 2 && learned < 24; k++) {
+                key += chars[k];
+                if (k + 1 >= chars.size()) break;
+                std::string tail;
+                for (size_t j = k + 1; j < chars.size() && j <= k + 3 && learned < 24; j++) {
+                    tail += chars[j];
+                    bumpPredictFrequency(key, tail, false);
+                    learned++;
+                }
             }
         }
         chars.clear();
     };
     size_t pos = 0;
-    while (pos < text.size() && learned < 18) {
+    while (pos < text.size() && learned < 24) {
         std::string ch = utf8CharAt(text, pos);
         pos = utf8CharEnd(text, pos);
         if (!isCjkChar(ch)) {
@@ -1196,7 +1320,7 @@ void IME::learnPredictPairs(const std::string &text) {
         chars.push_back(ch);
         if (chars.size() >= 12) learnSegment();
     }
-    if (chars.size() > 1 && learned < 18) learnSegment();
+    if (chars.size() > 1 && learned < 24) learnSegment();
     if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
 }
 
@@ -1205,18 +1329,21 @@ void IME::rememberCommittedText(const std::string &text) {
     std::string first = utf8CharAt(text, 0);
     if (!isCjkChar(first)) {
         _lastCommitChar.clear();
+        _lastCommitText.clear();
         return;
     }
-    if (_lastCommitChar.size() >= 3 && first.size() >= 3) {
-        bumpPredictFrequency(_lastCommitChar, first, false);
+    std::string prevKey = !_lastCommitText.empty() ? _lastCommitText : _lastCommitChar;
+    if (!prevKey.empty() && first.size() >= 3) {
+        bumpPredictFrequency(prevKey, first, false);
         std::string second = utf8CharAt(text, utf8CharEnd(text, 0));
-        if (isCjkChar(second)) bumpPredictFrequency(_lastCommitChar, first + second, false);
+        if (isCjkChar(second)) bumpPredictFrequency(prevKey, first + second, false);
     }
     learnPredictPairs(text);
     if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
     std::string last = lastUtf8Char(text);
     if (isCjkChar(last)) _lastCommitChar = last;
     else _lastCommitChar.clear();
+    _lastCommitText = cjkTailText(text, 4);
 }
 
 bool IME::readCode(uint32_t i, char out[MAX_CODE_LEN + 1]) {
@@ -1704,7 +1831,40 @@ void IME::lookup() {
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
         perf.userPhraseUs += IME_PERF_NOW() - t;
-        if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "user-prefix-phrase-limit"; buildPage(); return; }
+    if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "user-prefix-phrase-limit"; buildPage(); return; }
+    }
+
+    // Phase 4c: curated supplemental phrases for shorthand initials.
+    if (!hasVowel && qlen >= 2 && _all.size() < IME_FAST_CANDIDATE_LIMIT) {
+        int64_t t = IME_PERF_NOW();
+        std::vector< std::pair<int, std::string> > segInitFreq;
+        for (int i = 0; i < SEG_TABLE_COUNT; i++) {
+            std::vector<std::string> entrySyl = splitSyllableText(SEG_TABLE[i].syllables);
+            std::string init = initialCodeForSyllables(entrySyl, true);
+            std::string compactInit = initialCodeForSyllables(entrySyl, false);
+            bool match = (int)init.length() >= qlen && strncmp(init.c_str(), q, qlen) == 0;
+            bool compactMatch = (int)compactInit.length() >= qlen &&
+                                strncmp(compactInit.c_str(), q, qlen) == 0;
+            if (!match && !compactMatch) continue;
+            const std::string &matchedInit = match ? init : compactInit;
+            int chars = utf8TextCharCount(SEG_TABLE[i].word);
+            int score = initialPhraseCandidateScoreFromLength((int)matchedInit.length(), qlen,
+                                                              SEG_TABLE[i].word);
+            if ((int)matchedInit.length() == qlen) score += 5000;
+            if (compactMatch) score += 500;
+            if (chars >= 2) score += chars;
+            segInitFreq.push_back({score, SEG_TABLE[i].word});
+        }
+        std::stable_sort(segInitFreq.begin(), segInitFreq.end(),
+            [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
+                return a.first > b.first;
+        });
+        for (auto &f : segInitFreq) {
+            appendCandidate(f.second, qlen);
+            if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
+        }
+        perf.userInitialUs += IME_PERF_NOW() - t;
+        if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "seg-initial-limit"; buildPage(); return; }
     }
 
     // Phase 5: user dict initial match
@@ -2314,41 +2474,49 @@ void IME::beginPredict(const std::string &text) {
     reset();
     if (text.empty()) return;
     ensureUserDictLoaded();
-    _predChar = text;
-    std::vector< std::pair<int, std::string> > userPredict;
-    for (auto &p : _userPredictWords) {
-        if (p.trad != _trad) continue;
-        if (p.code == text) userPredict.push_back({p.count, p.word});
-    }
-    std::stable_sort(userPredict.begin(), userPredict.end(),
-        [](const std::pair<int, std::string> &a, const std::pair<int, std::string> &b) {
-            return a.first > b.first;
-        });
-    for (auto &p : userPredict) appendCandidate(p.second, 0);
-    if (_dict.hasPredictions()) {
-        size_t pos = 0;
-        ime::Im3Dictionary::PredictGroup group;
-        while (_dict.nextPredictGroup(pos, group)) {
-            if (group.key == text) {
-                for (auto &word : group.candidates) {
-                    appendCandidate(word, 0);
+    std::vector<std::string> keys;
+    addUniqueString(keys, cjkTailText(text, 4));
+    addUniqueString(keys, lastUtf8Char(text));
+    if (keys.empty()) return;
+
+    std::string matchedKey;
+    for (auto &keyText : keys) {
+        size_t before = _all.size();
+        std::vector< std::pair<int, std::string> > userPredict;
+        for (auto &p : _userPredictWords) {
+            if (p.trad != _trad) continue;
+            if (p.code == keyText) userPredict.push_back({p.count, p.word});
+        }
+        std::stable_sort(userPredict.begin(), userPredict.end(),
+            [](const std::pair<int, std::string> &a, const std::pair<int, std::string> &b) {
+                return a.first > b.first;
+            });
+        for (auto &p : userPredict) appendCandidate(p.second, 0);
+        if (_dict.hasPredictions()) {
+            size_t pos = 0;
+            ime::Im3Dictionary::PredictGroup group;
+            while (_dict.nextPredictGroup(pos, group)) {
+                if (group.key == keyText) {
+                    for (auto &word : group.candidates) appendCandidate(word, 0);
+                    break;
                 }
+            }
+        }
+        for (auto &entry : BUILTIN_PREDICT) {
+            if (keyText == entry.key) {
+                for (int i = 0; entry.candidates[i]; i++)
+                    appendCandidate(entry.candidates[i], 0);
                 break;
             }
         }
-    }
-    for (auto &entry : BUILTIN_PREDICT) {
-        if (text == entry.key) {
-            for (int i = 0; entry.candidates[i]; i++)
-                appendCandidate(entry.candidates[i], 0);
-            break;
-        }
+        if (_all.size() > before && matchedKey.empty()) matchedKey = keyText;
     }
     if (_all.empty()) {
         _predChar.clear();
         reset();
         return;
     }
+    _predChar = matchedKey.empty() ? keys[0] : matchedKey;
     _predicting = true;
     buildPage();
 }
@@ -2424,6 +2592,7 @@ bool IME::commit(int idx, std::string &out) {
     out = _page[idx];
     if (_vMode || _englishCompose) {
         _lastCommitChar.clear();
+        _lastCommitText.clear();
         reset();
         return true;
     }
@@ -2501,7 +2670,7 @@ bool IME::commit(int idx, std::string &out) {
     _prefix.clear();
     _displayCodeDirty = true;
     _codeOrig.clear();
-    std::string predictKey = lastUtf8Char(out);
+    std::string predictKey = predictKeyForCommittedText(out);
     rememberCommittedText(out);
     reset();
     beginPredict(predictKey);
@@ -2615,10 +2784,16 @@ bool IME::handleKey(int key, std::string &out) {
         if (key >= '1' && key <= '9') { commit(key - '1', out); return true; }
         if (key == ' ') {
             if (_page.size() > 0) commit(0, out);
-            else { out = _code; _lastCommitChar.clear(); reset(); }
+            else { out = _code; _lastCommitChar.clear(); _lastCommitText.clear(); reset(); }
             return true;
         }
-        if (key == '\n') { out = _code; _lastCommitChar.clear(); reset(); return true; }
+        if (key == '\n') { out = _code; _lastCommitChar.clear(); _lastCommitText.clear(); reset(); return true; }
+        if (isAsciiPunctKey(key)) {
+            if (_page.size() > 0) commit(0, out);
+            else { out = _code; _lastCommitChar.clear(); _lastCommitText.clear(); reset(); }
+            out += (char)key;
+            return true;
+        }
         if (key == '\b') {
             if (_code.length() > 0) _code.erase(_code.length() - 1);
             _displayCodeDirty = true;
@@ -2630,7 +2805,7 @@ bool IME::handleKey(int key, std::string &out) {
         if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
         if (key == IME_KEY_DOWN || key == '=' || key == '.') { pageNext(); return true; }
         if (_page.size() > 0) commit(0, out);
-        else { out = _code; _lastCommitChar.clear(); }
+        else { out = _code; _lastCommitChar.clear(); _lastCommitText.clear(); }
         reset();
         return true;
     }
@@ -2640,6 +2815,7 @@ bool IME::handleKey(int key, std::string &out) {
               (key >= '0' && key <= '9') || key == '/')) {
             out.assign(1, (char)key);
             _lastCommitChar.clear();
+            _lastCommitText.clear();
             reset();
             return true;
         }
@@ -2675,12 +2851,13 @@ bool IME::handleKey(int key, std::string &out) {
         }
         if (key == ' ') {
             if (_page.size() > 0) commit(_vSel, out);
-            else { out = _code.length() > 1 ? _code.substr(1) : ""; _lastCommitChar.clear(); reset(); }
+            else { out = _code.length() > 1 ? _code.substr(1) : ""; _lastCommitChar.clear(); _lastCommitText.clear(); reset(); }
             return true;
         }
         if (key == '\n') {
             out = _page.size() > 0 ? _page[_vSel] : (_code.length() > 1 ? _code.substr(1) : "");
             _lastCommitChar.clear();
+            _lastCommitText.clear();
             reset();
             return true;
         }
@@ -2713,7 +2890,7 @@ bool IME::handleKey(int key, std::string &out) {
                 _predicting = false;
                 bumpPredictFrequency(predKey, out);
                 rememberCommittedText(out);
-                beginPredict(lastUtf8Char(out));
+                beginPredict(predictKeyForCommittedText(out));
             }
             return true;
         }
@@ -2724,12 +2901,19 @@ bool IME::handleKey(int key, std::string &out) {
                 _predicting = false;
                 bumpPredictFrequency(predKey, out);
                 rememberCommittedText(out);
-                beginPredict(lastUtf8Char(out));
+                beginPredict(predictKeyForCommittedText(out));
             }
             return true;
         }
-        if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
-        if (key == IME_KEY_DOWN || key == '=' || key == '\'' || key == '.') { pageNext(); return true; }
+        if (isAsciiPunctKey(key) && key != '-' && key != '=') {
+            out = imePunctForKey(key);
+            _predicting = false;
+            _lastCommitChar.clear();
+            _lastCommitText.clear();
+            return true;
+        }
+        if (key == IME_KEY_UP || key == '-') { pagePrev(); return true; }
+        if (key == IME_KEY_DOWN || key == '=') { pageNext(); return true; }
         if (key == '\b' || key == 27 || key == '\n') {
             _predicting = false;
             return true;
@@ -2775,8 +2959,8 @@ bool IME::handleKey(int key, std::string &out) {
         return true;
     }
     if (_code.length() == 0) {
-        if (handleFullwidthPunct(key, out)) { _lastCommitChar.clear(); return true; }
-        if (_fullwidth && handleFullwidthChar(key, out)) { _lastCommitChar.clear(); return true; }
+        if (handleFullwidthPunct(key, out)) { _lastCommitChar.clear(); _lastCommitText.clear(); return true; }
+        if (_fullwidth && handleFullwidthChar(key, out)) { _lastCommitChar.clear(); _lastCommitText.clear(); return true; }
         return false;
     }
     // 单引号编码分词: 拼音模式下 ' 显式分隔音节(如 xi'an); 两分模式保留翻页
@@ -2801,6 +2985,7 @@ bool IME::handleKey(int key, std::string &out) {
     if (key == '\n') {
         out = _code;
         _lastCommitChar.clear();
+        _lastCommitText.clear();
         reset();
         return true;
     }
