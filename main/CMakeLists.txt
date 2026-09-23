@@ -1,3 +1,20 @@
+option(PJOURNAL_IME_ENABLE_PINYIN "Build the pinyin IME module" ON)
+option(PJOURNAL_IME_ENABLE_LIANGFEN "Embed and build the liangfen IME module" ON)
+option(PJOURNAL_IME_ENABLE_WUBI "Build optional wubi IME support" OFF)
+option(PJOURNAL_IME_ENABLE_SHUANGPIN "Build optional shuangpin IME support" OFF)
+option(PJOURNAL_IME_PERF_LOG "Enable slow IME lookup timing logs" OFF)
+
+set(PJOURNAL_EMBED_FILES
+    "ime/ime_table_pinyin.bin"
+    "ime/english_words.txt"
+    "terminus22.fnt"
+    "fontlibrary18.fnt"
+)
+
+if(PJOURNAL_IME_ENABLE_LIANGFEN)
+    list(APPEND PJOURNAL_EMBED_FILES "ime/liangfen.bin")
+endif()
+
 idf_component_register(SRCS
     "main.cpp"
     "pjournal_app.cpp"
@@ -22,6 +39,8 @@ idf_component_register(SRCS
     "json_parser.cpp"
     "json_utils.cpp"
     "ime/IME.cpp"
+    "ime/yong_dict.cpp"
+    "ime/yong_pinyin.cpp"
     "screen_gtd.cpp"
     "screen_outline.cpp"
     "screen_inspiration.cpp"
@@ -33,11 +52,7 @@ idf_component_register(SRCS
     "vertical_layout.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES
-        "ime/ime_table_pinyin.bin"
-        "ime/liangfen.bin"
-        "ime/english_words.txt"
-        "terminus22.fnt"
-        "fontlibrary18.fnt"
+        ${PJOURNAL_EMBED_FILES}
     PRIV_REQUIRES
         spi_flash
         nvs_flash
@@ -64,3 +79,10 @@ idf_component_register(SRCS
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.6.3")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    PJOURNAL_IME_ENABLE_PINYIN=$<BOOL:${PJOURNAL_IME_ENABLE_PINYIN}>
+    PJOURNAL_IME_ENABLE_LIANGFEN=$<BOOL:${PJOURNAL_IME_ENABLE_LIANGFEN}>
+    PJOURNAL_IME_ENABLE_WUBI=$<BOOL:${PJOURNAL_IME_ENABLE_WUBI}>
+    PJOURNAL_IME_ENABLE_SHUANGPIN=$<BOOL:${PJOURNAL_IME_ENABLE_SHUANGPIN}>
+    PJOURNAL_IME_PERF_LOG=$<BOOL:${PJOURNAL_IME_PERF_LOG}>
+)

@@ -197,7 +197,20 @@ static struct {
 } g_settingsState;
 
 static const char *dictKindLabel(IME::UserDictKind kind) {
-    return kind == IME::FIXED_DICT ? "固定词库" : "动态词库";
+    if (kind == IME::FIXED_DICT) return "固定词库";
+    if (kind == IME::PREDICT_DICT) return "联想词库";
+    return "动态词库";
+}
+
+static int dictKindLimit(IME::UserDictKind kind) {
+    if (kind == IME::DYNAMIC_DICT) return 1000;
+    return 500;
+}
+
+static IME::UserDictKind dictKindFromSelection(int sel) {
+    if (sel == 0) return IME::FIXED_DICT;
+    if (sel == 1) return IME::DYNAMIC_DICT;
+    return IME::PREDICT_DICT;
 }
 
 static std::string settingsTrim(const std::string &s) {
@@ -234,6 +247,7 @@ static void drawDictChoose() {
     ui_draw_text_centered(FONT_H, "词库管理", false, true);
     ui_draw_text(8, FONT_H * 3, "固定词库", g_settingsState.dictSelection == 0);
     ui_draw_text(8, FONT_H * 4, "动态词库", g_settingsState.dictSelection == 1);
+    ui_draw_text(8, FONT_H * 5, "联想词库", g_settingsState.dictSelection == 2);
     ui_draw_status("Enter进入 Esc返回", "");
     ui_commit();
 }
@@ -248,7 +262,7 @@ static void drawDictList(bool doCommit = true) {
     ui_clear();
     char title[64];
     snprintf(title, sizeof(title), "%s %d/%d", dictKindLabel(g_settingsState.dictKind),
-             (int)entries.size(), g_settingsState.dictKind == IME::FIXED_DICT ? 500 : 1000);
+             (int)entries.size(), dictKindLimit(g_settingsState.dictKind));
     ui_draw_text_centered(FONT_H, title, false, true);
 
     // 表格底部贴住状态栏分割线:由最后一行单元格底边=STATUS_Y反推表头基线,
@@ -294,7 +308,7 @@ static void drawDictList(bool doCommit = true) {
         }
     }
     char left[48];
-    snprintf(left, sizeof(left), "a添加 d删 /搜 已选%d", (int)g_settingsState.dictSelected.size());
+    snprintf(left, sizeof(left), "a加 d删 c清 /搜 已选%d", (int)g_settingsState.dictSelected.size());
     std::string right = g_settingsState.dictSearchBuffer.empty() ? "Space多选" : ("/" + g_settingsState.dictSearchBuffer);
     ui_draw_status(left, right.c_str());
     if (doCommit) ui_commit();
@@ -325,7 +339,7 @@ static void drawDictAdd() {
     char title[64];
     snprintf(title, sizeof(title), "添加%s", dictKindLabel(g_settingsState.dictKind));
     ui_draw_text_centered(FONT_H, title, false, true);
-    ui_draw_text(4, FONT_H * 3, "格式: code word");
+    ui_draw_text(4, FONT_H * 3, g_settingsState.dictKind == IME::PREDICT_DICT ? "格式: 上字 候选" : "格式: code word");
     std::string display = g_settingsState.dictAddBuffer.empty() ? " " : g_settingsState.dictAddBuffer;
     ui_draw_text(4, FONT_H * 4, display.c_str());
     int cx = g_font.textWidth(display.substr(0, g_settingsState.dictAddCursor).c_str());
@@ -392,10 +406,12 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     if (g_settingsState.mode == SETTINGS_DICT_CHOOSE) {
         if (key == 0x1B || key == 'q' || key == 'Q') {
             g_settingsState.mode = SETTINGS_BROWSE;
-        } else if (key == KEY_UP || key == 'k' || key == KEY_DOWN || key == 'j') {
-            g_settingsState.dictSelection = 1 - g_settingsState.dictSelection;
+        } else if (key == KEY_UP || key == 'k') {
+            g_settingsState.dictSelection = (g_settingsState.dictSelection + 2) % 3;
+        } else if (key == KEY_DOWN || key == 'j') {
+            g_settingsState.dictSelection = (g_settingsState.dictSelection + 1) % 3;
         } else if (key == 0x0A || key == 0x0D) {
-            g_settingsState.dictKind = g_settingsState.dictSelection == 0 ? IME::FIXED_DICT : IME::DYNAMIC_DICT;
+            g_settingsState.dictKind = dictKindFromSelection(g_settingsState.dictSelection);
             g_settingsState.dictSelection = 0;
             g_settingsState.dictScroll = 0;
             g_settingsState.dictSelected.clear();
@@ -487,6 +503,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.dictSelected.clear();
             if (g_settingsState.dictSelection >= total - (int)indices.size())
                 g_settingsState.dictSelection = std::max(0, total - (int)indices.size() - 1);
+        } else if ((key == 'c' || key == 'C') && !entries.empty()) {
+            g_ime.clearUserDict(g_settingsState.dictKind);
+            g_settingsState.dictSelected.clear();
+            g_settingsState.dictSelection = 0;
+            g_settingsState.dictScroll = 0;
         }
         drawDictList();
         return APP_SETTINGS;

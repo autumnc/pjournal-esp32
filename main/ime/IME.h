@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "ime_config.h"
+#include "yong_dict.h"
 
 class IME {
 public:
@@ -51,11 +53,12 @@ public:
     bool predicting() const { return _predicting; }
     void cancelComposition() { reset(); }
 
-    enum UserDictKind { FIXED_DICT = 0, DYNAMIC_DICT = 1 };
+    enum UserDictKind { FIXED_DICT = 0, DYNAMIC_DICT = 1, PREDICT_DICT = 2 };
     struct UserEntryView { std::string code; std::string word; int count; bool trad = false; };
     const std::vector<UserEntryView> userDictEntries(UserDictKind kind) const;
     bool addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word);
     void removeUserDictEntries(UserDictKind kind, const std::vector<int> &indices);
+    void clearUserDict(UserDictKind kind);
     size_t userDictSize(UserDictKind kind) const;
     void ensureUserDictLoaded();
 
@@ -103,37 +106,36 @@ private:
 
     const uint8_t *_blob = nullptr;
     size_t _blobSize = 0;
+    ime::Im3Dictionary _dict;
     uint32_t _count = 0;
     size_t _recordBase = HEADER_SIZE + INDEX_ENTRIES * 4;
-    std::vector<uint32_t> _index;
 
-    uint32_t _wordCount = 0;
-    std::vector<uint32_t> _wordIndex;
-    const uint8_t *_wordData = nullptr;
-    size_t _wordDataSize = 0;
-
-    uint32_t _predCount = 0;
-    const uint8_t *_predData = nullptr;
-    size_t _predDataSize = 0;
     bool _predicting = false;
     std::string _predChar;
+    std::string _lastCommitChar;
     int _partialStart = 0;
     int _maxMatchLen = 0;
     std::string _prefix;
     std::string _remainder;
     std::string _codeOrig;
 
-    struct UserEntry { std::string code; std::string word; int count; bool trad = false; };
+    struct UserEntry { std::string code; std::string word; int count; bool trad = false; std::string initial; };
     std::vector<UserEntry> _fixedUserWords;
     std::vector<UserEntry> _dynamicUserWords;
+    std::vector<UserEntry> _userPredictWords;
     bool _fixedUserDirty = false;
     bool _dynamicUserDirty = false;
+    bool _userPredictDirty = false;
     bool _userDictLoaded = false;
     void loadUserDict();
     bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
     void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
     void addUserWord(const std::string &code, const std::string &word);
     void bumpFrequency(const std::string &code, const std::string &word);
+    void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true);
+    void learnPredictPairs(const std::string &text);
+    void rememberCommittedText(const std::string &text);
+    static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
 
     bool _deleteMode = false;
     bool _vMode = false;
@@ -141,6 +143,7 @@ private:
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
     std::vector<std::string> _englishWords;
+#if PJOURNAL_IME_ENABLE_LIANGFEN
     bool _lfMode = false;
     const uint8_t *_lfBlob = nullptr;
     uint32_t _lfCount = 0;
@@ -150,6 +153,10 @@ private:
     void searchLfWindow(const char *code, int len, uint32_t &lo, uint32_t &hi);
     bool readLfCode(uint16_t i, char out[13]);
     bool readLfHanzi(uint16_t i, char out[4]);
+#else
+    bool _lfMode = false;
+    void loadLfDict() {}
+#endif
 
     void searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi);
     static int pinyinPrefixLen(const std::string &code);
@@ -157,7 +164,9 @@ private:
     bool readCode(uint32_t i, char out[MAX_CODE_LEN + 1]);
     bool readHanzi(uint32_t i, char out[HANZI_SIZE + 1]);
     uint8_t readRecordFlag(uint32_t i);
+#if PJOURNAL_IME_ENABLE_LIANGFEN
     uint8_t readLfFlag(uint16_t i);
+#endif
 
     std::string _code;
     std::vector<std::string> _all;
@@ -169,6 +178,8 @@ private:
     std::vector<int> _pageStarts;        // 每页起始候选索引; 按实测宽度分页时由 buildPage 重建
     WidthFn _widthFn = nullptr;          // 候选文本宽度测量回调
     int _displayWidth = 0;               // 候选行可用像素宽度(0=退化为固定 _pageSize 分页)
+    bool _fixedCandidatePaging = false;  // 短辅音输入走固定分页, 避免热路径反复测字宽
+    size_t _candidateLimit = MAX_CANDIDATES;
 
     mutable std::string _displayCodeCache;
     mutable bool _displayCodeDirty = true;
@@ -186,6 +197,8 @@ private:
     void lookupKaomoji(const std::string &query);  // v/编码 拼音/声母搜索文字表情
     void lookupEnglishMode();
     void loadEnglishDict();
+    bool hasCandidate(const std::string &text) const;
+    bool appendCandidate(const std::string &text, int candLen);
     void appendSingleCharCandidates(const std::string &prefix, int candLen);  // 主词典单字前缀候选
     void buildPage();
     bool pagePrev();
