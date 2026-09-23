@@ -31,12 +31,17 @@ dang an guan	档案馆
 shu ru	输入
 shu ru fa	输入法
 hou xuan	候选
+hou xuan qu	候选区
 hou xuan ci	候选词
 yong hu ci	用户词
 yong hu ci ku	用户词库
+yong hu ci dian	用户词典
 lian xiang	联想
+lian xiang gong neng	联想功能
 lian xiang ci	联想词
 lian xiang ci ku	联想词库
+gu ding ci ku	固定词库
+dong tai ci ku	动态词库
 ci ku	词库
 ci pin	词频
 ci zu	词组
@@ -50,17 +55,25 @@ fen ci	分词
 gu jian	固件
 shua ji	刷机
 qi dong	启动
+qi dong jie mian	启动界面
 chong qi	重启
 ka dun	卡顿
 you hua	优化
 ban ben	版本
 lan ya	蓝牙
+lan ya jian pan	蓝牙键盘
+lan ya she bei	蓝牙设备
+lan ya lian jie	蓝牙连接
 jian pan	键盘
+jian pan dian liang	键盘电量
 dian liang	电量
 ping mu	屏幕
+ping mu shua xin	屏幕刷新
 she zhi	设置
+she zhi xiang	设置项
 ri ji	日记
 tong bu	同步
+wen jian tong bu	文件同步
 wen ben	文本
 bian ji	编辑
 biao dian	标点
@@ -72,14 +85,20 @@ mu lu	目录
 dao chu	导出
 dao ru	导入
 yu yin	语音
+yu yin shu ru	语音输入
+yu yin shi bie	语音识别
 shi bie	识别
 wang luo	网络
 mi ma	密码
 ling gan	灵感
+ling gan ji lu	灵感记录
 da gang	大纲
 ren wu	任务
+ren wu guan li	任务管理
 dai ban	待办
 bi ji	笔记
+bi ji tong bu	笔记同步
 xiu gai	修改
 bao cun	保存
 sou suo	搜索
+sou suo jie guo	搜索结果
