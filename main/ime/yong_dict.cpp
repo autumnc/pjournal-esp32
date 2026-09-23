@@ -1,7 +1,5 @@
 #include "yong_dict.h"
-#include "yong_pinyin.h"
 
-#include <algorithm>
 #include <cstring>
 #include <utility>
 
@@ -12,24 +10,6 @@ static const uint8_t kIm3Magic[4] = {'I', 'M', 'E', '3'};
 uint32_t Im3Dictionary::readU32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-uint32_t Im3Dictionary::packInitialPrefix(const char *s, int len) {
-    if (!s || len < 1) return 0;
-    uint32_t key = 0;
-    int n = std::min(len, 6);
-    for (int i = 0; i < n; i++) {
-        char c = s[i];
-        if (c < 'a' || c > 'z') return 0;
-        key |= (uint32_t)(c - 'a' + 1) << ((5 - i) * 5);
-    }
-    return key;
-}
-
-uint32_t Im3Dictionary::initialPrefixMask(int len) {
-    if (len <= 0) return 0;
-    if (len >= 6) return 0x3fffffff;
-    return 0x3fffffffu & ~((1u << ((6 - len) * 5)) - 1u);
 }
 
 int Im3Dictionary::utf8CharLen(uint8_t c) {
@@ -61,7 +41,6 @@ bool Im3Dictionary::parse(const uint8_t *blob, size_t size) {
     _wordIndex.clear();
     _wordData = nullptr;
     _wordDataSize = 0;
-    _initialIndex.clear();
     _predictCount = 0;
     _predictData = nullptr;
     _predictDataSize = 0;
@@ -109,43 +88,9 @@ bool Im3Dictionary::parse(const uint8_t *blob, size_t size) {
             if (indexOk) {
                 _wordData = wp;
                 _wordDataSize = wordDataSize;
-                _initialIndex.reserve(_wordCount);
-                size_t pos = 0;
-                while (pos < _wordDataSize) {
-                    size_t groupPos = pos;
-                    uint8_t cl = _wordData[pos];
-                    if (cl == 0 || pos + 1 + cl > _wordDataSize) break;
-                    std::string code((const char *)_wordData + pos + 1, cl);
-                    pos += 1 + cl;
-                    if (pos >= _wordDataSize) break;
-                    uint8_t n = _wordData[pos++];
-                    std::string init = PinyinEngine::initialCode(code);
-                    uint32_t key = packInitialPrefix(init.c_str(), (int)init.size());
-                    if (key != 0) {
-                        InitialEntry entry;
-                        entry.key = key;
-                        entry.posLen = ((uint32_t)std::min<size_t>(init.size(), 6) << 24) |
-                                       ((uint32_t)groupPos & 0x00ffffffu);
-                        _initialIndex.push_back(entry);
-                    }
-                    for (uint8_t j = 0; j < n && pos < _wordDataSize; j++) {
-                        uint8_t wl = _wordData[pos++];
-                        if (wl == 0 || pos + wl + 1 > _wordDataSize) {
-                            pos = _wordDataSize;
-                            break;
-                        }
-                        pos += wl + 1;
-                    }
-                }
-                std::stable_sort(_initialIndex.begin(), _initialIndex.end(),
-                    [](const InitialEntry &a, const InitialEntry &b) {
-                        if (a.key != b.key) return a.key < b.key;
-                        return a.pos() < b.pos();
-                });
             } else {
                 _wordCount = 0;
                 _wordIndex.clear();
-                _initialIndex.clear();
             }
 
             size_t predBase = wordBase + 4 + (size_t)kIndexEntries * 4 + _wordDataSize;
@@ -235,33 +180,6 @@ void Im3Dictionary::wordWindow(const char *code, int len, size_t &lo, size_t &hi
     int k = c0 * 26 + c1;
     lo = _wordIndex[k];
     hi = (k + 1 < kIndexEntries) ? _wordIndex[k + 1] : _wordDataSize;
-}
-
-void Im3Dictionary::initialWindow(const char *initial, int len, size_t &lo, size_t &hi) const {
-    lo = 0;
-    hi = 0;
-    if (!_valid || _initialIndex.empty() || !initial || len < 1) return;
-    int prefixLen = std::min(len, 6);
-    uint32_t prefix = packInitialPrefix(initial, prefixLen);
-    if (prefix == 0) return;
-    uint32_t mask = initialPrefixMask(prefixLen);
-    auto first = std::lower_bound(_initialIndex.begin(), _initialIndex.end(), prefix,
-        [](const InitialEntry &entry, uint32_t value) {
-            return entry.key < value;
-    });
-    uint32_t upper = prefix | (~mask & 0x3fffffffu);
-    auto last = std::upper_bound(_initialIndex.begin(), _initialIndex.end(), upper,
-        [](uint32_t value, const InitialEntry &entry) {
-            return value < entry.key;
-    });
-    lo = (size_t)(first - _initialIndex.begin());
-    hi = (size_t)(last - _initialIndex.begin());
-}
-
-bool Im3Dictionary::readInitialEntry(size_t i, InitialEntry &out) const {
-    if (!_valid || i >= _initialIndex.size()) return false;
-    out = _initialIndex[i];
-    return true;
 }
 
 bool Im3Dictionary::nextWordGroup(size_t &pos, size_t end, WordGroup &out) const {

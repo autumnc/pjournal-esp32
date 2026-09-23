@@ -1752,33 +1752,38 @@ void IME::lookup() {
         else if (qlen == 3) scanBudget = IME_MAX_MEDIUM_INITIAL_GROUP_SCAN;
         else scanBudget = IME_MAX_LONG_INITIAL_GROUP_SCAN;
         const uint8_t *wordData = _dict.wordData();
-        size_t ilo = 0, ihi = 0;
-        _dict.initialWindow(q, qlen, ilo, ihi);
+        size_t slo = 0, shi = _dict.wordDataSize();
+        _dict.wordWindow(q, 1, slo, shi);
+        size_t spos = slo;
         int safety = 0;
-        for (size_t ipos = ilo; ipos < ihi && safety++ < scanBudget &&
-                              (int)initialCandidates.size() < IME_MAX_INITIAL_COLLECT; ipos++) {
-            ime::Im3Dictionary::InitialEntry entry;
-            if (!_dict.readInitialEntry(ipos, entry)) break;
-            size_t spos = entry.pos();
-            if (spos >= _dict.wordDataSize()) continue;
+        while (spos < shi && safety++ < scanBudget &&
+               (int)initialCandidates.size() < IME_MAX_INITIAL_COLLECT) {
             uint8_t cl = wordData[spos];
-            if (cl == 0 || spos + 1 + cl > _dict.wordDataSize()) continue;
+            if (cl == 0 || spos + 1 + cl > shi) break;
+            const char *wc = (const char *)wordData + spos + 1;
             size_t next = spos + 1 + cl;
-            if (next >= _dict.wordDataSize()) continue;
+            if (next >= shi) break;
             uint8_t n = wordData[next++];
-            for (uint8_t j = 0; j < n && next < _dict.wordDataSize(); j++) {
+            bool initMatch = pinyinInitialStartsWithCompat(wc, cl, q, qlen);
+            std::string groupInit;
+            if (initMatch) groupInit = pinyinInitialCodeCompat(std::string(wc, cl));
+            for (uint8_t j = 0; j < n && next < shi; j++) {
                 uint8_t wl = wordData[next++];
-                if (wl == 0 || next + wl + 1 > _dict.wordDataSize()) {
+                if (wl == 0 || next + wl + 1 > shi) {
+                    next = shi;
                     break;
                 }
                 uint8_t wf = wordData[next + wl];
-                std::string w((const char *)wordData + next, wl);
-                if (wordVisible(_trad, w, wf)) {
-                    int score = initialPhraseCandidateScoreFromLength(entry.initialLen(), qlen, w);
-                    if (score >= 0) addInitialCandidate(w, cl, score);
+                if (initMatch) {
+                    std::string w((const char *)wordData + next, wl);
+                    if (wordVisible(_trad, w, wf)) {
+                        int score = initialPhraseCandidateScoreFromLength((int)groupInit.length(), qlen, w);
+                        if (score >= 0) addInitialCandidate(w, cl, score);
+                    }
                 }
                 next += wl + 1;
             }
+            spos = next;
         }
         std::stable_sort(initialCandidates.begin(), initialCandidates.end(),
             [](const ScoredPhrase &a, const ScoredPhrase &b) {

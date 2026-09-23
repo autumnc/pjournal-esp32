@@ -32,13 +32,6 @@ public:
         std::vector<std::string> candidates;
     };
 
-    struct InitialEntry {
-        uint32_t key = 0;
-        uint32_t posLen = 0;
-        uint32_t pos() const { return posLen & 0x00ffffffu; }
-        int initialLen() const { return (int)(posLen >> 24); }
-    };
-
     bool parse(const uint8_t *blob, size_t size);
     bool valid() const { return _valid; }
 
@@ -63,16 +56,11 @@ public:
     uint8_t readSingleFlag(uint32_t i) const;
 
     void wordWindow(const char *code, int len, size_t &lo, size_t &hi) const;
-    void initialWindow(const char *initial, int len, size_t &lo, size_t &hi) const;
-    bool readInitialEntry(size_t i, InitialEntry &out) const;
-    size_t initialEntryCount() const { return _initialIndex.size(); }
     bool nextWordGroup(size_t &pos, size_t end, WordGroup &out) const;
     bool nextPredictGroup(size_t &pos, PredictGroup &out) const;
 
 private:
     static uint32_t readU32(const uint8_t *p);
-    static uint32_t packInitialPrefix(const char *s, int len);
-    static uint32_t initialPrefixMask(int len);
     static int utf8CharLen(uint8_t c);
     static bool isPadding(const uint8_t *p, size_t size);
 
@@ -91,7 +79,6 @@ private:
     std::vector<uint32_t> _wordIndex;
     const uint8_t *_wordData = nullptr;
     size_t _wordDataSize = 0;
-    std::vector<InitialEntry> _initialIndex;
 
     uint32_t _predictCount = 0;
     const uint8_t *_predictData = nullptr;
