@@ -51,7 +51,9 @@ static const Timbre *timbreOf(const std::string &name) {
     return &TIMBRES[0];
 }
 
-static bool enabled() { return g_settings.inputMode() == "typewriter"; }
+static bool enabled() {
+    return g_settings.inputMode() == "typewriter" && g_settings.typingClickEnabled();
+}
 
 // 拆音频:与 voice_audio_deinit 同样逆序 + 先 disable 后 del,防泄漏控制器 0
 static void tcRelease() {

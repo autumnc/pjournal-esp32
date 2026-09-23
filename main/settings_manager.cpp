@@ -148,6 +148,8 @@ std::string SettingsManager::inputMode() { return getString("input_mode", "norma
 std::string SettingsManager::editorOrientation() { return getString("editor_orientation", "horizontal"); }
 std::string SettingsManager::verticalReferenceLineStyle() { return getString("vertical_ref_line_style", "solid"); }
 
+bool SettingsManager::typingClickEnabled() { return getString("click_enabled", "1") != "0"; }
+
 std::string SettingsManager::clickChineseMode() { return getString("click_chinese", "key"); }
 
 int SettingsManager::typingClickVolume() {

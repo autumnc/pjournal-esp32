@@ -34,6 +34,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"vertical_ref_line", "竖排参考线", false, false},
     {"_vertical_ref_line_style", "参考线样式", false, true},
     {"_input_mode", "输入模式", false, true},
+    {"click_enabled", "打字音效", false, false},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
     {"_click_timbre", "打字音效音色", false, true},
@@ -77,9 +78,11 @@ static bool fieldHidden(int idx) {
         return g_settings.editorOrientation() != "vertical";
     if (strcmp(k, "_vertical_ref_line_style") == 0)
         return g_settings.editorOrientation() != "vertical" || !g_settings.verticalReferenceLine();
+    if (strcmp(k, "click_enabled") == 0)
+        return g_settings.inputMode() != "typewriter";
     if (strcmp(k, "_click_volume") == 0 || strcmp(k, "_click_timbre") == 0 ||
         strcmp(k, "_click_chinese") == 0)
-        return g_settings.inputMode() != "typewriter";
+        return g_settings.inputMode() != "typewriter" || !g_settings.typingClickEnabled();
     if (strcmp(k, "baidu_asr_api_key") == 0 || strcmp(k, "baidu_asr_secret_key") == 0)
         return g_settings.voiceAsrService() != "baidu";
     return false;
@@ -162,7 +165,8 @@ static bool isToggleField(const char *key) {
     return strcmp(key, "auto_save") == 0 || strcmp(key, "auto_sleep") == 0 ||
            strcmp(key, "sleep_screen") == 0 || strcmp(key, "md_render") == 0 ||
            strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0 ||
-           strcmp(key, "recovery_draft") == 0 || strcmp(key, "vertical_ref_line") == 0;
+           strcmp(key, "recovery_draft") == 0 || strcmp(key, "vertical_ref_line") == 0 ||
+           strcmp(key, "click_enabled") == 0;
 }
 
 static bool toggleValue(const char *key) {
@@ -170,6 +174,7 @@ static bool toggleValue(const char *key) {
     if (strcmp(key, "auto_sleep") == 0) return v != "0";  // 默认开
     if (strcmp(key, "md_render") == 0) return v != "0";   // 默认开
     if (strcmp(key, "recovery_draft") == 0) return v != "0";  // 默认开
+    if (strcmp(key, "click_enabled") == 0) return v != "0";  // 默认开
     return v == "1";  // auto_save: 默认关
 }
 
@@ -977,7 +982,13 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             }
         } else if (isToggleField(f.key)) {
             // 开/关切换:存 "1"(开) 或 "0"(关)
-            g_settings.setString(f.key, toggleValue(f.key) ? "0" : "1");
+            bool next = !toggleValue(f.key);
+            g_settings.setString(f.key, next ? "1" : "0");
+            if (strcmp(f.key, "click_enabled") == 0) {
+                if (!next) typingClickRelease();
+                if (g_settingsState.selection > fieldVisibleCount() - 1)
+                    g_settingsState.selection = fieldVisibleCount() - 1;
+            }
         } else {
             g_settingsState.editBuffer = g_settings.getString(f.key);
             g_settingsState.editCursor = (int)g_settingsState.editBuffer.length();
