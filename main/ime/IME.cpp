@@ -1750,15 +1750,22 @@ void IME::lookup() {
             _dict.wordWindow(scanCode, scanLen, wlo, whi);
             size_t wpos = wlo;
             int safety = 0;
-            while (wpos < whi && _all.size() < IME_FAST_CANDIDATE_LIMIT && safety++ < IME_MAX_PHRASE_GROUP_SCAN) {
+            int scanBudget = IME_MAX_PHRASE_GROUP_SCAN;
+            if (scanLen >= 10) scanBudget = 20000;
+            else if (scanLen >= 8) scanBudget = 10000;
+            else if (scanLen >= 6) scanBudget = 3000;
+            while (wpos < whi && _all.size() < IME_FAST_CANDIDATE_LIMIT && safety++ < scanBudget) {
                 uint8_t cl = wordData[wpos];
                 if (cl == 0 || wpos + 1 + cl > whi) break;
                 const char *wc = (const char *)wordData + wpos + 1;
                 size_t next = wpos + 1 + cl;
                 if (next >= whi) break;
                 uint8_t n = wordData[next++];
-                int matchLen = std::min((int)cl, scanLen);
-                bool groupMatch = (strncmp(wc, scanCode, matchLen) == 0);
+                int cmpLen = std::min((int)cl, scanLen);
+                int cmp = strncmp(wc, scanCode, cmpLen);
+                if (cmp > 0) break;
+                bool groupMatch = (cmp == 0 && (int)cl >= scanLen &&
+                                   strncmp(wc, scanCode, scanLen) == 0);
                 for (uint8_t j = 0; j < n && next < whi; j++) {
                     uint8_t wl = wordData[next++];
                     if (wl == 0 || next + wl + 1 > whi) {
@@ -1766,7 +1773,7 @@ void IME::lookup() {
                         break;
                     }
                     uint8_t wf = wordData[next + wl];
-                    if (groupMatch && !(cl < scanLen && wl <= 3)) {
+                    if (groupMatch) {
                         std::string w((const char *)wordData + next, wl);
                         int consumedLen = aliasScan ? qlen : (int)cl;
                         if (wordVisible(_trad, w, wf) && appendCandidate(w, consumedLen)) {
