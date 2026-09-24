@@ -1,5 +1,6 @@
 #include "yong_dict.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
@@ -10,6 +11,15 @@ static const uint8_t kIm3Magic[4] = {'I', 'M', 'E', '3'};
 uint32_t Im3Dictionary::readU32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+uint32_t Im3Dictionary::hashBytes(const char *data, size_t len) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) {
+        h ^= (uint8_t)data[i];
+        h *= 16777619u;
+    }
+    return h ? h : 1;
 }
 
 int Im3Dictionary::utf8CharLen(uint8_t c) {
@@ -44,6 +54,8 @@ bool Im3Dictionary::parse(const uint8_t *blob, size_t size) {
     _predictCount = 0;
     _predictData = nullptr;
     _predictDataSize = 0;
+    _predictIndexBuilt = false;
+    _predictIndex.clear();
 
     if (!blob || size < kHeaderSize || std::memcmp(blob, kIm3Magic, sizeof(kIm3Magic)) != 0)
         return false;
@@ -217,6 +229,22 @@ bool Im3Dictionary::nextWordGroup(size_t &pos, size_t end, WordGroup &out) const
 }
 
 bool Im3Dictionary::nextPredictGroup(size_t &pos, PredictGroup &out) const {
+    size_t start = pos;
+    if (!readPredictGroupAt(start, out)) {
+        pos = _predictDataSize;
+        return false;
+    }
+    pos = start;
+    int keyLen = utf8CharLen(_predictData[pos]);
+    pos += (size_t)keyLen + 1;
+    for (uint8_t i = 0, n = (uint8_t)out.candidates.size(); i < n && pos < _predictDataSize; i++) {
+        uint8_t wl = _predictData[pos++];
+        pos += wl;
+    }
+    return true;
+}
+
+bool Im3Dictionary::readPredictGroupAt(size_t pos, PredictGroup &out) const {
     out.key.clear();
     out.candidates.clear();
     if (!_valid || !_predictData || pos >= _predictDataSize) return false;
@@ -245,10 +273,62 @@ bool Im3Dictionary::nextPredictGroup(size_t &pos, PredictGroup &out) const {
     return true;
 }
 
+bool Im3Dictionary::buildPredictIndex() const {
+    if (_predictIndexBuilt) return !_predictIndex.empty();
+    _predictIndexBuilt = true;
+    _predictIndex.clear();
+    if (!_valid || !_predictData || _predictCount == 0) return false;
+
+    size_t pos = 0;
+    for (uint32_t group = 0; group < _predictCount && pos < _predictDataSize; group++) {
+        size_t start = pos;
+        int keyLen = utf8CharLen(_predictData[pos]);
+        if (keyLen <= 0 || pos + (size_t)keyLen + 1 > _predictDataSize) {
+            _predictIndex.clear();
+            return false;
+        }
+        uint32_t h = hashBytes((const char *)_predictData + pos, (size_t)keyLen);
+        pos += (size_t)keyLen;
+        uint8_t n = _predictData[pos++];
+        bool ok = true;
+        for (uint8_t i = 0; i < n && ok; i++) {
+            if (pos >= _predictDataSize) { ok = false; break; }
+            uint8_t wl = _predictData[pos++];
+            if (wl == 0 || pos + wl > _predictDataSize) ok = false;
+            else pos += wl;
+        }
+        if (!ok || start > UINT32_MAX) {
+            _predictIndex.clear();
+            return false;
+        }
+        _predictIndex.push_back({h, (uint32_t)start});
+    }
+    std::stable_sort(_predictIndex.begin(), _predictIndex.end(),
+        [](const PredictIndexEntry &a, const PredictIndexEntry &b) {
+            if (a.hash != b.hash) return a.hash < b.hash;
+            return a.offset < b.offset;
+        });
+    return !_predictIndex.empty();
+}
+
 bool Im3Dictionary::findPredictGroup(const std::string &key, PredictGroup &out) const {
     out.key.clear();
     out.candidates.clear();
     if (!_valid || !_predictData || key.empty()) return false;
+
+    if (buildPredictIndex()) {
+        uint32_t h = hashBytes(key.data(), key.size());
+        auto lo = std::lower_bound(_predictIndex.begin(), _predictIndex.end(), h,
+            [](const PredictIndexEntry &entry, uint32_t value) { return entry.hash < value; });
+        auto hi = std::upper_bound(lo, _predictIndex.end(), h,
+            [](uint32_t value, const PredictIndexEntry &entry) { return value < entry.hash; });
+        for (auto it = lo; it != hi; ++it) {
+            if (readPredictGroupAt(it->offset, out) && out.key == key) return true;
+        }
+        out.key.clear();
+        out.candidates.clear();
+        return false;
+    }
 
     const uint8_t *base = _predictData;
     size_t pos = 0;

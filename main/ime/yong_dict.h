@@ -61,9 +61,17 @@ public:
     bool findPredictGroup(const std::string &key, PredictGroup &out) const;
 
 private:
+    struct PredictIndexEntry {
+        uint32_t hash = 0;
+        uint32_t offset = 0;
+    };
+
     static uint32_t readU32(const uint8_t *p);
+    static uint32_t hashBytes(const char *data, size_t len);
     static int utf8CharLen(uint8_t c);
     static bool isPadding(const uint8_t *p, size_t size);
+    bool buildPredictIndex() const;
+    bool readPredictGroupAt(size_t pos, PredictGroup &out) const;
 
     bool _valid = false;
     const uint8_t *_blob = nullptr;
@@ -84,6 +92,8 @@ private:
     uint32_t _predictCount = 0;
     const uint8_t *_predictData = nullptr;
     size_t _predictDataSize = 0;
+    mutable bool _predictIndexBuilt = false;
+    mutable std::vector<PredictIndexEntry> _predictIndex;
 };
 
 } // namespace ime

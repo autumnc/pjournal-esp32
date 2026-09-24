@@ -6,6 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SEG_SOURCE = ROOT / "main" / "ime" / "seg_table_source.txt"
 IME_CPP = ROOT / "main" / "ime" / "IME.cpp"
+IME_H = ROOT / "main" / "ime" / "IME.h"
+YONG_DICT_CPP = ROOT / "main" / "ime" / "yong_dict.cpp"
+KAOMOJI_H = ROOT / "main" / "ime" / "kaomoji_table.h"
+ENGLISH_WORDS = ROOT / "main" / "ime" / "english_words.txt"
 
 
 def initial_of(syllable, keep_zh_ch_sh):
@@ -75,6 +79,44 @@ def load_builtin_predict():
     return entries
 
 
+def load_fullwidth_punct():
+    text = IME_CPP.read_text(encoding="utf-8")
+    block = text.split("bool IME::handleFullwidthPunct", 1)[1]
+    block = block.split("bool IME::handleFullwidthChar", 1)[0]
+    entries = {}
+    for match in re.finditer(r"case '(.|\\\\)':\s*out = \"([^\"]+)\";\s*return true;", block):
+        key = match.group(1)
+        if key == "\\\\":
+            key = "\\"
+        entries[key] = match.group(2)
+    entries["'"] = ["‘", "’"]
+    entries['"'] = ["“", "”"]
+    return entries
+
+
+def load_kaomoji_entries():
+    text = KAOMOJI_H.read_text(encoding="utf-8")
+    entries = []
+    for match in re.finditer(r'\{"([^"]*)",\s*"([^"]*)"\},', text):
+        entries.append((match.group(1), match.group(2)))
+    hot_match = re.search(r"K_KAOMOJI_HOT = (\d+)", text)
+    hot = int(hot_match.group(1)) if hot_match else 0
+    return entries, hot
+
+
+def load_english_words():
+    return [
+        line.strip()
+        for line in ENGLISH_WORDS.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def require_source_contains(name, text, snippet):
+    if snippet not in text:
+        raise SystemExit(f"{name}: missing source snippet {snippet!r}")
+
+
 def parse_user_line(raw):
     line = raw.strip()
     if len(line) < 3 or " " not in line:
@@ -110,7 +152,8 @@ def merge_user_entries(lines):
 def require_contains(name, actual, expected, limit=8):
     head = actual[:limit]
     if expected not in head:
-        raise SystemExit(f"{name}: expected {expected!r} in first {limit}, got {head!r}")
+        preview = head[:20]
+        raise SystemExit(f"{name}: expected {expected!r} in first {limit}, got {preview!r}")
 
 
 def require_equal(name, actual, expected):
@@ -121,6 +164,12 @@ def require_equal(name, actual, expected):
 def main():
     entries = load_seg_entries()
     predict = load_builtin_predict()
+    punct = load_fullwidth_punct()
+    kaomoji, hot_count = load_kaomoji_entries()
+    english_words = load_english_words()
+    ime_cpp = IME_CPP.read_text(encoding="utf-8")
+    ime_h = IME_H.read_text(encoding="utf-8")
+    yong_dict_cpp = YONG_DICT_CPP.read_text(encoding="utf-8")
 
     cases = [
         ("full shuru", seg_candidates("shuru", entries), "输入"),
@@ -136,6 +185,21 @@ def main():
     require_equal("predict 我", predict["我"][:3], ["们", "的", "也"])
     require_equal("predict 输", predict["输"][:3], ["入", "出", "法"])
 
+    require_equal("fullwidth comma", punct[","], "，")
+    require_equal("fullwidth period", punct["."], "。")
+    require_equal("fullwidth backslash", punct["\\"], "、")
+    require_equal("single quote pair", punct["'"], ["‘", "’"])
+    require_equal("double quote pair", punct['"'], ["“", "”"])
+
+    require_equal("v hot count", hot_count, 18)
+    require_contains("v hot", [face for _, face in kaomoji[:hot_count]], ":)", hot_count)
+    require_contains("v hot QAQ", [face for _, face in kaomoji[:hot_count]], "QAQ", hot_count)
+    require_contains("v/biaodian", [face for code, face in kaomoji if code == "biaodian"], "\\357\\274\\214", 80)
+    require_contains("v/kaixin", [face for code, face in kaomoji if code == "kaixin"], ":)", 8)
+
+    require_contains("english input", english_words, "input", len(english_words))
+    require_contains("english write", english_words, "write", len(english_words))
+
     merged = merge_user_entries([
         "shuru 输入 2",
         "shuru 输入 5",
@@ -146,6 +210,13 @@ def main():
     require_equal("journal max count", merged[("shuru", "输入", False)], 5)
     require_equal("journal trad", merged[("shuru", "輸入", True)], 3)
     require_equal("journal malformed fallback", merged[("bad-count", "词", False)], 1)
+    require_source_contains("journal batching constant", ime_cpp, "USERDICT_JOURNAL_BATCH_LIMIT = 16")
+    require_source_contains("journal force before save", ime_cpp, "flushUserDictJournal(force);")
+
+    require_source_contains("liangfen reset max code", ime_cpp, "case PINYIN:    _maxCode = 63; break;")
+    require_source_contains("liangfen mode max code", ime_cpp, "_lfMode = true; _maxCode = 12")
+    require_source_contains("candidate fixed hashes", ime_h, "_candidateHashes[MAX_CANDIDATES]")
+    require_source_contains("predict lazy index", yong_dict_cpp, "buildPredictIndex()")
 
     print("OK: IME behavior regression checks passed")
 

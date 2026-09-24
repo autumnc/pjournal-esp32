@@ -124,9 +124,11 @@ private:
     std::string _codeOrig;
 
     struct UserEntry { std::string code; std::string word; int count; bool trad = false; std::string initial; };
+    struct PendingJournalEntry { std::string path; UserEntry entry; };
     std::vector<UserEntry> _fixedUserWords;
     std::vector<UserEntry> _dynamicUserWords;
     std::vector<UserEntry> _userPredictWords;
+    std::vector<PendingJournalEntry> _pendingUserDictJournal;
     std::unordered_map<std::string, std::vector<uint16_t>> _userPredictIndex;
     bool _userPredictIndexDirty = true;
     bool _fixedUserDirty = false;
@@ -134,12 +136,15 @@ private:
     bool _userPredictDirty = false;
     bool _userDictLoaded = false;
     int64_t _deferredUserDictSinceUs = 0;
+    int64_t _pendingUserDictJournalSinceUs = 0;
     void loadUserDict();
     bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
     void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
     void loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
                              bool &dirty, size_t maxEntries);
     void appendUserDictJournal(const char *path, const UserEntry &entry);
+    void queueUserDictJournal(const char *path, const UserEntry &entry);
+    void flushUserDictJournal(bool force);
     void clearUserDictJournal(const char *path);
     void markUserDictDirty(bool &dirty, const char *path = nullptr, const UserEntry *entry = nullptr);
     void flushUserDictSaves(bool force);

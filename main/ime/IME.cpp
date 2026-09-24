@@ -34,6 +34,8 @@ static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
 static const size_t USERPREDICT_LIMIT = 500;
 static const size_t ENGLISHDICT_LIMIT = 10000;
 static const int64_t USERDICT_DEFER_SAVE_US = 2000000;
+static const int64_t USERDICT_JOURNAL_DEFER_US = 500000;
+static const size_t USERDICT_JOURNAL_BATCH_LIMIT = 16;
 static const int IME_SCORE_EXACT_CODE = 100000;
 static const int IME_SCORE_USER_COUNT_CAP = 2000;
 static const int IME_SCORE_USER_COUNT_WEIGHT = 8;
@@ -1082,6 +1084,31 @@ void IME::appendUserDictJournal(const char *path, const UserEntry &entry) {
     fclose(f);
 }
 
+void IME::queueUserDictJournal(const char *path, const UserEntry &entry) {
+    if (!path || !entry.code.length() || !entry.word.length()) return;
+    _pendingUserDictJournal.push_back({path, entry});
+    if (_pendingUserDictJournalSinceUs == 0)
+        _pendingUserDictJournalSinceUs = esp_timer_get_time();
+    flushUserDictJournal(false);
+}
+
+void IME::flushUserDictJournal(bool force) {
+    if (_pendingUserDictJournal.empty()) {
+        _pendingUserDictJournalSinceUs = 0;
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    if (!force && _pendingUserDictJournal.size() < USERDICT_JOURNAL_BATCH_LIMIT &&
+        _pendingUserDictJournalSinceUs > 0 &&
+        now - _pendingUserDictJournalSinceUs < USERDICT_JOURNAL_DEFER_US)
+        return;
+
+    for (auto &item : _pendingUserDictJournal)
+        appendUserDictJournal(item.path.c_str(), item.entry);
+    _pendingUserDictJournal.clear();
+    _pendingUserDictJournalSinceUs = 0;
+}
+
 void IME::clearUserDictJournal(const char *path) {
     if (!path) return;
     std::string journal = userDictJournalPath(path);
@@ -1090,12 +1117,13 @@ void IME::clearUserDictJournal(const char *path) {
 
 void IME::markUserDictDirty(bool &dirty, const char *path, const UserEntry *entry) {
     dirty = true;
-    if (path && entry) appendUserDictJournal(path, *entry);
+    if (path && entry) queueUserDictJournal(path, *entry);
     if (_deferredUserDictSinceUs == 0)
         _deferredUserDictSinceUs = esp_timer_get_time();
 }
 
 void IME::flushUserDictSaves(bool force) {
+    flushUserDictJournal(force);
     if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty) {
         _deferredUserDictSinceUs = 0;
         return;
