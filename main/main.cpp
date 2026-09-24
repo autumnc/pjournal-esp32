@@ -194,6 +194,8 @@ static bool s_boot_wake_release_pending = false;
 static struct { int key = 0; int64_t queued_us = 0; } s_pending_single;
 
 static void enterLightSleep(void) {
+    IME::getInstance().flushUserDictSavesNow();
+
     // 休眠提示画在底部状态栏位置、居中,不遮挡/清空上方画面——
     // 保留画面模式下,最后画面 + 底部提示在整个休眠期间持续显示(RLCD 零功耗)
     const char *hint = "休眠中 按键唤醒";

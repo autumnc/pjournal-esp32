@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 #include "ime_config.h"
 #include "yong_dict.h"
 
@@ -52,6 +54,7 @@ public:
     void endPredict() { _predicting = false; _predChar = ""; }
     bool predicting() const { return _predicting; }
     void cancelComposition() { reset(); }
+    void flushUserDictSavesNow() { flushUserDictSaves(true); }
 
     enum UserDictKind { FIXED_DICT = 0, DYNAMIC_DICT = 1, PREDICT_DICT = 2 };
     struct UserEntryView { std::string code; std::string word; int count; bool trad = false; };
@@ -124,13 +127,19 @@ private:
     std::vector<UserEntry> _fixedUserWords;
     std::vector<UserEntry> _dynamicUserWords;
     std::vector<UserEntry> _userPredictWords;
+    std::unordered_map<std::string, std::vector<uint16_t>> _userPredictIndex;
+    bool _userPredictIndexDirty = true;
     bool _fixedUserDirty = false;
     bool _dynamicUserDirty = false;
     bool _userPredictDirty = false;
     bool _userDictLoaded = false;
+    int64_t _deferredUserDictSinceUs = 0;
     void loadUserDict();
     bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
     void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
+    void markUserDictDirty(bool &dirty);
+    void flushUserDictSaves(bool force);
+    void rebuildUserPredictIndex();
     void addUserWord(const std::string &code, const std::string &word);
     void bumpFrequency(const std::string &code, const std::string &word);
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true);
@@ -171,6 +180,7 @@ private:
 
     std::string _code;
     std::vector<std::string> _all;
+    std::unordered_set<std::string> _candidateSeen;
     std::vector<int> _candLen;  // code length per candidate in _all
     std::vector<std::string> _page;
     int _pageStart = 0;
@@ -199,6 +209,8 @@ private:
     void lookupEnglishMode();
     void loadEnglishDict();
     bool hasCandidate(const std::string &text) const;
+    void clearCandidates();
+    void rebuildCandidateSeen();
     bool appendCandidate(const std::string &text, int candLen);
     void appendSingleCharCandidates(const std::string &prefix, int candLen);  // 主词典单字前缀候选
     void buildPage();

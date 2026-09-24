@@ -31,6 +31,32 @@ static const size_t USERDICT_FIXED_LIMIT = 500;
 static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
 static const size_t USERPREDICT_LIMIT = 500;
 static const size_t ENGLISHDICT_LIMIT = 10000;
+static const int64_t USERDICT_DEFER_SAVE_US = 2000000;
+static const int IME_SCORE_EXACT_CODE = 100000;
+static const int IME_SCORE_USER_COUNT_CAP = 2000;
+static const int IME_SCORE_USER_COUNT_WEIGHT = 8;
+static const int IME_SCORE_PREFIX_BASE = 64;
+static const int IME_SCORE_CODE_MATCH_UNIT = 1000;
+static const int IME_SCORE_PHRASE_OVERMATCH_UNIT = 1200;
+static const int IME_SCORE_PHRASE_OVERMATCH_CAP = 8000;
+static const int IME_SCORE_SYLLABLE_BASE = 64;
+static const int IME_SCORE_SYLLABLE_DISTANCE_UNIT = 16;
+static const int IME_SCORE_MULTI_CHAR_BONUS = 8;
+static const int IME_MATURE_LONG_PHRASE_MIN = 6;
+static const int IME_MATURE_VERY_LONG_PHRASE_MIN = 8;
+static const int IME_MATURE_LONG_PHRASE_NUM = 3;
+static const int IME_MATURE_LONG_PHRASE_DEN = 5;
+static const int IME_INITIAL_SCORE_BASE = 80;
+static const int IME_INITIAL_SCORE_OVERMATCH_UNIT = 16;
+static const int IME_INITIAL_SCORE_CHAR_DISTANCE_UNIT = 20;
+static const int IME_INITIAL_SCORE_LENGTH_MATCH_BONUS = 5000;
+static const int IME_INITIAL_SCORE_COMPACT_BONUS = 500;
+static const int IME_INITIAL_SCORE_LONG_OVERMATCH_UNIT = 900;
+static const int IME_INITIAL_SCORE_LONG_OVERMATCH_CAP = 6000;
+static const int IME_INITIAL_MATURE_LONG_MIN = 4;
+static const int IME_INITIAL_MATURE_VERY_LONG_MIN = 5;
+static const int IME_INITIAL_MATURE_NUM = 2;
+static const int IME_INITIAL_MATURE_DEN = 3;
 static const int IME_KEY_UP = 0x80;
 static const int IME_KEY_DOWN = 0x81;
 static const int IME_KEY_LEFT = 0x82;
@@ -178,21 +204,84 @@ static const BuiltinPredictEntry BUILTIN_PREDICT[] = {
     {"搜索", {"结果", "内容", "文件", "词", "页面", "历史", "范围", "匹配", nullptr}},
 };
 
-static std::string pinyinJoinedCode(const std::vector<ime::PinyinToken> &tokens) {
-    std::string out;
-    for (auto &t : tokens) out += t.text;
-    return out;
+static int pinyinJoinedLength(const std::vector<ime::PinyinToken> &tokens) {
+    int len = 0;
+    for (auto &t : tokens) len += (int)t.text.length();
+    return len;
 }
 
-static bool pinyinSegmentsMatch(const std::vector<ime::PinyinToken> &typed,
-                                const std::vector<std::string> &entry) {
-    if (typed.empty() || typed.size() > entry.size()) return false;
+static bool pinyinTokensMatchCodePrefix(const std::vector<ime::PinyinToken> &tokens,
+                                        const char *code,
+                                        int codeLen) {
+    if (!code) return false;
+    int pos = 0;
+    for (auto &token : tokens) {
+        int len = (int)token.text.length();
+        if (pos + len > codeLen) return false;
+        if (strncmp(code + pos, token.text.c_str(), len) != 0) return false;
+        pos += len;
+    }
+    return true;
+}
+
+static bool pinyinSegmentsMatchText(const std::vector<ime::PinyinToken> &typed,
+                                    const char *syllables) {
+    if (typed.empty() || !syllables) return false;
+    const char *p = syllables;
     for (size_t i = 0; i < typed.size(); i++) {
-        if (typed[i].text.size() > entry[i].size()) return false;
-        if (strncmp(typed[i].text.c_str(), entry[i].c_str(), typed[i].text.size()) != 0)
+        while (*p == ' ') p++;
+        if (*p == '\0') return false;
+        const char *start = p;
+        while (*p && *p != ' ') p++;
+        size_t entryLen = (size_t)(p - start);
+        if (typed[i].text.size() > entryLen) return false;
+        if (strncmp(typed[i].text.c_str(), start, typed[i].text.size()) != 0)
             return false;
     }
     return true;
+}
+
+static bool syllableTextStartsWithSegments(const char *syllables,
+                                           const std::vector<std::string> &segs) {
+    if (!syllables || segs.empty()) return false;
+    const char *p = syllables;
+    for (size_t i = 0; i < segs.size(); i++) {
+        while (*p == ' ') p++;
+        if (*p == '\0') return false;
+        const char *start = p;
+        while (*p && *p != ' ') p++;
+        size_t entryLen = (size_t)(p - start);
+        if (segs[i].size() > entryLen) return false;
+        if (strncmp(segs[i].c_str(), start, segs[i].size()) != 0)
+            return false;
+    }
+    return true;
+}
+
+static int segPrefixKey(const char *code, int len) {
+    if (!code || len < 1) return 26 * 26;
+    int c0 = code[0] - 'a';
+    if (c0 < 0 || c0 >= 26) return 26 * 26;
+    if (len == 1) return c0 * 26;
+    int c1 = code[1] - 'a';
+    if (c1 < 0 || c1 >= 26) return 26 * 26;
+    return c0 * 26 + c1;
+}
+
+static void addSegPrefixCandidates(std::vector<uint16_t> &indices,
+                                   const uint16_t *order,
+                                   const uint16_t *index,
+                                   const char *code,
+                                   int len) {
+    int k = segPrefixKey(code, len);
+    if (k >= 26 * 26) return;
+    uint16_t lo = index[k];
+    uint16_t hi = (len == 1) ? index[k + 26] : index[k + 1];
+    for (uint16_t pos = lo; pos < hi; pos++) {
+        uint16_t idx = order[pos];
+        if (std::find(indices.begin(), indices.end(), idx) == indices.end())
+            indices.push_back(idx);
+    }
 }
 
 static std::vector<std::string> splitSyllableText(const char *text) {
@@ -207,20 +296,6 @@ static std::vector<std::string> splitSyllableText(const char *text) {
         }
     }
     if (!cur.empty()) out.push_back(cur);
-    return out;
-}
-
-static std::string initialCodeForSyllables(const std::vector<std::string> &syllables, bool keepZhChSh) {
-    std::string out;
-    for (auto &s : syllables) {
-        if (s.empty()) continue;
-        if (keepZhChSh && s.size() >= 2 && (s[0] == 'z' || s[0] == 'c' || s[0] == 's') && s[1] == 'h') {
-            out += s[0];
-            out += s[1];
-        } else {
-            out += s[0];
-        }
-    }
     return out;
 }
 
@@ -289,9 +364,9 @@ static bool pinyinInitialStartsWithCompat(const char *wc, int cl, const char *ty
 }
 
 static int userCandidateScore(const std::string &entryCode, int count, int typedLen) {
-    int score = std::min(count, 2000) * 8;
-    if ((int)entryCode.length() == typedLen) score += 100000;
-    else score += std::max(0, 64 - ((int)entryCode.length() - typedLen));
+    int score = std::min(count, IME_SCORE_USER_COUNT_CAP) * IME_SCORE_USER_COUNT_WEIGHT;
+    if ((int)entryCode.length() == typedLen) score += IME_SCORE_EXACT_CODE;
+    else score += std::max(0, IME_SCORE_PREFIX_BASE - ((int)entryCode.length() - typedLen));
     return score;
 }
 
@@ -305,12 +380,16 @@ static bool pinyinCodeEqualsAny(const std::string &matchedCode, const std::strin
 }
 
 static int phraseCandidateScore(const std::string &word, int candLen, int typedLen, int syllableCount) {
-    int score = std::min(candLen, typedLen) * 1000;
-    if (candLen == typedLen) score += 100000;
-    else if (candLen > typedLen) score -= std::min(8000, (candLen - typedLen) * 1200);
+    int score = std::min(candLen, typedLen) * IME_SCORE_CODE_MATCH_UNIT;
+    if (candLen == typedLen) score += IME_SCORE_EXACT_CODE;
+    else if (candLen > typedLen)
+        score -= std::min(IME_SCORE_PHRASE_OVERMATCH_CAP,
+                          (candLen - typedLen) * IME_SCORE_PHRASE_OVERMATCH_UNIT);
     int chars = (int)(word.length() / 3);
-    if (syllableCount > 0) score += std::max(0, 64 - std::abs(chars - syllableCount) * 16);
-    if (chars >= 2) score += 8;
+    if (syllableCount > 0)
+        score += std::max(0, IME_SCORE_SYLLABLE_BASE -
+                             std::abs(chars - syllableCount) * IME_SCORE_SYLLABLE_DISTANCE_UNIT);
+    if (chars >= 2) score += IME_SCORE_MULTI_CHAR_BONUS;
     return score;
 }
 
@@ -319,9 +398,10 @@ static bool phraseMatureForTyped(int fullCodeLen, int typedLen, int charCount) {
     if (charCount <= 2) return typedLen >= 2;
     if (charCount == 3) return typedLen >= std::min(fullCodeLen, 4);
     if (charCount == 4) return typedLen >= std::min(fullCodeLen, 5);
-    int minLen = 6;
-    if (charCount >= 7) minLen = 8;
-    int ratioLen = (fullCodeLen * 3 + 4) / 5;  // about 60%
+    int minLen = IME_MATURE_LONG_PHRASE_MIN;
+    if (charCount >= 7) minLen = IME_MATURE_VERY_LONG_PHRASE_MIN;
+    int ratioLen = (fullCodeLen * IME_MATURE_LONG_PHRASE_NUM +
+                    (IME_MATURE_LONG_PHRASE_DEN - 1)) / IME_MATURE_LONG_PHRASE_DEN;
     return typedLen >= std::min(fullCodeLen, std::max(minLen, ratioLen));
 }
 
@@ -329,8 +409,9 @@ static bool initialPhraseMatureForTyped(int fullInitialLen, int typedLen, int ch
     if (typedLen >= fullInitialLen) return true;
     if (charCount <= 3) return typedLen >= 2;
     if (charCount == 4) return typedLen >= 3;
-    int minLen = charCount >= 7 ? 5 : 4;
-    int ratioLen = (fullInitialLen * 2 + 2) / 3;  // about 2/3 of initials
+    int minLen = charCount >= 7 ? IME_INITIAL_MATURE_VERY_LONG_MIN : IME_INITIAL_MATURE_LONG_MIN;
+    int ratioLen = (fullInitialLen * IME_INITIAL_MATURE_NUM +
+                    (IME_INITIAL_MATURE_DEN - 1)) / IME_INITIAL_MATURE_DEN;
     return typedLen >= std::min(fullInitialLen, std::max(minLen, ratioLen));
 }
 
@@ -338,12 +419,14 @@ static int initialPhraseCandidateScoreFromLength(int initLen, int typedLen,
                                                  const std::string &word) {
     if (initLen < typedLen) return -1;
     int score = 0;
-    if (initLen == typedLen) score += 100000;
-    else score += std::max(0, 80 - (initLen - typedLen) * 16);
+    if (initLen == typedLen) score += IME_SCORE_EXACT_CODE;
+    else score += std::max(0, IME_INITIAL_SCORE_BASE -
+                              (initLen - typedLen) * IME_INITIAL_SCORE_OVERMATCH_UNIT);
     int chars = (int)(word.length() / 3);
-    score += std::max(0, 80 - std::abs(chars - typedLen) * 20);
-    if (chars == typedLen) score += 5000;
-    if (chars >= 2) score += 8;
+    score += std::max(0, IME_INITIAL_SCORE_BASE -
+                         std::abs(chars - typedLen) * IME_INITIAL_SCORE_CHAR_DISTANCE_UNIT);
+    if (chars == typedLen) score += IME_INITIAL_SCORE_LENGTH_MATCH_BONUS;
+    if (chars >= 2) score += IME_SCORE_MULTI_CHAR_BONUS;
     return score;
 }
 
@@ -634,6 +717,38 @@ static bool isAsciiPunctKey(int key) {
              (key >= '0' && key <= '9'));
 }
 
+static bool isStandardPagePrevKey(int key) {
+    return key == IME_KEY_UP || key == '-' || key == ';' || key == ',';
+}
+
+static bool isStandardPageNextKey(int key) {
+    return key == IME_KEY_DOWN || key == '=' || key == '.';
+}
+
+static bool isEnglishPagePrevKey(int key) {
+    return key == IME_KEY_UP || key == ';' || key == ',';
+}
+
+static bool isEnglishPageNextKey(int key) {
+    return key == IME_KEY_DOWN || key == '=';
+}
+
+static bool isVModePagePrevKey(int key) {
+    return key == IME_KEY_UP || key == ';' || key == ',';
+}
+
+static bool isVModePageNextKey(int key) {
+    return key == IME_KEY_DOWN || key == '=' || key == '\'';
+}
+
+static bool isPredictPagePrevKey(int key) {
+    return key == IME_KEY_UP || key == '-';
+}
+
+static bool isPredictPageNextKey(int key) {
+    return key == IME_KEY_DOWN || key == '=';
+}
+
 static std::string imePunctForKey(int key) {
     std::string out;
     switch (key) {
@@ -840,6 +955,7 @@ void IME::loadUserDict() {
         }
     }
     if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    _userPredictIndexDirty = true;
     _userDictLoaded = true;
 }
 
@@ -879,6 +995,36 @@ void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bo
     if (fclose(f) != 0)
         ESP_LOGE(IME_TAG, "failed to flush userdict file");
     dirty = false;
+}
+
+void IME::markUserDictDirty(bool &dirty) {
+    dirty = true;
+    if (_deferredUserDictSinceUs == 0)
+        _deferredUserDictSinceUs = esp_timer_get_time();
+}
+
+void IME::flushUserDictSaves(bool force) {
+    if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty) {
+        _deferredUserDictSinceUs = 0;
+        return;
+    }
+    if (!force && _deferredUserDictSinceUs > 0 &&
+        esp_timer_get_time() - _deferredUserDictSinceUs < USERDICT_DEFER_SAVE_US)
+        return;
+    saveUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty);
+    saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
+    saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty)
+        _deferredUserDictSinceUs = 0;
+}
+
+void IME::rebuildUserPredictIndex() {
+    if (!_userPredictIndexDirty) return;
+    _userPredictIndex.clear();
+    for (size_t i = 0; i < _userPredictWords.size() && i <= UINT16_MAX; i++) {
+        _userPredictIndex[_userPredictWords[i].code].push_back((uint16_t)i);
+    }
+    _userPredictIndexDirty = false;
 }
 
 void IME::addUserWord(const std::string &code, const std::string &word) {
@@ -959,6 +1105,7 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
         if (p.code == code && p.word == word && p.trad == _trad) {
             p.count++;
             dirty = true;
+            if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
             saveUserDictFile(path, entries, dirty);
             return true;
         }
@@ -969,6 +1116,7 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
         if (entries.size() >= limit) entries.pop_back();
     }
     entries.push_back({code, word, 1, _trad, userInitialForCode(code)});
+    if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
     dirty = true;
     saveUserDictFile(path, entries, dirty);
     return true;
@@ -989,6 +1137,7 @@ void IME::removeUserDictEntries(UserDictKind kind, const std::vector<int> &indic
         if (std::find(indices.begin(), indices.end(), n) != indices.end()) {
             entries.erase(entries.begin() + n);
             dirty = true;
+            if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
         }
     }
     if (dirty) saveUserDictFile(path, entries, dirty);
@@ -1007,6 +1156,7 @@ void IME::clearUserDict(UserDictKind kind) {
         (kind == PREDICT_DICT) ? USERPREDICT_PATH : USERDICT_DYNAMIC_PATH;
     if (entries.empty()) return;
     entries.clear();
+    if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
     dirty = true;
     saveUserDictFile(path, entries, dirty);
 }
@@ -1270,8 +1420,8 @@ void IME::bumpFrequency(const std::string &code, const std::string &word) {
     for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
         if (it->code == code && it->word == word && it->trad == _trad) {
             it->count++;
-            _dynamicUserDirty = true;
-            saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
+            markUserDictDirty(_dynamicUserDirty);
+            flushUserDictSaves(false);
             return;
         }
     }
@@ -1281,8 +1431,8 @@ void IME::bumpFrequency(const std::string &code, const std::string &word) {
             if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) _dynamicUserWords.pop_back();
         }
         _dynamicUserWords.push_back({code, word, 1, _trad, userInitialForCode(code)});
-        _dynamicUserDirty = true;
-        saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
+        markUserDictDirty(_dynamicUserDirty);
+        flushUserDictSaves(false);
     }
 }
 
@@ -1293,18 +1443,30 @@ void IME::bumpPredictFrequency(const std::string &key, const std::string &word, 
     for (auto &p : _userPredictWords) {
         if (p.code == key && p.word == word && p.trad == _trad) {
             p.count++;
-            _userPredictDirty = true;
-            if (saveNow) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+            if (saveNow) {
+                _userPredictDirty = true;
+                saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+            } else {
+                markUserDictDirty(_userPredictDirty);
+                flushUserDictSaves(false);
+            }
             return;
         }
     }
     if (_userPredictWords.size() >= USERPREDICT_LIMIT) {
         compactUserEntries(_userPredictWords, USERPREDICT_LIMIT);
         if (_userPredictWords.size() >= USERPREDICT_LIMIT) _userPredictWords.pop_back();
+        _userPredictIndexDirty = true;
     }
     _userPredictWords.push_back({key, word, 1, _trad, ""});
-    _userPredictDirty = true;
-    if (saveNow) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    _userPredictIndexDirty = true;
+    if (saveNow) {
+        _userPredictDirty = true;
+        saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    } else {
+        markUserDictDirty(_userPredictDirty);
+        flushUserDictSaves(false);
+    }
 }
 
 void IME::learnPredictPairs(const std::string &text) {
@@ -1341,7 +1503,7 @@ void IME::learnPredictPairs(const std::string &text) {
         if (chars.size() >= 12) learnSegment();
     }
     if (chars.size() > 1 && learned < 24) learnSegment();
-    if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    if (_userPredictDirty) flushUserDictSaves(false);
 }
 
 void IME::rememberCommittedText(const std::string &text) {
@@ -1359,7 +1521,7 @@ void IME::rememberCommittedText(const std::string &text) {
         if (isCjkChar(second)) bumpPredictFrequency(prevKey, first + second, false);
     }
     learnPredictPairs(text);
-    if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    if (_userPredictDirty) flushUserDictSaves(false);
     std::string last = lastUtf8Char(text);
     if (isCjkChar(last)) _lastCommitChar = last;
     else _lastCommitChar.clear();
@@ -1379,15 +1541,36 @@ uint8_t IME::readRecordFlag(uint32_t i) {
 }
 
 bool IME::hasCandidate(const std::string &text) const {
+    if (_candidateSeen.size() == _all.size())
+        return _candidateSeen.find(text) != _candidateSeen.end();
     for (auto &e : _all) {
         if (e == text) return true;
     }
     return false;
 }
 
+void IME::clearCandidates() {
+    _all.clear();
+    _candidateSeen.clear();
+    _candLen.clear();
+    if (_all.capacity() > MAX_CANDIDATES * 2) _all.shrink_to_fit();
+    else if (_all.capacity() < MAX_CANDIDATES / 3) _all.reserve(MAX_CANDIDATES / 3);
+    if (_candidateSeen.bucket_count() > MAX_CANDIDATES * 4) _candidateSeen.rehash(MAX_CANDIDATES);
+}
+
+void IME::rebuildCandidateSeen() {
+    if (_candidateSeen.size() == _all.size()) return;
+    _candidateSeen.clear();
+    _candidateSeen.reserve(_all.size());
+    for (auto &e : _all) _candidateSeen.insert(e);
+}
+
 bool IME::appendCandidate(const std::string &text, int candLen) {
-    if (_all.size() >= _candidateLimit || hasCandidate(text)) return false;
+    if (_all.size() >= _candidateLimit) return false;
+    rebuildCandidateSeen();
+    if (_candidateSeen.find(text) != _candidateSeen.end()) return false;
     _all.push_back(text);
+    _candidateSeen.insert(text);
     _candLen.push_back(candLen);
     return true;
 }
@@ -1400,6 +1583,7 @@ uint8_t IME::readLfFlag(uint16_t i) {
 #endif
 
 void IME::setActive(bool on) {
+    if (!on) flushUserDictSaves(true);
     _active = on;
     if (on) ensureUserDictLoaded();
     reset();
@@ -1408,10 +1592,7 @@ void IME::setActive(bool on) {
 void IME::reset() {
     _code.clear();
     _displayCodeDirty = true;
-    _all.clear();
-    _candLen.clear();
-    if (_all.capacity() > MAX_CANDIDATES * 2) _all.shrink_to_fit();
-    else if (_all.capacity() < MAX_CANDIDATES / 3) _all.reserve(MAX_CANDIDATES / 3);
+    clearCandidates();
     _page.clear();
     if (_page.capacity() > _pageSize * 2) _page.shrink_to_fit();
     else if (_page.capacity() < _pageSize) _page.reserve(_pageSize);
@@ -1420,6 +1601,12 @@ void IME::reset() {
     _prefix.clear();
     _remainder.clear();
     _lfMode = false;
+    switch (_scheme) {
+    case PINYIN:    _maxCode = 63; break;
+    case SHUANGPIN: _maxCode = 2; break;
+    case WUBI:
+    default:        _maxCode = 4; break;
+    }
     _deleteMode = false;
     _vMode = false;
     _vSel = 0;
@@ -1440,8 +1627,7 @@ void IME::searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi) {
 
 void IME::lookup() {
     ImePerfTrace perf(_code, _all);
-    _all.clear();
-    _candLen.clear();
+    clearCandidates();
     _pageStart = 0;
     _curPage = 0;
     _maxMatchLen = 0;
@@ -1717,18 +1903,24 @@ void IME::lookup() {
             std::vector<ime::PinyinSplit> moreSplits = ime::PinyinEngine::splitVariants(aliasCode, true, 4);
             aliasSplits.insert(aliasSplits.end(), moreSplits.begin(), moreSplits.end());
         }
+        std::vector<uint16_t> segIndices;
+        addSegPrefixCandidates(segIndices, SEG_CODE_ORDER, SEG_CODE_INDEX, q, qlen);
+        for (auto &aliasCode : aliasCodes) {
+            addSegPrefixCandidates(segIndices, SEG_CODE_ORDER, SEG_CODE_INDEX,
+                                   aliasCode.c_str(), (int)aliasCode.length());
+        }
         std::vector< std::pair<int, std::pair<int, std::string> > > segMatches;
-        for (int i = 0; i < SEG_TABLE_COUNT; i++) {
-            std::vector<std::string> entrySyl = splitSyllableText(SEG_TABLE[i].syllables);
+        for (uint16_t segIdx : segIndices) {
+            int i = segIdx;
             int matchedLen = 0;
             auto matchSplits = [&](const std::vector<ime::PinyinSplit> &variants) -> int {
             for (auto &split : variants) {
-                std::string entryCode;
-                for (auto &s : entrySyl) entryCode += s;
-                std::string typedCode = pinyinJoinedCode(split.tokens);
-                if ((int)typedCode.length() > (int)entryCode.length()) continue;
-                if (strncmp(entryCode.c_str(), typedCode.c_str(), typedCode.length()) != 0) continue;
-                if (pinyinSegmentsMatch(split.tokens, entrySyl)) return (int)typedCode.length();
+                int typedCodeLen = pinyinJoinedLength(split.tokens);
+                int entryCodeLen = (int)strlen(SEG_TABLE[i].code);
+                if (typedCodeLen > entryCodeLen) continue;
+                if (!pinyinTokensMatchCodePrefix(split.tokens, SEG_TABLE[i].code, entryCodeLen)) continue;
+                if (pinyinSegmentsMatchText(split.tokens, SEG_TABLE[i].syllables))
+                    return typedCodeLen;
             }
             return 0;
             };
@@ -1737,12 +1929,11 @@ void IME::lookup() {
                 matchedLen = matchSplits(aliasSplits);
             if (matchedLen == 0) continue;
             std::string w = SEG_TABLE[i].word;
-            std::string entryCode;
-            for (auto &s : entrySyl) entryCode += s;
             int chars = utf8TextCharCount(w);
-            if (!phraseMatureForTyped((int)entryCode.length(), matchedLen, chars)) continue;
-            int score = phraseCandidateScore(w, (int)entryCode.length(), matchedLen, (int)entrySyl.size());
-            segMatches.push_back({score, {(int)entryCode.length(), w}});
+            int entryCodeLen = (int)strlen(SEG_TABLE[i].code);
+            if (!phraseMatureForTyped(entryCodeLen, matchedLen, chars)) continue;
+            int score = phraseCandidateScore(w, entryCodeLen, matchedLen, SEG_TABLE[i].syllableCount);
+            segMatches.push_back({score, {entryCodeLen, w}});
         }
         std::stable_sort(segMatches.begin(), segMatches.end(),
             [](const std::pair<int, std::pair<int, std::string> > &a,
@@ -1884,23 +2075,26 @@ void IME::lookup() {
     if (!hasVowel && qlen >= 2 && _all.size() < IME_FAST_CANDIDATE_LIMIT) {
         int64_t t = IME_PERF_NOW();
         std::vector< std::pair<int, std::string> > segInitFreq;
-        for (int i = 0; i < SEG_TABLE_COUNT; i++) {
-            std::vector<std::string> entrySyl = splitSyllableText(SEG_TABLE[i].syllables);
-            std::string init = initialCodeForSyllables(entrySyl, true);
-            std::string compactInit = initialCodeForSyllables(entrySyl, false);
-            bool match = (int)init.length() >= qlen && strncmp(init.c_str(), q, qlen) == 0;
-            bool compactMatch = (int)compactInit.length() >= qlen &&
-                                strncmp(compactInit.c_str(), q, qlen) == 0;
+        std::vector<uint16_t> segIndices;
+        addSegPrefixCandidates(segIndices, SEG_INITIAL_ORDER, SEG_INITIAL_INDEX, q, qlen);
+        addSegPrefixCandidates(segIndices, SEG_COMPACT_INITIAL_ORDER, SEG_COMPACT_INITIAL_INDEX, q, qlen);
+        for (uint16_t segIdx : segIndices) {
+            int i = segIdx;
+            const char *init = SEG_TABLE[i].initial;
+            const char *compactInit = SEG_TABLE[i].compactInitial;
+            int initLen = (int)strlen(init);
+            int compactInitLen = (int)strlen(compactInit);
+            bool match = initLen >= qlen && strncmp(init, q, qlen) == 0;
+            bool compactMatch = compactInitLen >= qlen && strncmp(compactInit, q, qlen) == 0;
             if (!match && !compactMatch) continue;
-            const std::string &matchedInit = match ? init : compactInit;
+            int matchedInitLen = match ? initLen : compactInitLen;
             int chars = utf8TextCharCount(SEG_TABLE[i].word);
-            if (!initialPhraseMatureForTyped((int)matchedInit.length(), qlen, chars)) continue;
-            int score = initialPhraseCandidateScoreFromLength((int)matchedInit.length(), qlen,
-                                                              SEG_TABLE[i].word);
-            if ((int)matchedInit.length() == qlen) score += 5000;
+            if (!initialPhraseMatureForTyped(matchedInitLen, qlen, chars)) continue;
+            int score = initialPhraseCandidateScoreFromLength(matchedInitLen, qlen, SEG_TABLE[i].word);
+            if (matchedInitLen == qlen) score += 5000;
             if (compactMatch) score += 500;
             if (chars >= 2) score += chars;
-            if ((int)matchedInit.length() > qlen) score -= std::min(6000, ((int)matchedInit.length() - qlen) * 900);
+            if (matchedInitLen > qlen) score -= std::min(6000, (matchedInitLen - qlen) * 900);
             segInitFreq.push_back({score, SEG_TABLE[i].word});
         }
         std::stable_sort(segInitFreq.begin(), segInitFreq.end(),
@@ -2162,8 +2356,7 @@ void IME::lookup() {
 }
 
 void IME::lookupEnglishMode() {
-    _all.clear();
-    _candLen.clear();
+    clearCandidates();
     _pageStart = 0;
     _curPage = 0;
     loadEnglishDict();
@@ -2227,8 +2420,7 @@ void IME::lookupKaomoji(const std::string &query) {
 }
 
 void IME::lookupVMode() {
-    _all.clear();
-    _candLen.clear();
+    clearCandidates();
     _pageStart = 0;
     _curPage = 0;
     _vSel = 0;
@@ -2399,34 +2591,28 @@ void IME::lookupSegmented() {
         std::vector<ime::PinyinSplit> moreSplits = ime::PinyinEngine::splitVariants(aliasCode, true, 4);
         aliasSplits.insert(aliasSplits.end(), moreSplits.begin(), moreSplits.end());
     }
-    for (int i = 0; i < SEG_TABLE_COUNT && _all.size() < IME_FAST_CANDIDATE_LIMIT; i++) {
-        const char *enc = SEG_TABLE[i].syllables;
-        std::vector<std::string> entrySyl;
-        {
-            std::string s;
-            for (const char *p = enc; *p; p++) {
-                if (*p == ' ') { if (!s.empty()) entrySyl.push_back(s); s.clear(); }
-                else s += *p;
-            }
-            if (!s.empty()) entrySyl.push_back(s);
-        }
-        if (segs.size() > entrySyl.size()) continue;
-        bool ok = true;
-        for (size_t k = 0; k < segs.size() && ok; k++) {
-            if (strncmp(segs[k].c_str(), entrySyl[k].c_str(), segs[k].length()) != 0)
-                ok = false;
-        }
-        std::string entryCode;
-        for (auto &s : entrySyl) entryCode += s;
+    std::vector<uint16_t> segIndices;
+    addSegPrefixCandidates(segIndices, SEG_CODE_ORDER, SEG_CODE_INDEX, q.c_str(), (int)q.length());
+    for (auto &aliasCode : aliasCodes) {
+        addSegPrefixCandidates(segIndices, SEG_CODE_ORDER, SEG_CODE_INDEX,
+                               aliasCode.c_str(), (int)aliasCode.length());
+    }
+    std::stable_sort(segIndices.begin(), segIndices.end());
+    for (uint16_t segIdx : segIndices) {
+        if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
+        int i = segIdx;
+        if (segs.size() > SEG_TABLE[i].syllableCount) continue;
+        bool ok = syllableTextStartsWithSegments(SEG_TABLE[i].syllables, segs);
         if (ok) {
-            ok = strncmp(q.c_str(), entryCode.c_str(), q.length()) == 0;
+            ok = strncmp(q.c_str(), SEG_TABLE[i].code, q.length()) == 0;
         }
         if (!ok && !aliasSplits.empty()) {
             for (auto &split : aliasSplits) {
-                std::string typedCode = pinyinJoinedCode(split.tokens);
-                if ((int)typedCode.length() > (int)entryCode.length()) continue;
-                if (strncmp(entryCode.c_str(), typedCode.c_str(), typedCode.length()) != 0) continue;
-                if (pinyinSegmentsMatch(split.tokens, entrySyl)) { ok = true; break; }
+                int typedCodeLen = pinyinJoinedLength(split.tokens);
+                int entryCodeLen = (int)strlen(SEG_TABLE[i].code);
+                if (typedCodeLen > entryCodeLen) continue;
+                if (!pinyinTokensMatchCodePrefix(split.tokens, SEG_TABLE[i].code, entryCodeLen)) continue;
+                if (pinyinSegmentsMatchText(split.tokens, SEG_TABLE[i].syllables)) { ok = true; break; }
             }
         }
         if (!ok) continue;
@@ -2522,6 +2708,7 @@ void IME::beginPredict(const std::string &text) {
     reset();
     if (text.empty()) return;
     ensureUserDictLoaded();
+    rebuildUserPredictIndex();
     std::vector<std::string> keys;
     addUniqueString(keys, cjkTailText(text, 4));
     addUniqueString(keys, lastUtf8Char(text));
@@ -2531,9 +2718,14 @@ void IME::beginPredict(const std::string &text) {
     for (auto &keyText : keys) {
         size_t before = _all.size();
         std::vector< std::pair<int, std::string> > userPredict;
-        for (auto &p : _userPredictWords) {
-            if (p.trad != _trad) continue;
-            if (p.code == keyText) userPredict.push_back({p.count, p.word});
+        auto indexIt = _userPredictIndex.find(keyText);
+        if (indexIt != _userPredictIndex.end()) {
+            for (uint16_t entryIdx : indexIt->second) {
+                if (entryIdx >= _userPredictWords.size()) continue;
+                auto &p = _userPredictWords[entryIdx];
+                if (p.trad != _trad) continue;
+                userPredict.push_back({p.count, p.word});
+            }
         }
         std::stable_sort(userPredict.begin(), userPredict.end(),
             [](const std::pair<int, std::string> &a, const std::pair<int, std::string> &b) {
@@ -2809,6 +3001,7 @@ bool IME::handleFullwidthChar(int key, std::string &out) {
 
 bool IME::handleKey(int key, std::string &out) {
     if (!_active) return false;
+    flushUserDictSaves(false);
     if (_english && !_englishCompose) {
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
             _englishCompose = true;
@@ -2850,8 +3043,8 @@ bool IME::handleKey(int key, std::string &out) {
             return true;
         }
         if (key == 27) { reset(); return true; }
-        if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
-        if (key == IME_KEY_DOWN || key == '=' || key == '.') { pageNext(); return true; }
+        if (isEnglishPagePrevKey(key)) { pagePrev(); return true; }
+        if (isEnglishPageNextKey(key)) { pageNext(); return true; }
         if (_page.size() > 0) commit(0, out);
         else { out = _code; _lastCommitChar.clear(); _lastCommitText.clear(); }
         reset();
@@ -2918,8 +3111,8 @@ bool IME::handleKey(int key, std::string &out) {
             return true;
         }
         if (key == 27) { reset(); return true; }
-        if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
-        if (key == IME_KEY_DOWN || key == '=' || key == '\'') { pageNext(); return true; }
+        if (isVModePagePrevKey(key)) { pagePrev(); return true; }
+        if (isVModePageNextKey(key)) { pageNext(); return true; }
         return true;
     }
     if (_predicting) {
@@ -2960,8 +3153,8 @@ bool IME::handleKey(int key, std::string &out) {
             _lastCommitText.clear();
             return true;
         }
-        if (key == IME_KEY_UP || key == '-') { pagePrev(); return true; }
-        if (key == IME_KEY_DOWN || key == '=') { pageNext(); return true; }
+        if (isPredictPagePrevKey(key)) { pagePrev(); return true; }
+        if (isPredictPageNextKey(key)) { pageNext(); return true; }
         if (key == '\b' || key == 27 || key == '\n') {
             _predicting = false;
             return true;
@@ -3062,8 +3255,8 @@ bool IME::handleKey(int key, std::string &out) {
         reset();
         return true;
     }
-    if (key == IME_KEY_UP || key == '-' || key == ';' || key == ',') { pagePrev(); return true; }
-    if (key == IME_KEY_DOWN || key == '=' || key == '.') { pageNext(); return true; }
+    if (isStandardPagePrevKey(key)) { pagePrev(); return true; }
+    if (isStandardPageNextKey(key)) { pageNext(); return true; }
     if (_page.size() > 0) {
         commit(0, out);
         return true;
