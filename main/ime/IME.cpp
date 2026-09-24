@@ -34,8 +34,8 @@ static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
 static const size_t USERPREDICT_LIMIT = 500;
 static const size_t ENGLISHDICT_LIMIT = 10000;
 static const int64_t USERDICT_DEFER_SAVE_US = 2000000;
-static const int64_t USERDICT_JOURNAL_DEFER_US = 500000;
-static const size_t USERDICT_JOURNAL_BATCH_LIMIT = 16;
+static const int64_t USERDICT_JOURNAL_DEFER_US = PJOURNAL_IME_USERDICT_JOURNAL_DEFER_US;
+static const size_t USERDICT_JOURNAL_BATCH_LIMIT = PJOURNAL_IME_USERDICT_JOURNAL_BATCH_LIMIT;
 static const int IME_SCORE_EXACT_CODE = 100000;
 static const int IME_SCORE_USER_COUNT_CAP = 2000;
 static const int IME_SCORE_USER_COUNT_WEIGHT = 8;
@@ -2497,14 +2497,14 @@ void IME::lookupEnglishMode() {
     for (; it != _englishWords.end(); ++it) {
         if (_all.size() >= MAX_CANDIDATES) break;
         if (it->find(lower) != 0) break;
-        _all.push_back(upper ? capFirst(*it) : *it);
-        _candLen.push_back((int)q.length());
+        appendCandidate(upper ? capFirst(*it) : *it, (int)q.length());
     }
     bool exact = false;
     for (auto &w : _all) if (w == q) { exact = true; break; }
     if (!exact && !_code.empty()) {
         _all.insert(_all.begin(), q);
         _candLen.insert(_candLen.begin(), (int)q.length());
+        rebuildCandidateHashes();
     }
     buildPage();
 }
@@ -2538,12 +2538,7 @@ void IME::lookupKaomoji(const std::string &query) {
         if (code[0] == '\0' || code[0] != query[0]) continue;  // 首字符过滤+跳过常用块
         if (!vKaomojiMatch(query.data(), query.size(), code)) continue;
         const char *face = K_KAOMOJI_TABLE[i].face;
-        bool dup = false;
-        for (auto &e : _all) if (e == face) { dup = true; break; }
-        if (!dup) {
-            _all.push_back(face);
-            _candLen.push_back((int)_code.length());
-        }
+        appendCandidate(face, (int)_code.length());
     }
 }
 
@@ -2556,8 +2551,7 @@ void IME::lookupVMode() {
     if (body.empty()) {
         // 裸 v: 常用文字表情(原中文标点候选改由 v/bd/ 搜索)
         for (unsigned i = 0; i < K_KAOMOJI_HOT && i < K_KAOMOJI_COUNT; i++) {
-            _all.push_back(K_KAOMOJI_TABLE[i].face);
-            _candLen.push_back(1);
+            appendCandidate(K_KAOMOJI_TABLE[i].face, 1);
         }
         buildPage();
         return;
@@ -2567,8 +2561,7 @@ void IME::lookupVMode() {
     // 未闭合(v/t)不出候选,避免选词歧义。
     if (body == "/t/" || body == "/d/" || body == "/w/") {
         for (auto &s : vTimeDateWeek(body.substr(0, body.size() - 1))) {
-            _all.push_back(s);
-            _candLen.push_back((int)_code.length());
+            appendCandidate(s, (int)_code.length());
         }
         buildPage();
         return;
@@ -2581,13 +2574,10 @@ void IME::lookupVMode() {
         if (allDigits) {
             uint64_t n = 0;
             for (char c : num) n = n * 10 + (uint64_t)(c - '0');
-            _all.push_back(chineseDigits(n, false));
-            _candLen.push_back((int)_code.length());
-            _all.push_back(chineseDigits(n, true));
-            _candLen.push_back((int)_code.length());
+            appendCandidate(chineseDigits(n, false), (int)_code.length());
+            appendCandidate(chineseDigits(n, true), (int)_code.length());
             if (n >= 1 && n <= 99) {
-                _all.push_back(romanNumber((int)n));
-                _candLen.push_back((int)_code.length());
+                appendCandidate(romanNumber((int)n), (int)_code.length());
             }
         } else {
             // v/编码(闭合 v/编码/ 可数字键直选): 按拼音/声母前缀搜文字表情与标点。
@@ -2613,19 +2603,9 @@ void IME::lookupVMode() {
     if (isDate) {
         char arabic[32];
         snprintf(arabic, sizeof(arabic), "%d年%d月%d日", y, m, d);
-        bool dup = false;
-        for (auto &e : _all) if (e == arabic) { dup = true; break; }
-        if (!dup) {
-            _all.push_back(arabic);
-            _candLen.push_back((int)_code.length());
-        }
+        appendCandidate(arabic, (int)_code.length());
         std::string cn = chineseYear(y) + "年" + chineseDayMonth(m) + "月" + chineseDayMonth(d) + "日";
-        dup = false;
-        for (auto &e : _all) if (e == cn) { dup = true; break; }
-        if (!dup) {
-            _all.push_back(cn);
-            _candLen.push_back((int)_code.length());
-        }
+        appendCandidate(cn, (int)_code.length());
     }
 
     bool allAlpha = true;
@@ -2643,18 +2623,14 @@ void IME::lookupVMode() {
             if (_all.size() >= MAX_CANDIDATES) break;
             if (it->find(lower) != 0) break;
             std::string w = upper ? capFirst(*it) : *it;
-            bool dup = false;
-            for (auto &e : _all) if (e == w) { dup = true; break; }
-            if (!dup) {
-                _all.push_back(w);
-                _candLen.push_back((int)_code.length());
-            }
+            appendCandidate(w, (int)_code.length());
         }
         bool dup = false;
         for (auto &e : _all) if (e == body) { dup = true; break; }
         if (!dup) {
             _all.insert(_all.begin(), body);
             _candLen.insert(_candLen.begin(), (int)_code.length());
+            rebuildCandidateHashes();
         }
     }
 

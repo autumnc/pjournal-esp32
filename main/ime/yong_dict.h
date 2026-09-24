@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "ime_config.h"
 
 namespace ime {
 

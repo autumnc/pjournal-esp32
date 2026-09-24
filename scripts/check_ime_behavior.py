@@ -8,8 +8,10 @@ SEG_SOURCE = ROOT / "main" / "ime" / "seg_table_source.txt"
 IME_CPP = ROOT / "main" / "ime" / "IME.cpp"
 IME_H = ROOT / "main" / "ime" / "IME.h"
 YONG_DICT_CPP = ROOT / "main" / "ime" / "yong_dict.cpp"
+IME_CONFIG_H = ROOT / "main" / "ime" / "ime_config.h"
 KAOMOJI_H = ROOT / "main" / "ime" / "kaomoji_table.h"
 ENGLISH_WORDS = ROOT / "main" / "ime" / "english_words.txt"
+IME3_DOC = ROOT / "docs" / "ime3_format.md"
 
 
 def initial_of(syllable, keep_zh_ch_sh):
@@ -170,6 +172,8 @@ def main():
     ime_cpp = IME_CPP.read_text(encoding="utf-8")
     ime_h = IME_H.read_text(encoding="utf-8")
     yong_dict_cpp = YONG_DICT_CPP.read_text(encoding="utf-8")
+    ime_config_h = IME_CONFIG_H.read_text(encoding="utf-8")
+    ime3_doc = IME3_DOC.read_text(encoding="utf-8")
 
     cases = [
         ("full shuru", seg_candidates("shuru", entries), "输入"),
@@ -197,8 +201,10 @@ def main():
     require_contains("v/biaodian", [face for code, face in kaomoji if code == "biaodian"], "\\357\\274\\214", 80)
     require_contains("v/kaixin", [face for code, face in kaomoji if code == "kaixin"], ":)", 8)
 
+    require_equal("english sorted", english_words, sorted(set(english_words)))
     require_contains("english input", english_words, "input", len(english_words))
     require_contains("english write", english_words, "write", len(english_words))
+    require_contains("english firmware", english_words, "firmware", len(english_words))
 
     merged = merge_user_entries([
         "shuru 输入 2",
@@ -210,13 +216,17 @@ def main():
     require_equal("journal max count", merged[("shuru", "输入", False)], 5)
     require_equal("journal trad", merged[("shuru", "輸入", True)], 3)
     require_equal("journal malformed fallback", merged[("bad-count", "词", False)], 1)
-    require_source_contains("journal batching constant", ime_cpp, "USERDICT_JOURNAL_BATCH_LIMIT = 16")
+    require_source_contains("journal defer macro", ime_config_h, "PJOURNAL_IME_USERDICT_JOURNAL_DEFER_US")
+    require_source_contains("journal batching macro", ime_config_h, "PJOURNAL_IME_USERDICT_JOURNAL_BATCH_LIMIT")
     require_source_contains("journal force before save", ime_cpp, "flushUserDictJournal(force);")
 
     require_source_contains("liangfen reset max code", ime_cpp, "case PINYIN:    _maxCode = 63; break;")
     require_source_contains("liangfen mode max code", ime_cpp, "_lfMode = true; _maxCode = 12")
     require_source_contains("candidate fixed hashes", ime_h, "_candidateHashes[MAX_CANDIDATES]")
     require_source_contains("predict lazy index", yong_dict_cpp, "buildPredictIndex()")
+    require_source_contains("predict index cap", ime_config_h, "PJOURNAL_IME_PREDICT_INDEX_MAX_GROUPS")
+    require_source_contains("ime3 doc header", ime3_doc, "IME3 Dictionary Format")
+    require_source_contains("ime3 doc prediction", ime3_doc, "Prediction Section")
 
     print("OK: IME behavior regression checks passed")
 

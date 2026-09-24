@@ -278,6 +278,7 @@ bool Im3Dictionary::buildPredictIndex() const {
     _predictIndexBuilt = true;
     _predictIndex.clear();
     if (!_valid || !_predictData || _predictCount == 0) return false;
+    if (_predictCount > PJOURNAL_IME_PREDICT_INDEX_MAX_GROUPS) return false;
 
     size_t pos = 0;
     for (uint32_t group = 0; group < _predictCount && pos < _predictDataSize; group++) {
