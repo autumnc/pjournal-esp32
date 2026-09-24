@@ -11,6 +11,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static const char *IME_TAG = "IME";
 static const int64_t IME_PERF_SLOW_US = 12000;
@@ -27,6 +28,7 @@ static const char *USERDICT_DYNAMIC_PATH = "/sdcard/settings/userdict.txt";
 static const char *USERDICT_FIXED_PATH = "/sdcard/settings/userdict_fixed.txt";
 static const char *USERPREDICT_PATH = "/sdcard/settings/userpredict.txt";
 static const char *ENGLISHDICT_PATH = "/sdcard/settings/englishdict.txt";
+static const char *USERDICT_JOURNAL_SUFFIX = ".journal";
 static const size_t USERDICT_FIXED_LIMIT = 500;
 static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
 static const size_t USERPREDICT_LIMIT = 500;
@@ -61,6 +63,7 @@ static const int IME_KEY_UP = 0x80;
 static const int IME_KEY_DOWN = 0x81;
 static const int IME_KEY_LEFT = 0x82;
 static const int IME_KEY_RIGHT = 0x83;
+static inline std::string str_trim(const std::string &s);
 #if PJOURNAL_IME_FAST_LOOKUP
 static const int IME_SEG_TABLE_MIN_LEN = 2;
 static const int IME_PHRASE_PREFIX_MIN_LEN = 2;
@@ -673,6 +676,52 @@ static bool validPredictEntry(const std::string &key, const std::string &word) {
     return chars >= 1 && chars <= 4;
 }
 
+static uint32_t candidateHash(const std::string &text) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : text) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h ? h : 1;
+}
+
+static bool parseUserDictLine(const std::string &raw, std::string &code,
+                              std::string &word, int &count, bool &trad) {
+    std::string line = str_trim(raw);
+    if (line.length() < 3) return false;
+    auto sp1 = line.find(' ');
+    if (sp1 == std::string::npos || sp1 < 1) return false;
+    auto sp2 = line.find(' ', sp1 + 1);
+    code = line.substr(0, sp1);
+    count = 1;
+    trad = false;
+    if (sp2 != std::string::npos) {
+        word = line.substr(sp1 + 1, sp2 - sp1 - 1);
+        std::string tail = line.substr(sp2 + 1);
+        auto sp3 = tail.find(' ');
+        std::string cntStr = (sp3 == std::string::npos) ? tail : tail.substr(0, sp3);
+        bool validCount = !cntStr.empty();
+        for (char cc : cntStr)
+            if (cc < '0' || cc > '9') { validCount = false; break; }
+        if (validCount) {
+            count = 0;
+            for (char cc : cntStr) count = count * 10 + (cc - '0');
+        }
+        if (count < 1) count = 1;
+        if (sp3 != std::string::npos) {
+            std::string fl = tail.substr(sp3 + 1);
+            if (fl == "1" || fl == "t" || fl == "T") trad = true;
+        }
+    } else {
+        word = line.substr(sp1 + 1);
+    }
+    return code.length() >= 1 && word.length() >= 2;
+}
+
+static std::string userDictJournalPath(const char *path) {
+    return std::string(path) + USERDICT_JOURNAL_SUFFIX;
+}
+
 static std::vector<std::string> cjkCharsOf(const std::string &text, int maxChars = 16) {
     std::vector<std::string> chars;
     for (size_t pos = 0; pos < text.size() && (int)chars.size() < maxChars; ) {
@@ -877,39 +926,11 @@ bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
             pos = nl + 1;
         }
         bytesRead += line.length() + 1;
-        line = str_trim(line);
-        if (line.length() < 3) continue;
-        auto sp1 = line.find(' ');
-        if (sp1 == std::string::npos || sp1 < 1) continue;
-        std::string code = line.substr(0, sp1);
-        auto sp2 = line.find(' ', sp1 + 1);
+        std::string code;
         std::string word;
         int count = 1;
         bool trad = false;
-        if (sp2 != std::string::npos) {
-            word = line.substr(sp1 + 1, sp2 - sp1 - 1);
-            std::string tail = line.substr(sp2 + 1);
-            auto sp3 = tail.find(' ');
-            // 纯数字解析:std::stoi 遇到非数字会抛异常,而本工程 C++ 异常关闭,
-            // 畸形/被手工编辑的词库文件会让 stoi 直接 abort 重启。非法计数回退为 1。
-            count = 1;
-            std::string cntStr = (sp3 == std::string::npos) ? tail : tail.substr(0, sp3);
-            bool validCount = !cntStr.empty();
-            for (char cc : cntStr)
-                if (cc < '0' || cc > '9') { validCount = false; break; }
-            if (validCount) {
-                count = 0;
-                for (char cc : cntStr) count = count * 10 + (cc - '0');
-            }
-            if (count < 1) count = 1;
-            if (sp3 != std::string::npos) {
-                std::string fl = tail.substr(sp3 + 1);
-                if (fl == "1" || fl == "t" || fl == "T") trad = true;
-            }
-        } else {
-            word = line.substr(sp1 + 1);
-        }
-        if (code.length() >= 1 && word.length() >= 2) {
+        if (parseUserDictLine(line, code, word, count, trad)) {
             bool isDup = false;
             for (auto &existing : entries) {
                 if (existing.code == code && existing.word == word && existing.trad == trad) {
@@ -946,6 +967,9 @@ void IME::loadUserDict() {
     loadUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
     loadUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
     loadUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
+    loadUserDictJournal(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
+    loadUserDictJournal(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
+    loadUserDictJournal(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
     for (auto it = _userPredictWords.begin(); it != _userPredictWords.end(); ) {
         if (!validPredictEntry(it->code, it->word)) {
             it = _userPredictWords.erase(it);
@@ -992,13 +1016,81 @@ void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bo
         fwrite(line.data(), 1, line.size(), f);
     }
 
-    if (fclose(f) != 0)
+    if (fclose(f) != 0) {
         ESP_LOGE(IME_TAG, "failed to flush userdict file");
+        return;
+    }
+    clearUserDictJournal(path);
     dirty = false;
 }
 
-void IME::markUserDictDirty(bool &dirty) {
+void IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
+                              bool &dirty, size_t maxEntries) {
+    std::string journal = userDictJournalPath(path);
+    FILE *f = fopen(journal.c_str(), "r");
+    if (!f) return;
+
+    bool changed = false;
+    char buf[256];
+    while (fgets(buf, sizeof(buf), f)) {
+        std::string code;
+        std::string word;
+        int count = 1;
+        bool trad = false;
+        if (!parseUserDictLine(buf, code, word, count, trad)) continue;
+        bool merged = false;
+        for (auto &existing : entries) {
+            if (existing.code == code && existing.word == word && existing.trad == trad) {
+                if (existing.count < count) {
+                    existing.count = count;
+                    changed = true;
+                }
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            if (entries.size() >= maxEntries) {
+                compactUserEntries(entries, maxEntries);
+                if (entries.size() >= maxEntries) entries.pop_back();
+            }
+            entries.push_back({code, word, count, trad, userInitialForCode(code)});
+            changed = true;
+        }
+    }
+    fclose(f);
+    if (compactUserEntries(entries, maxEntries)) changed = true;
+    if (changed) {
+        dirty = true;
+        saveUserDictFile(path, entries, dirty);
+    } else {
+        clearUserDictJournal(path);
+    }
+}
+
+void IME::appendUserDictJournal(const char *path, const UserEntry &entry) {
+    if (!path || !entry.code.length() || !entry.word.length()) return;
+    mkdir("/sdcard/settings", 0777);
+    std::string journal = userDictJournalPath(path);
+    FILE *f = fopen(journal.c_str(), "a");
+    if (!f) return;
+    std::string line = entry.code + " " + entry.word + " " + std::to_string(entry.count)
+                     + (entry.trad ? " 1" : "") + "\n";
+    fwrite(line.data(), 1, line.size(), f);
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+}
+
+void IME::clearUserDictJournal(const char *path) {
+    if (!path) return;
+    std::string journal = userDictJournalPath(path);
+    unlink(journal.c_str());
+}
+
+void IME::markUserDictDirty(bool &dirty, const char *path, const UserEntry *entry) {
     dirty = true;
+    if (path && entry) appendUserDictJournal(path, *entry);
     if (_deferredUserDictSinceUs == 0)
         _deferredUserDictSinceUs = esp_timer_get_time();
 }
@@ -1420,7 +1512,7 @@ void IME::bumpFrequency(const std::string &code, const std::string &word) {
     for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
         if (it->code == code && it->word == word && it->trad == _trad) {
             it->count++;
-            markUserDictDirty(_dynamicUserDirty);
+            markUserDictDirty(_dynamicUserDirty, USERDICT_DYNAMIC_PATH, &(*it));
             flushUserDictSaves(false);
             return;
         }
@@ -1431,7 +1523,7 @@ void IME::bumpFrequency(const std::string &code, const std::string &word) {
             if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) _dynamicUserWords.pop_back();
         }
         _dynamicUserWords.push_back({code, word, 1, _trad, userInitialForCode(code)});
-        markUserDictDirty(_dynamicUserDirty);
+        markUserDictDirty(_dynamicUserDirty, USERDICT_DYNAMIC_PATH, &_dynamicUserWords.back());
         flushUserDictSaves(false);
     }
 }
@@ -1447,7 +1539,7 @@ void IME::bumpPredictFrequency(const std::string &key, const std::string &word, 
                 _userPredictDirty = true;
                 saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
             } else {
-                markUserDictDirty(_userPredictDirty);
+                markUserDictDirty(_userPredictDirty, USERPREDICT_PATH, &p);
                 flushUserDictSaves(false);
             }
             return;
@@ -1464,7 +1556,7 @@ void IME::bumpPredictFrequency(const std::string &key, const std::string &word, 
         _userPredictDirty = true;
         saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
     } else {
-        markUserDictDirty(_userPredictDirty);
+        markUserDictDirty(_userPredictDirty, USERPREDICT_PATH, &_userPredictWords.back());
         flushUserDictSaves(false);
     }
 }
@@ -1541,8 +1633,13 @@ uint8_t IME::readRecordFlag(uint32_t i) {
 }
 
 bool IME::hasCandidate(const std::string &text) const {
-    if (_candidateSeen.size() == _all.size())
-        return _candidateSeen.find(text) != _candidateSeen.end();
+    uint32_t h = candidateHash(text);
+    if (_candidateHashCount == _all.size()) {
+        for (size_t i = 0; i < _candidateHashCount; i++) {
+            if (_candidateHashes[i] == h && _all[i] == text) return true;
+        }
+        return false;
+    }
     for (auto &e : _all) {
         if (e == text) return true;
     }
@@ -1551,26 +1648,29 @@ bool IME::hasCandidate(const std::string &text) const {
 
 void IME::clearCandidates() {
     _all.clear();
-    _candidateSeen.clear();
+    _candidateHashCount = 0;
     _candLen.clear();
     if (_all.capacity() > MAX_CANDIDATES * 2) _all.shrink_to_fit();
     else if (_all.capacity() < MAX_CANDIDATES / 3) _all.reserve(MAX_CANDIDATES / 3);
-    if (_candidateSeen.bucket_count() > MAX_CANDIDATES * 4) _candidateSeen.rehash(MAX_CANDIDATES);
 }
 
-void IME::rebuildCandidateSeen() {
-    if (_candidateSeen.size() == _all.size()) return;
-    _candidateSeen.clear();
-    _candidateSeen.reserve(_all.size());
-    for (auto &e : _all) _candidateSeen.insert(e);
+void IME::rebuildCandidateHashes() {
+    if (_candidateHashCount == _all.size()) return;
+    _candidateHashCount = 0;
+    size_t limit = std::min(_all.size(), (size_t)MAX_CANDIDATES);
+    for (size_t i = 0; i < limit; i++)
+        _candidateHashes[_candidateHashCount++] = candidateHash(_all[i]);
 }
 
 bool IME::appendCandidate(const std::string &text, int candLen) {
     if (_all.size() >= _candidateLimit) return false;
-    rebuildCandidateSeen();
-    if (_candidateSeen.find(text) != _candidateSeen.end()) return false;
+    rebuildCandidateHashes();
+    if (hasCandidate(text)) return false;
     _all.push_back(text);
-    _candidateSeen.insert(text);
+    if (_candidateHashCount < MAX_CANDIDATES)
+        _candidateHashes[_candidateHashCount++] = candidateHash(text);
+    else
+        _candidateHashCount = 0;
     _candLen.push_back(candLen);
     return true;
 }
@@ -2733,14 +2833,9 @@ void IME::beginPredict(const std::string &text) {
             });
         for (auto &p : userPredict) appendCandidate(p.second, 0);
         if (_dict.hasPredictions()) {
-            size_t pos = 0;
             ime::Im3Dictionary::PredictGroup group;
-            while (_dict.nextPredictGroup(pos, group)) {
-                if (group.key == keyText) {
-                    for (auto &word : group.candidates) appendCandidate(word, 0);
-                    break;
-                }
-            }
+            if (_dict.findPredictGroup(keyText, group))
+                for (auto &word : group.candidates) appendCandidate(word, 0);
         }
         for (auto &entry : BUILTIN_PREDICT) {
             if (keyText == entry.key) {

@@ -58,6 +58,7 @@ public:
     void wordWindow(const char *code, int len, size_t &lo, size_t &hi) const;
     bool nextWordGroup(size_t &pos, size_t end, WordGroup &out) const;
     bool nextPredictGroup(size_t &pos, PredictGroup &out) const;
+    bool findPredictGroup(const std::string &key, PredictGroup &out) const;
 
 private:
     static uint32_t readU32(const uint8_t *p);

@@ -245,4 +245,35 @@ bool Im3Dictionary::nextPredictGroup(size_t &pos, PredictGroup &out) const {
     return true;
 }
 
+bool Im3Dictionary::findPredictGroup(const std::string &key, PredictGroup &out) const {
+    out.key.clear();
+    out.candidates.clear();
+    if (!_valid || !_predictData || key.empty()) return false;
+
+    const uint8_t *base = _predictData;
+    size_t pos = 0;
+    size_t end = _predictDataSize;
+    while (pos < end) {
+        int keyLen = utf8CharLen(base[pos]);
+        if (keyLen <= 0 || pos + (size_t)keyLen + 1 > end) return false;
+        bool matched = key.size() == (size_t)keyLen &&
+                       std::memcmp(base + pos, key.data(), keyLen) == 0;
+        size_t keyPos = pos;
+        pos += keyLen;
+        uint8_t n = base[pos++];
+        if (matched) {
+            out.key.assign((const char *)base + keyPos, keyLen);
+            out.candidates.reserve(n);
+        }
+        for (uint8_t i = 0; i < n && pos < end; i++) {
+            uint8_t wl = base[pos++];
+            if (wl == 0 || pos + wl > end) return false;
+            if (matched) out.candidates.emplace_back((const char *)base + pos, wl);
+            pos += wl;
+        }
+        if (matched) return true;
+    }
+    return false;
+}
+
 } // namespace ime

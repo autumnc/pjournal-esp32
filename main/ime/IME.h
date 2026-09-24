@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <cstddef>
 #include <unordered_map>
-#include <unordered_set>
 #include "ime_config.h"
 #include "yong_dict.h"
 
@@ -137,7 +137,11 @@ private:
     void loadUserDict();
     bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
     void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
-    void markUserDictDirty(bool &dirty);
+    void loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
+                             bool &dirty, size_t maxEntries);
+    void appendUserDictJournal(const char *path, const UserEntry &entry);
+    void clearUserDictJournal(const char *path);
+    void markUserDictDirty(bool &dirty, const char *path = nullptr, const UserEntry *entry = nullptr);
     void flushUserDictSaves(bool force);
     void rebuildUserPredictIndex();
     void addUserWord(const std::string &code, const std::string &word);
@@ -180,7 +184,8 @@ private:
 
     std::string _code;
     std::vector<std::string> _all;
-    std::unordered_set<std::string> _candidateSeen;
+    uint32_t _candidateHashes[MAX_CANDIDATES] = {};
+    size_t _candidateHashCount = 0;
     std::vector<int> _candLen;  // code length per candidate in _all
     std::vector<std::string> _page;
     int _pageStart = 0;
@@ -210,7 +215,7 @@ private:
     void loadEnglishDict();
     bool hasCandidate(const std::string &text) const;
     void clearCandidates();
-    void rebuildCandidateSeen();
+    void rebuildCandidateHashes();
     bool appendCandidate(const std::string &text, int candLen);
     void appendSingleCharCandidates(const std::string &prefix, int candLen);  // 主词典单字前缀候选
     void buildPage();
