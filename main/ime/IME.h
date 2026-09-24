@@ -129,7 +129,12 @@ private:
     std::vector<UserEntry> _dynamicUserWords;
     std::vector<UserEntry> _userPredictWords;
     std::vector<PendingJournalEntry> _pendingUserDictJournal;
+    std::unordered_map<int, std::vector<uint16_t>> _fixedUserCodeIndex;
+    std::unordered_map<int, std::vector<uint16_t>> _dynamicUserCodeIndex;
+    std::unordered_map<int, std::vector<uint16_t>> _fixedUserInitialIndex;
+    std::unordered_map<int, std::vector<uint16_t>> _dynamicUserInitialIndex;
     std::unordered_map<std::string, std::vector<uint16_t>> _userPredictIndex;
+    bool _userWordIndexesDirty = true;
     bool _userPredictIndexDirty = true;
     bool _fixedUserDirty = false;
     bool _dynamicUserDirty = false;
@@ -148,10 +153,13 @@ private:
     void clearUserDictJournal(const char *path);
     void markUserDictDirty(bool &dirty, const char *path = nullptr, const UserEntry *entry = nullptr);
     void flushUserDictSaves(bool force);
+    void markUserWordIndexesDirty();
+    void rebuildUserWordIndexes();
     void rebuildUserPredictIndex();
     void addUserWord(const std::string &code, const std::string &word);
-    void bumpFrequency(const std::string &code, const std::string &word);
-    void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true);
+    void bumpFrequency(const std::string &code, const std::string &word, int weight = 1);
+    void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
+    bool penalizePredictWord(const std::string &word, int weight = 2);
     void learnPredictPairs(const std::string &text);
     void rememberCommittedText(const std::string &text);
     static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
@@ -197,6 +205,7 @@ private:
     int _pageSize = 9;
     int _curPage = 0;                    // 当前页索引(第 _curPage+1 页)
     std::vector<int> _pageStarts;        // 每页起始候选索引; 按实测宽度分页时由 buildPage 重建
+    int _pageAnchor = -1;                // 翻页时锚定目标候选, 宽度分页重建后仍停在包含它的页
     WidthFn _widthFn = nullptr;          // 候选文本宽度测量回调
     int _displayWidth = 0;               // 候选行可用像素宽度(0=退化为固定 _pageSize 分页)
     bool _fixedCandidatePaging = false;  // 短辅音输入走固定分页, 避免热路径反复测字宽
