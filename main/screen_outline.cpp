@@ -1579,7 +1579,7 @@ AppState screen_outline_handle(int key, ScreenContext &ctx) {
                 g.noteVrowsDirty = false;
             }
             int contentY = FONT_H + 8 + LINE_SPACING;
-            int maxY = g_ime.composing() ? (STATUS_Y - 2 * LINE_SPACING) : STATUS_Y;
+            int maxY = g_ime.composing() ? imeStatusPanelTopY() : STATUS_Y;
             int vis = (maxY - contentY) / LINE_SPACING;
             if (vis < 1) vis = 1;
             int cursorVrow = 0;
