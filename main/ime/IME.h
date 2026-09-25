@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <utility>
 #include <cstdint>
 #include <cstddef>
 #include <unordered_map>
@@ -49,6 +50,13 @@ public:
 
     bool isLfMode() const { return _lfMode; }
     bool isDeleteMode() const { return _deleteMode; }
+    void toggleDeleteMode();
+    void setDeleteMode(bool on);
+    std::string takeStatusMessage() {
+        std::string msg = _statusMessage;
+        _statusMessage.clear();
+        return msg;
+    }
 
     void beginPredict(const std::string &text);
     void endPredict() { _predicting = false; _predChar = ""; }
@@ -60,6 +68,8 @@ public:
     struct UserEntryView { std::string code; std::string word; int count; bool trad = false; };
     const std::vector<UserEntryView> userDictEntries(UserDictKind kind) const;
     bool addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word);
+    bool addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word,
+                          int count, bool trad);
     void removeUserDictEntries(UserDictKind kind, const std::vector<int> &indices);
     void clearUserDict(UserDictKind kind);
     size_t userDictSize(UserDictKind kind) const;
@@ -117,6 +127,7 @@ private:
     std::string _predChar;
     std::string _lastCommitChar;
     std::string _lastCommitText;
+    std::string _statusMessage;
     int _partialStart = 0;
     int _maxMatchLen = 0;
     std::string _prefix;
@@ -161,11 +172,13 @@ private:
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
     bool penalizePredictWord(const std::string &word, int weight = 2);
     void learnPredictPairs(const std::string &text);
+    void learnAutoPhraseFromSingle(const std::string &code, const std::string &word);
     void rememberCommittedText(const std::string &text);
     static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
 
     bool _deleteMode = false;
     bool _vMode = false;
+    std::vector<std::pair<std::string, std::string>> _recentSingleCommits;
     int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
     bool _englishCompose = false;
     bool _englishDictLoaded = false;

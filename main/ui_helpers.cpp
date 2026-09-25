@@ -307,6 +307,14 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
 IME &g_ime = IME::getInstance();
 
 // ── IME drawing helper ────────────────────────────────────────────────────
+int imeStatusPanelTopY() {
+    return STATUS_Y - 67;
+}
+
+int imeFullscreenPanelTopY() {
+    return SCREEN_H - (2 * FONT_H + 12);
+}
+
 void drawIMEUI(int baseY, bool anchorBottom) {
     if (!g_ime.composing()) return;
 
@@ -341,8 +349,9 @@ void drawIMEUI(int baseY, bool anchorBottom) {
 
     // 白底清出候选条区域;anchorBottom 清到分割线为止,不抹掉状态栏
     u8g2_SetDrawColor(g_u8g2, 1);
+    int panelBottom = anchorBottom ? STATUS_BAR_Y : SCREEN_H;
     u8g2_DrawBox(g_u8g2, 0, baseY, SCREEN_W,
-                 (anchorBottom ? STATUS_BAR_Y : baseY + 67) - baseY);
+                 panelBottom - baseY);
     u8g2_SetDrawColor(g_u8g2, 1);
 
     int cw = g_font.textWidth(code.c_str()) + 8;
@@ -384,6 +393,15 @@ void drawIMEUI(int baseY, bool anchorBottom) {
         g_font.drawText(x, candBase, part.c_str(), false);
         x += partW;
     }
+    u8g2_SetDrawColor(g_u8g2, 1);
+}
+
+void drawIMEUIWithStatusBar() {
+    drawIMEUI(imeStatusPanelTopY(), true);
+}
+
+void drawIMEUIFullscreen() {
+    drawIMEUI(imeFullscreenPanelTopY(), false);
 }
 
 // ── UI Helpers ────────────────────────────────────────────────────────────

@@ -192,61 +192,7 @@ static void drawKeywordEdit() {
     u8g2_DrawBox(g_u8g2, 4 + cx, ty + 4, 8, 3);
     u8g2_SetDrawColor(g_u8g2, 1);
 
-    // IME candidates
-    if (g_ime.composing()) {
-        std::string code = g_ime.displayCode();
-        int pageSize = g_ime.pageSize();
-        int curPage = g_ime.currentPage();
-        int totalPages = g_ime.totalPages();
-        if (totalPages < 1) totalPages = 1;
-        char pageInfo[32];
-        snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-
-        int candBaseline = SCREEN_H - 9;
-        int sepY = candBaseline - FONT_H - 4;
-        int codeBaseline = sepY - 7;
-
-        {
-            int cw = g_font.textWidth(code.c_str()) + 8;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, codeBaseline, code.c_str(), false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-        {
-            int tw = g_font.textWidth(pageInfo);
-            int pw = tw + 8;
-            int px = SCREEN_W - pw - 4;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(px + 4, codeBaseline, pageInfo, false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-        u8g2_SetDrawColor(g_u8g2, 0);
-        u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
-        u8g2_SetDrawColor(g_u8g2, 1);
-        auto &cands = g_ime.candidates();
-        std::string candLine;
-        for (int i = 0; i < (int)cands.size(); i++) {
-            char idx[16];
-            snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-            std::string part = std::string(" ") + idx + cands[i];
-            int curW = g_font.textWidth(candLine.c_str());
-            int partW = g_font.textWidth(part.c_str());
-            if (curW + partW + 8 > SCREEN_W) break;
-            candLine += part;
-        }
-        {
-            int cw = g_font.textWidth(candLine.c_str()) + 8;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, candBaseline - g_font.ascent(), cw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, candBaseline, candLine.c_str(), false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-    }
+    if (g_ime.composing()) drawIMEUIFullscreen();
     u8g2_SetDrawColor(g_u8g2, 0);
     ui_commit();
 }
@@ -268,65 +214,11 @@ static void drawSearch() {
     int sepY = FONT_H + 4;
     u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
 
-    // IME candidates
-    int imeH = 0;
-    if (g.searchImeActive && g_ime.composing()) {
-        std::string code = g_ime.displayCode();
-        int pageSize = g_ime.pageSize();
-        int curPage = g_ime.currentPage();
-        int totalPages = g_ime.totalPages();
-        if (totalPages < 1) totalPages = 1;
-        char pageInfo[32];
-        snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-
-        int candBaseline = SCREEN_H - 9;
-        int candSepY = candBaseline - FONT_H - 4;
-        int codeBaseline = candSepY - 7;
-        imeH = candBaseline + FONT_H - sepY;
-
-        { // code display
-            int cw = g_font.textWidth(code.c_str()) + 8;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, codeBaseline, code.c_str(), false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-        { // page info
-            int tw = g_font.textWidth(pageInfo);
-            int pw = tw + 8;
-            int px = SCREEN_W - pw - 4;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(px + 4, codeBaseline, pageInfo, false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-        u8g2_SetDrawColor(g_u8g2, 0);
-        u8g2_DrawHLine(g_u8g2, 0, candSepY, SCREEN_W);
-        u8g2_SetDrawColor(g_u8g2, 1);
-        auto &cands = g_ime.candidates();
-        std::string candLine;
-        for (int i = 0; i < (int)cands.size(); i++) {
-            char idx[16];
-            snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-            std::string part = std::string(" ") + idx + cands[i];
-            int curW = g_font.textWidth(candLine.c_str());
-            int partW = g_font.textWidth(part.c_str());
-            if (curW + partW + 8 > SCREEN_W) break;
-            candLine += part;
-        }
-        int cw = g_font.textWidth(candLine.c_str()) + 8;
-        u8g2_SetDrawColor(g_u8g2, 1);
-        u8g2_DrawBox(g_u8g2, 4, candBaseline - g_font.ascent(), cw, FONT_H);
-        u8g2_SetDrawColor(g_u8g2, 0);
-        g_font.drawText(4, candBaseline, candLine.c_str(), false);
-        u8g2_SetDrawColor(g_u8g2, 1);
-    }
+    bool searchComposing = g.searchImeActive && g_ime.composing();
 
     // Search results
     int listY = sepY + LINE_SPACING;
-    int listMaxY = imeH > 0 ? SCREEN_H - imeH - LINE_SPACING : SCREEN_H;
+    int listMaxY = searchComposing ? imeFullscreenPanelTopY() - LINE_SPACING : SCREEN_H;
     int vis = (listMaxY - listY + LINE_SPACING - 1) / LINE_SPACING;
     if (vis < 1) vis = 1;
 
@@ -369,6 +261,7 @@ static void drawSearch() {
             ui_draw_text(8, listY, "未找到匹配项");
     }
 
+    if (searchComposing) drawIMEUIFullscreen();
     ui_commit();
 }
 

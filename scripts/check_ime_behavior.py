@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import re
+import struct
 from pathlib import Path
 
 
@@ -12,6 +13,13 @@ IME_CONFIG_H = ROOT / "main" / "ime" / "ime_config.h"
 KAOMOJI_H = ROOT / "main" / "ime" / "kaomoji_table.h"
 ENGLISH_WORDS = ROOT / "main" / "ime" / "english_words.txt"
 IME3_DOC = ROOT / "docs" / "ime3_format.md"
+IME_TABLE = ROOT / "main" / "ime" / "ime_table_pinyin.bin"
+PREDICT_SOURCE = ROOT / "main" / "ime" / "predict_source.txt"
+ADD_PREDICT_SCRIPT = ROOT / "scripts" / "add_ime_predictions.py"
+GEN_PREDICT_SCRIPT = ROOT / "scripts" / "generate_predict_source.py"
+SCREEN_EDITOR_CPP = ROOT / "main" / "screen_editor.cpp"
+MAIN_CPP = ROOT / "main" / "main.cpp"
+UI_HELPERS_CPP = ROOT / "main" / "ui_helpers.cpp"
 
 
 def initial_of(syllable, keep_zh_ch_sh):
@@ -86,7 +94,7 @@ def load_fullwidth_punct():
     block = text.split("bool IME::handleFullwidthPunct", 1)[1]
     block = block.split("bool IME::handleFullwidthChar", 1)[0]
     entries = {}
-    for match in re.finditer(r"case '(.|\\\\)':\s*out = \"([^\"]+)\";\s*return true;", block):
+    for match in re.finditer(r"case '(.|\\\\)':\s*out = \"([^\"]+)\";\s*return (?:true|punctDone\(\));", block):
         key = match.group(1)
         if key == "\\\\":
             key = "\\"
@@ -117,6 +125,24 @@ def load_english_words():
 def require_source_contains(name, text, snippet):
     if snippet not in text:
         raise SystemExit(f"{name}: missing source snippet {snippet!r}")
+
+
+def ime3_predict_count(path):
+    blob = path.read_bytes()
+    if len(blob) < 12 or blob[:4] != b"IME3":
+        raise SystemExit("ime table: not IME3")
+    code_len = blob[5]
+    single_count = struct.unpack_from("<I", blob, 8)[0]
+    single_end = 12 + (26 * 26 + 1) * 4 + single_count * (code_len + 4)
+    word_index_base = single_end + 4
+    word_data_base = word_index_base + (26 * 26 + 1) * 4
+    if word_data_base > len(blob):
+        return 0
+    word_data_size = struct.unpack_from("<I", blob, word_index_base + (26 * 26) * 4)[0]
+    pred_base = word_data_base + word_data_size
+    if pred_base + 4 > len(blob):
+        return 0
+    return struct.unpack_from("<I", blob, pred_base)[0]
 
 
 def parse_user_line(raw):
@@ -174,6 +200,9 @@ def main():
     yong_dict_cpp = YONG_DICT_CPP.read_text(encoding="utf-8")
     ime_config_h = IME_CONFIG_H.read_text(encoding="utf-8")
     ime3_doc = IME3_DOC.read_text(encoding="utf-8")
+    screen_editor_cpp = SCREEN_EDITOR_CPP.read_text(encoding="utf-8")
+    main_cpp = MAIN_CPP.read_text(encoding="utf-8")
+    ui_helpers_cpp = UI_HELPERS_CPP.read_text(encoding="utf-8")
 
     cases = [
         ("full shuru", seg_candidates("shuru", entries), "输入"),
@@ -237,6 +266,35 @@ def main():
     require_source_contains("page anchor", ime_h, "_pageAnchor")
     require_source_contains("predict lazy index", yong_dict_cpp, "buildPredictIndex()")
     require_source_contains("predict index cap", ime_config_h, "PJOURNAL_IME_PREDICT_INDEX_MAX_GROUPS")
+    if ime3_predict_count(IME_TABLE) < 1000:
+        raise SystemExit("ime table: prediction section missing or too small")
+    require_source_contains("predict source 输入法", PREDICT_SOURCE.read_text(encoding="utf-8"), "输入法\t")
+    require_source_contains("predict generator", ADD_PREDICT_SCRIPT.read_text(encoding="utf-8"), "Append/replace IME3 prediction section")
+    require_source_contains("predict source generator", GEN_PREDICT_SCRIPT.read_text(encoding="utf-8"), "augment_from_seg")
+    require_source_contains("delete mode api", ime_h, "toggleDeleteMode")
+    require_source_contains("delete mode hotkey", main_cpp, "Ctrl+D → IME user word deletion mode")
+    require_source_contains("delete mode label", screen_editor_cpp, "imeLabel = \"[删]\"")
+    require_source_contains("delete mode status", ime_cpp, "已删除:")
+    require_source_contains("auto phrase learning", ime_cpp, "learnAutoPhraseFromSingle")
+    require_source_contains("ime ui status bar helper", ui_helpers_cpp, "drawIMEUIWithStatusBar")
+    require_source_contains("ime ui fullscreen helper", ui_helpers_cpp, "drawIMEUIFullscreen")
+    for screen_name in (
+        "screen_editor.cpp",
+        "screen_gtd.cpp",
+        "screen_inspiration.cpp",
+        "screen_outline.cpp",
+        "screen_polish.cpp",
+        "screen_polish_prompt.cpp",
+        "screen_settings.cpp",
+    ):
+        screen_text = (ROOT / "main" / screen_name).read_text(encoding="utf-8")
+        if "displayCode()" in screen_text or ".candidates()" in screen_text:
+            raise SystemExit(f"{screen_name}: IME UI should use shared helpers")
+    settings_text = (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8")
+    require_source_contains("shared ime ui in settings/status", settings_text, "drawIMEUIWithStatusBar")
+    require_source_contains("shared ime ui in settings/fullscreen", settings_text, "drawIMEUIFullscreen")
+    require_source_contains("dict export", (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8"), "exportCurrentDict")
+    require_source_contains("dict import", (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8"), "importCurrentDict")
     require_source_contains("ime3 doc header", ime3_doc, "IME3 Dictionary Format")
     require_source_contains("ime3 doc prediction", ime3_doc, "Prediction Section")
 

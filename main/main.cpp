@@ -518,6 +518,19 @@ extern "C" void app_main() {
             screen_editor_reset_drawn();
             key = 0;
         }
+        // Ctrl+D → IME user word deletion mode (only when IME active in editor)
+        if (key == 0x04 && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
+            app_toggle_ime_delete_mode();
+            {
+                std::string imeStatus = IME::getInstance().takeStatusMessage();
+                if (!imeStatus.empty()) {
+                    ctx.statusMessage = imeStatus;
+                    ctx.statusDuration = 30;
+                }
+            }
+            screen_editor_reset_drawn();
+            key = 0;
+        }
 
         // ── BT auto-reconnect retry ──────────────────────────────────────
         // 多设备: 断线后按最近使用顺序轮询已配对设备, 谁在线连谁

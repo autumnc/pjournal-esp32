@@ -1117,117 +1117,9 @@ static std::string exportMD() {
 
 
 
-#define IME_CODE_Y (STATUS_Y - 2*FONT_H + g_font.ascent())
-
-#define IME_CAND_Y (STATUS_Y - FONT_H + g_font.ascent() - 3)
-
-
-
 static void drawIMEStatus() {
-
-    if (!g_ime.composing()) return;
-
-    std::string code = g_ime.displayCode();
-
-    int pageSize = g_ime.pageSize();
-
-    int curPage = g_ime.currentPage();
-
-    int totalPages = g_ime.totalPages();
-
-    if (totalPages < 1) totalPages = 1;
-
-    char pageInfo[32];
-
-    snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-
-    int sepY = IME_CODE_Y - 4;
-
-    int codeBaseline = sepY - 7;
-
-    {
-
-        int cw = g_font.textWidth(code.c_str()) + 8;
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-        u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
-
-        u8g2_SetDrawColor(g_u8g2, 0);
-
-        g_font.drawText(4, codeBaseline, code.c_str(), false);
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-    }
-
-    {
-
-        int tw = g_font.textWidth(pageInfo);
-
-        int pw = tw + 8;
-
-        int px = SCREEN_W - pw - 4;
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-        u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
-
-        u8g2_SetDrawColor(g_u8g2, 0);
-
-        g_font.drawText(px + 4, codeBaseline, pageInfo, false);
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-    }
-
-    u8g2_SetDrawColor(g_u8g2, 0);
-
-    u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
-
-    u8g2_SetDrawColor(g_u8g2, 1);
-
-    auto &cands = g_ime.candidates();
-
-    std::string candLine;
-
-    for (int i = 0; i < (int)cands.size(); i++) {
-
-        char idx[16];
-
-        snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-
-        std::string part = std::string(" ") + idx + cands[i];
-
-        int curW = g_font.textWidth(candLine.c_str());
-
-        int partW = g_font.textWidth(part.c_str());
-
-        if (curW + partW + 8 > SCREEN_W) break;
-
-        candLine += part;
-
-    }
-
-    {
-
-        int cw = g_font.textWidth(candLine.c_str()) + 8;
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-        u8g2_DrawBox(g_u8g2, 4, IME_CAND_Y - g_font.ascent(), cw, FONT_H);
-
-        u8g2_SetDrawColor(g_u8g2, 0);
-
-        g_font.drawText(4, IME_CAND_Y, candLine.c_str(), false);
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-    }
-
+    drawIMEUIWithStatusBar();
 }
-
-
 
 static void drawTabBar() {
 
@@ -1491,7 +1383,7 @@ static void drawList() {
 
         auto &tasks = g.data["tasks"];
 
-        int maxY = g_ime.composing() ? (IME_CODE_Y - 4) : STATUS_Y;
+        int maxY = g_ime.composing() ? imeStatusPanelTopY() : STATUS_Y;
 
         int vis = (maxY - y + LINE_SPACING - 1) / LINE_SPACING;
 
@@ -1637,7 +1529,7 @@ static void drawList() {
 
 
 
-    int maxY = g_ime.composing() ? (IME_CODE_Y - 4) : STATUS_Y;
+    int maxY = g_ime.composing() ? imeStatusPanelTopY() : STATUS_Y;
 
     int vis = (maxY - y + LINE_SPACING - 1) / LINE_SPACING;
 
@@ -1887,123 +1779,7 @@ static void drawAdd() {
 
 
 
-    // IME at bottom of screen, no status bar reservation
-
-    if (g_ime.composing()) {
-
-        std::string code = g_ime.displayCode();
-
-        int pageSize = g_ime.pageSize();
-
-        int curPage = g_ime.currentPage();
-
-        int totalPages = g_ime.totalPages();
-
-        if (totalPages < 1) totalPages = 1;
-
-        char pageInfo[32];
-
-        snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-
-
-
-        int candBaseline = SCREEN_H - 9;
-
-        int sepY = candBaseline - FONT_H - 4;
-
-        int codeBaseline = sepY - 7;
-
-
-
-        // Code line
-
-        {
-
-            int cw = g_font.textWidth(code.c_str()) + 8;
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            g_font.drawText(4, codeBaseline, code.c_str(), false);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-        }
-
-        // Page info
-
-        {
-
-            int tw = g_font.textWidth(pageInfo);
-
-            int pw = tw + 8;
-
-            int px = SCREEN_W - pw - 4;
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            g_font.drawText(px + 4, codeBaseline, pageInfo, false);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-        }
-
-        // Separator
-
-        u8g2_SetDrawColor(g_u8g2, 0);
-
-        u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-        // Candidates
-
-        auto &cands = g_ime.candidates();
-
-        std::string candLine;
-
-        for (int i = 0; i < (int)cands.size(); i++) {
-
-            char idx[16];
-
-            snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-
-            std::string part = std::string(" ") + idx + cands[i];
-
-            int curW = g_font.textWidth(candLine.c_str());
-
-            int partW = g_font.textWidth(part.c_str());
-
-            if (curW + partW + 8 > SCREEN_W) break;
-
-            candLine += part;
-
-        }
-
-        {
-
-            int cw = g_font.textWidth(candLine.c_str()) + 8;
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_DrawBox(g_u8g2, 4, candBaseline - g_font.ascent(), cw, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            g_font.drawText(4, candBaseline, candLine.c_str(), false);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-        }
-
-    }
+    drawIMEUIFullscreen();
 
     u8g2_SetDrawColor(g_u8g2, 0);
 
@@ -3037,113 +2813,7 @@ static void drawNoteEditor() {
 
 
 
-    // IME at bottom
-
-    if (g_ime.composing()) {
-
-        std::string code = g_ime.displayCode();
-
-        int pageSize = g_ime.pageSize();
-
-        int curPage = g_ime.currentPage();
-
-        int totalPages = g_ime.totalPages();
-
-        if (totalPages < 1) totalPages = 1;
-
-        char pageInfo[32];
-
-        snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-
-
-
-        int candBaseline = STATUS_Y - 9;
-
-        int sepY = candBaseline - FONT_H - 4;
-
-        int codeBaseline = sepY - 7;
-
-        {
-
-            int cw = g_font.textWidth(code.c_str()) + 8;
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            g_font.drawText(4, codeBaseline, code.c_str(), false);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-        }
-
-        {
-
-            int tw = g_font.textWidth(pageInfo);
-
-            int pw = tw + 8;
-
-            int px = SCREEN_W - pw - 4;
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            g_font.drawText(px + 4, codeBaseline, pageInfo, false);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-        }
-
-        u8g2_SetDrawColor(g_u8g2, 0);
-
-        u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
-
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-        auto &cands = g_ime.candidates();
-
-        std::string candLine;
-
-        for (int i = 0; i < (int)cands.size(); i++) {
-
-            char idx[16];
-
-            snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-
-            std::string part = std::string(" ") + idx + cands[i];
-
-            int curW = g_font.textWidth(candLine.c_str());
-
-            int partW = g_font.textWidth(part.c_str());
-
-            if (curW + partW + 8 > SCREEN_W) break;
-
-            candLine += part;
-
-        }
-
-        {
-
-            int cw = g_font.textWidth(candLine.c_str()) + 8;
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_DrawBox(g_u8g2, 4, candBaseline - g_font.ascent(), cw, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            g_font.drawText(4, candBaseline, candLine.c_str(), false);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-        }
-
-    }
+    drawIMEUIWithStatusBar();
 
     u8g2_SetDrawColor(g_u8g2, 0);
 
@@ -3175,7 +2845,7 @@ static void drawDetail() {
 
     int y = FONT_H + 8 + LINE_SPACING;
 
-    int maxY = (g.mode == M_EDIT_FIELD && g_ime.composing()) ? (IME_CODE_Y - 4) : STATUS_Y;
+    int maxY = (g.mode == M_EDIT_FIELD && g_ime.composing()) ? imeStatusPanelTopY() : STATUS_Y;
 
     int vis = (maxY - y + LINE_SPACING - 1) / LINE_SPACING;
 

@@ -31,8 +31,6 @@ extern "C" {
 
 #include "clipboard.h"
 
-#define IME_CODE_Y (STATUS_BAR_Y - 2*FONT_H + g_font.ascent())
-#define IME_CAND_Y (STATUS_BAR_Y - FONT_H + g_font.ascent() - 3)
 #define EDITOR_MAX_CELLS (SCREEN_W / g_font.halfAdvance())
 
 // ── Editor state ─────────────────────────────────────────────────────────
@@ -903,6 +901,7 @@ static void drawSearchPanel() {
     // 状态栏
     std::string imeLabel;
     if (!sh.imeActive) imeLabel = "EN";
+    else if (g_ime.isDeleteMode()) imeLabel = "[删]";
     else if (g_ime.english()) imeLabel = "[英]";
     else {
         imeLabel = "[中]";
@@ -914,7 +913,7 @@ static void drawSearchPanel() {
     if (!bt.empty()) right += " " + bt;
     ui_draw_status(sh.focusRep ? "替换字段" : "查找字段", right.c_str());
 
-    if (sh.imeActive && g_ime.composing()) drawIMEUI(SCREEN_H - 67 - 4);
+    if (sh.imeActive && g_ime.composing()) drawIMEUIFullscreen();
     ui_commit();
 }
 
@@ -1074,6 +1073,7 @@ static const char *HELP_LINES[] = {
     "Ctrl+Y历史版本",
     "Ctrl+N/P快捷编辑文件",
     "Ctrl+Space输入法开关",
+    "Ctrl+D删除用户词",
     "Shift+Space全半角切换",
     "Ctrl+Shift+F简繁",
     "左Shift临时英文",
@@ -1251,7 +1251,7 @@ static void drawEditor() {
             if (g_editor.scroll > maxScroll) g_editor.scroll = maxScroll;
         }
 
-        if (composing) drawIMEUI(STATUS_Y - 67, true);
+        if (composing) drawIMEUIWithStatusBar();
         VerticalGuideStyle guideStyle = VerticalGuideStyle::Solid;
         std::string guideStyleKey = g_settings.verticalReferenceLineStyle();
         if (guideStyleKey == "dash") guideStyle = VerticalGuideStyle::Dash;
@@ -1293,6 +1293,7 @@ static void drawEditor() {
             else snprintf(left, sizeof(left), "%s 竖排", g_editor.promptMode ? "提示写作" : "自由写作");
             std::string imeLabel;
             if (!g_editor.imeActive) imeLabel = "EN";
+            else if (g_ime.isDeleteMode()) imeLabel = "[删]";
             else if (g_ime.english()) imeLabel = "[英]";
             else {
                 imeLabel = "[中]";
@@ -1311,7 +1312,7 @@ static void drawEditor() {
     bool composing = g_ime.composing() && !s_skipStatusBarAndIme;
     // IME 开启期间恒定保留候选条区域,选字后候选条隐藏不再引起正文重排跳动
     bool reserveIME = g_editor.imeActive && !s_skipStatusBarAndIme;
-    int contentEndY = reserveIME ? IME_CODE_Y : STATUS_Y;
+    int contentEndY = reserveIME ? imeStatusPanelTopY() : STATUS_Y;
     int visibleVrows = (contentEndY - y + LINE_SPACING - 1) / LINE_SPACING;
     if (visibleVrows < 1) visibleVrows = 1;
 
@@ -1419,60 +1420,7 @@ static void drawEditor() {
         u8g2_SetDrawColor(g_u8g2, 1);
     }
 
-    if (composing) {
-        std::string code = g_ime.displayCode();
-        int pageSize = g_ime.pageSize();
-        int curPage = g_ime.currentPage();
-        int totalPages = g_ime.totalPages();
-        if (totalPages < 1) totalPages = 1;
-        char pageInfo[32];
-        snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-        int sepY = IME_CODE_Y - 4;
-        int codeBaseline = sepY - 7;
-        {
-            int cw = g_font.textWidth(code.c_str()) + 8;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, 4, codeBaseline - g_font.ascent(), cw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, codeBaseline, code.c_str(), false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-        {
-            int tw = g_font.textWidth(pageInfo);
-            int pw = tw + 8;
-            int px = SCREEN_W - pw - 4;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, px, codeBaseline - g_font.ascent(), pw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(px + 4, codeBaseline, pageInfo, false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-        }
-        u8g2_SetDrawColor(g_u8g2, 0);
-        u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
-        u8g2_SetDrawColor(g_u8g2, 1);
-
-        auto &cands = g_ime.candidates();
-        int hl = g_ime.highlightIdx();
-        int candX = 4;
-        for (int i = 0; i < (int)cands.size(); i++) {
-            char idx[16];
-            snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-            std::string part = std::string(" ") + idx + cands[i];
-            int partW = g_font.textWidth(part.c_str());
-            if (candX + partW + 8 > SCREEN_W) break;
-            u8g2_SetDrawColor(g_u8g2, 1);
-            u8g2_DrawBox(g_u8g2, candX, IME_CAND_Y - g_font.ascent(), partW, FONT_H);
-            if (i == hl) {
-                u8g2_SetDrawColor(g_u8g2, 0);
-                u8g2_DrawBox(g_u8g2, candX, IME_CAND_Y - g_font.ascent(), partW, FONT_H);
-                u8g2_SetDrawColor(g_u8g2, 1);
-            } else {
-                u8g2_SetDrawColor(g_u8g2, 0);
-            }
-            g_font.drawText(candX, IME_CAND_Y, part.c_str(), false);
-            candX += partW;
-        }
-    }
+    if (composing) drawIMEUIWithStatusBar();
 
     if (!s_skipStatusBarAndIme) {
         int wc = getWordCount();
@@ -1485,6 +1433,7 @@ static void drawEditor() {
         }
         std::string imeLabel;
         if (!g_editor.imeActive) imeLabel = "EN";
+        else if (g_ime.isDeleteMode()) imeLabel = "[删]";
         else if (g_ime.english()) imeLabel = "[英]";
         else {
             imeLabel = "[中]";
@@ -1811,6 +1760,11 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     if (g_editor.imeActive && key != 0) {
         std::string imeOut;
         if (g_ime.handleKey(key, imeOut)) {
+            std::string imeStatus = g_ime.takeStatusMessage();
+            if (!imeStatus.empty()) {
+                ctx.statusMessage = imeStatus;
+                ctx.statusDuration = 30;
+            }
             // 英文模式连续上屏两个候选词且中间无空格时, 自动补空格分隔
             if (g_ime.english() && !imeOut.empty() && !g_editor.hasSelection) {
                 const std::string &line = g_editor.lines[g_editor.cy];
@@ -2358,6 +2312,10 @@ void app_toggle_trad() {
 
 void app_toggle_english() {
     g_ime.toggleEnglish();
+}
+
+void app_toggle_ime_delete_mode() {
+    g_ime.toggleDeleteMode();
 }
 
 static bool g_editorNeedsReinit = false;

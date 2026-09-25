@@ -1322,9 +1322,15 @@ const std::vector<IME::UserEntryView> IME::userDictEntries(UserDictKind kind) co
 }
 
 bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word) {
+    return addUserDictEntry(kind, code, word, 1, _trad);
+}
+
+bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word,
+                           int count, bool trad) {
     ensureUserDictLoaded();
     if (word.length() < 3 || code.length() == 0) return false;
     if (kind == PREDICT_DICT && !validPredictEntry(code, word)) return false;
+    if (count < 1) count = 1;
     std::vector<UserEntry> &entries =
         (kind == FIXED_DICT) ? _fixedUserWords :
         (kind == PREDICT_DICT) ? _userPredictWords : _dynamicUserWords;
@@ -1338,8 +1344,8 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
         (kind == FIXED_DICT) ? USERDICT_FIXED_LIMIT :
         (kind == PREDICT_DICT) ? USERPREDICT_LIMIT : USERDICT_DYNAMIC_LIMIT;
     for (auto &p : entries) {
-        if (p.code == code && p.word == word && p.trad == _trad) {
-            p.count++;
+        if (p.code == code && p.word == word && p.trad == trad) {
+            p.count += count;
             dirty = true;
             if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
             else markUserWordIndexesDirty();
@@ -1354,7 +1360,7 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
         if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
         else markUserWordIndexesDirty();
     }
-    entries.push_back({code, word, 1, _trad, userInitialForCode(code)});
+    entries.push_back({code, word, count, trad, userInitialForCode(code)});
     if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
     else markUserWordIndexesDirty();
     dirty = true;
@@ -1779,6 +1785,26 @@ void IME::learnPredictPairs(const std::string &text) {
     if (_userPredictDirty) flushUserDictSaves(false);
 }
 
+void IME::learnAutoPhraseFromSingle(const std::string &code, const std::string &word) {
+    if (code.empty() || word.empty() || word.size() > 3 || !isCjkChar(word)) {
+        _recentSingleCommits.clear();
+        return;
+    }
+    _recentSingleCommits.push_back({code, word});
+    if (_recentSingleCommits.size() > 4)
+        _recentSingleCommits.erase(_recentSingleCommits.begin());
+    int n = (int)_recentSingleCommits.size();
+    for (int len = 2; len <= 4 && len <= n; len++) {
+        std::string phraseCode;
+        std::string phraseWord;
+        for (int i = n - len; i < n; i++) {
+            phraseCode += _recentSingleCommits[i].first;
+            phraseWord += _recentSingleCommits[i].second;
+        }
+        if (phraseWord.size() >= 6) bumpFrequency(phraseCode, phraseWord);
+    }
+}
+
 void IME::rememberCommittedText(const std::string &text) {
     if (text.empty()) return;
     std::string first = utf8CharAt(text, 0);
@@ -1897,6 +1923,19 @@ void IME::reset() {
     _fixedCandidatePaging = false;
     _candidateLimit = MAX_CANDIDATES;
     _englishCompose = false;
+}
+
+void IME::setDeleteMode(bool on) {
+    ensureUserDictLoaded();
+    _english = false;
+    reset();
+    _deleteMode = on;
+    _statusMessage = on ? "删除用户词模式" : "退出删除模式";
+    if (on) lookup();
+}
+
+void IME::toggleDeleteMode() {
+    setDeleteMode(!_deleteMode);
 }
 
 int IME::pinyinPrefixLen(const std::string &code) {
@@ -3109,6 +3148,7 @@ bool IME::commit(int idx, std::string &out) {
         return true;
     }
     if (_deleteMode) {
+        bool deleted = false;
         auto eraseMatch = [&](bool requireCode) -> bool {
             for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
                 if (it->word == out && it->trad == _trad &&
@@ -3118,6 +3158,7 @@ bool IME::commit(int idx, std::string &out) {
                     _dynamicUserDirty = true;
                     saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
                     penalizePredictWord(out, 3);
+                    deleted = true;
                     return true;
                 }
             }
@@ -3126,6 +3167,7 @@ bool IME::commit(int idx, std::string &out) {
         if (!eraseMatch(true)) {
             eraseMatch(false);
         }
+        _statusMessage = deleted ? ("已删除:" + out) : ("未找到动态词:" + out);
         out.clear();
         reset();
         return true;
@@ -3167,6 +3209,7 @@ bool IME::commit(int idx, std::string &out) {
     }
     if (_prefix.length() > 0) {
         _prefix += out;
+        _recentSingleCommits.clear();
         if (hasUpperSuffix) _prefix += _code.substr(pLen);
         _displayCodeDirty = true;
         if (!hasUpperSuffix) {
@@ -3180,6 +3223,9 @@ bool IME::commit(int idx, std::string &out) {
         if (!hasUpperSuffix) {
             bumpFrequency(_code, out, learnWeight);
             for (auto &code : alternateLearningCodes(_code)) bumpFrequency(code, out);
+            learnAutoPhraseFromSingle(_code, out);
+        } else {
+            _recentSingleCommits.clear();
         }
     }
     _prefix.clear();
@@ -3195,26 +3241,30 @@ bool IME::commit(int idx, std::string &out) {
 bool IME::handleFullwidthPunct(int key, std::string &out) {
     // Map ASCII punctuation to fullwidth equivalents when IME is active
     // Only convert specific punctuation, others remain half-width
+    auto punctDone = [&]() {
+        _recentSingleCommits.clear();
+        return true;
+    };
     switch (key) {
-    case ',':  out = "，"; return true; // ，
-    case '.':  out = "。"; return true; // 。
-    case '?':  out = "？"; return true; // ？
-    case ';':  out = "；"; return true; // ；
-    case ':':  out = "："; return true; // ：
-    case '!':  out = "！"; return true; // ！
-    case '(':  out = "（"; return true; // （
-    case ')':  out = "）"; return true; // ）
-    case '[':  out = "【"; return true; // 【
-    case ']':  out = "】"; return true; // 】
-    case '{':  out = "「"; return true; // 「
-    case '}':  out = "」"; return true; // 」
-    case '\\': out = "、"; return true; // 、
-    case '^':  out = "……"; return true; // ……
-    case '<':  out = "《"; return true; // 《
-    case '>':  out = "》"; return true; // 》
-    case '`':  out = "·"; return true; // ·
-    case '_':  out = "——"; return true; // ——
-    case '$':  out = "¥"; return true; // ¥
+    case ',':  out = "，"; return punctDone(); // ，
+    case '.':  out = "。"; return punctDone(); // 。
+    case '?':  out = "？"; return punctDone(); // ？
+    case ';':  out = "；"; return punctDone(); // ；
+    case ':':  out = "："; return punctDone(); // ：
+    case '!':  out = "！"; return punctDone(); // ！
+    case '(':  out = "（"; return punctDone(); // （
+    case ')':  out = "）"; return punctDone(); // ）
+    case '[':  out = "【"; return punctDone(); // 【
+    case ']':  out = "】"; return punctDone(); // 】
+    case '{':  out = "「"; return punctDone(); // 「
+    case '}':  out = "」"; return punctDone(); // 」
+    case '\\': out = "、"; return punctDone(); // 、
+    case '^':  out = "……"; return punctDone(); // ……
+    case '<':  out = "《"; return punctDone(); // 《
+    case '>':  out = "》"; return punctDone(); // 》
+    case '`':  out = "·"; return punctDone(); // ·
+    case '_':  out = "——"; return punctDone(); // ——
+    case '$':  out = "¥"; return punctDone(); // ¥
     case '\'':
         // Single quote pairing: first press = ‘, second press = ’
         if (_singleQuoteOpen) {
@@ -3224,7 +3274,7 @@ bool IME::handleFullwidthPunct(int key, std::string &out) {
             out = "‘";
             _singleQuoteOpen = true;
         }
-        return true;
+        return punctDone();
     case '"':
         // Double quote pairing: first press = “, second press = ”
         if (_doubleQuoteOpen) {
@@ -3234,7 +3284,7 @@ bool IME::handleFullwidthPunct(int key, std::string &out) {
             out = "“";
             _doubleQuoteOpen = true;
         }
-        return true;
+        return punctDone();
     default:   return false; // Other characters remain half-width
     }
 }
@@ -3428,6 +3478,7 @@ bool IME::handleKey(int key, std::string &out) {
             _predicting = false;
             _lastCommitChar.clear();
             _lastCommitText.clear();
+            _recentSingleCommits.clear();
             return true;
         }
         if (isPredictPagePrevKey(key)) { pagePrev(); return true; }

@@ -16,6 +16,7 @@
 #include <vector>
 #include <esp_timer.h>
 #include <esp_sntp.h>
+#include <sys/stat.h>
 
 extern u8g2_t *g_u8g2;
 
@@ -207,6 +208,7 @@ static struct {
     std::string dictSearchBuffer;
     int dictSearchCursor = 0;
     bool dictSearchImeActive = false;
+    std::string dictNotice;
 } g_settingsState;
 
 static const char *dictKindLabel(IME::UserDictKind kind) {
@@ -218,6 +220,18 @@ static const char *dictKindLabel(IME::UserDictKind kind) {
 static int dictKindLimit(IME::UserDictKind kind) {
     if (kind == IME::DYNAMIC_DICT) return 1000;
     return 500;
+}
+
+static const char *dictExportPath(IME::UserDictKind kind) {
+    if (kind == IME::FIXED_DICT) return "/sdcard/settings/userdict_fixed_export.txt";
+    if (kind == IME::PREDICT_DICT) return "/sdcard/settings/userpredict_export.txt";
+    return "/sdcard/settings/userdict_export.txt";
+}
+
+static const char *dictImportPath(IME::UserDictKind kind) {
+    if (kind == IME::FIXED_DICT) return "/sdcard/settings/userdict_fixed_import.txt";
+    if (kind == IME::PREDICT_DICT) return "/sdcard/settings/userpredict_import.txt";
+    return "/sdcard/settings/userdict_import.txt";
 }
 
 static IME::UserDictKind dictKindFromSelection(int sel) {
@@ -320,8 +334,12 @@ static void drawDictList(bool doCommit = true) {
             u8g2_SetDrawColor(g_u8g2, 0);
         }
     }
-    char left[48];
-    snprintf(left, sizeof(left), "a加 d删 c清 /搜 已选%d", (int)g_settingsState.dictSelected.size());
+    char left[64];
+    if (!g_settingsState.dictNotice.empty()) {
+        snprintf(left, sizeof(left), "%s", g_settingsState.dictNotice.c_str());
+    } else {
+        snprintf(left, sizeof(left), "a加 d删 i导入 e导出 已选%d", (int)g_settingsState.dictSelected.size());
+    }
     std::string right = g_settingsState.dictSearchBuffer.empty() ? "Space多选" : ("/" + g_settingsState.dictSearchBuffer);
     ui_draw_status(left, right.c_str());
     if (doCommit) ui_commit();
@@ -343,7 +361,7 @@ static void drawDictSearch() {
     int cx = g_font.textWidth(display.substr(0, g_settingsState.dictSearchCursor).c_str());
     u8g2_DrawBox(g_u8g2, 4 + cx, y + FONT_H * 2 + 4, 8, 3);
     u8g2_SetDrawColor(g_u8g2, 1);
-    if (composing) drawIMEUI(STATUS_Y - 67, true);
+    if (composing) drawIMEUIWithStatusBar();
     ui_commit();
 }
 
@@ -361,7 +379,7 @@ static void drawDictAdd() {
     u8g2_SetDrawColor(g_u8g2, 1);
     ui_draw_status("Enter确定 Esc取消", "Ctrl+Space中文");
     if (g_settingsState.dictAddImeActive && g_ime.composing())
-        drawIMEUI(STATUS_Y - 67, true);
+        drawIMEUIWithStatusBar();
     ui_commit();
 }
 
@@ -370,8 +388,70 @@ static bool parseDictAdd(const std::string &line, std::string &code, std::string
     size_t sp = s.find(' ');
     if (sp == std::string::npos) return false;
     code = settingsTrim(s.substr(0, sp));
-    word = settingsTrim(s.substr(sp + 1));
+    std::string rest = settingsTrim(s.substr(sp + 1));
+    size_t sp2 = rest.find(' ');
+    word = settingsTrim(sp2 == std::string::npos ? rest : rest.substr(0, sp2));
     return !code.empty() && !word.empty();
+}
+
+static bool parseDictImportLine(const std::string &line, std::string &code,
+                                std::string &word, int &count, bool &trad) {
+    if (!parseDictAdd(line, code, word)) return false;
+    count = 1;
+    trad = false;
+    std::string s = settingsTrim(line);
+    size_t sp1 = s.find(' ');
+    if (sp1 == std::string::npos) return true;
+    std::string rest = settingsTrim(s.substr(sp1 + 1));
+    size_t sp2 = rest.find(' ');
+    if (sp2 == std::string::npos) return true;
+    std::string tail = settingsTrim(rest.substr(sp2 + 1));
+    size_t sp3 = tail.find(' ');
+    std::string countText = sp3 == std::string::npos ? tail : tail.substr(0, sp3);
+    bool countOk = !countText.empty();
+    int parsed = 0;
+    for (char c : countText) {
+        if (c < '0' || c > '9') { countOk = false; break; }
+        parsed = parsed * 10 + (c - '0');
+    }
+    if (countOk && parsed > 0) count = parsed;
+    if (sp3 != std::string::npos) {
+        std::string flag = settingsTrim(tail.substr(sp3 + 1));
+        trad = flag == "1" || flag == "t" || flag == "T";
+    }
+    return true;
+}
+
+static bool exportCurrentDict() {
+    auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
+    const char *path = dictExportPath(g_settingsState.dictKind);
+    mkdir("/sdcard/settings", 0777);
+    FILE *f = fopen(path, "w");
+    if (!f) return false;
+    for (auto &e : entries) {
+        std::string line = e.code + " " + e.word + " " + std::to_string(e.count)
+                         + (e.trad ? " 1" : "") + "\n";
+        fwrite(line.data(), 1, line.size(), f);
+    }
+    return fclose(f) == 0;
+}
+
+static int importCurrentDict() {
+    const char *path = dictImportPath(g_settingsState.dictKind);
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    int imported = 0;
+    char buf[256];
+    while (fgets(buf, sizeof(buf), f)) {
+        std::string code, word;
+        int count = 1;
+        bool trad = false;
+        if (parseDictImportLine(buf, code, word, count, trad) &&
+            g_ime.addUserDictEntry(g_settingsState.dictKind, code, word, count, trad))
+            imported++;
+    }
+    fclose(f);
+    return imported;
 }
 
 static std::vector<int> dictFilteredIndices(const std::vector<IME::UserEntryView> &entries) {
@@ -412,6 +492,7 @@ void screen_settings_init() {
     g_settingsState.dictSearchBuffer.clear();
     g_settingsState.dictSearchCursor = 0;
     g_settingsState.dictSearchImeActive = false;
+    g_settingsState.dictNotice.clear();
 }
 
 AppState screen_settings_handle(int key, ScreenContext &ctx) {
@@ -487,6 +568,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.mode = SETTINGS_DICT_CHOOSE;
             g_settingsState.dictSelected.clear();
             g_settingsState.dictSearchBuffer.clear();
+            g_settingsState.dictNotice.clear();
         } else if (key == KEY_UP || key == 'k') {
             if (g_settingsState.dictSelection > 0) g_settingsState.dictSelection--;
         } else if (key == KEY_DOWN || key == 'j') {
@@ -495,16 +577,19 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.dictSearching = true;
             g_settingsState.dictSearchCursor = (int)g_settingsState.dictSearchBuffer.length();
             g_settingsState.dictSearchImeActive = false;
+            g_settingsState.dictNotice.clear();
         } else if (key == 'a' || key == 'A') {
             g_settingsState.mode = SETTINGS_DICT_ADD;
             g_settingsState.dictAddBuffer.clear();
             g_settingsState.dictAddCursor = 0;
             g_settingsState.dictAddImeActive = false;
             g_ime.setActive(false);
+            g_settingsState.dictNotice.clear();
         } else if (key == ' ' && total > 0) {
             int realIdx = filtered[g_settingsState.dictSelection];
             if (g_settingsState.dictSelected.count(realIdx)) g_settingsState.dictSelected.erase(realIdx);
             else g_settingsState.dictSelected.insert(realIdx);
+            g_settingsState.dictNotice.clear();
         } else if ((key == 'd' || key == 'D') && total > 0) {
             std::vector<int> indices;
             if (g_settingsState.dictSelected.empty()) {
@@ -516,11 +601,19 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.dictSelected.clear();
             if (g_settingsState.dictSelection >= total - (int)indices.size())
                 g_settingsState.dictSelection = std::max(0, total - (int)indices.size() - 1);
+            g_settingsState.dictNotice = "已删除";
         } else if ((key == 'c' || key == 'C') && !entries.empty()) {
             g_ime.clearUserDict(g_settingsState.dictKind);
             g_settingsState.dictSelected.clear();
             g_settingsState.dictSelection = 0;
             g_settingsState.dictScroll = 0;
+            g_settingsState.dictNotice = "已清空";
+        } else if (key == 'e' || key == 'E') {
+            g_settingsState.dictNotice = exportCurrentDict() ? "已导出" : "导出失败";
+        } else if (key == 'i' || key == 'I') {
+            int n = importCurrentDict();
+            if (n < 0) g_settingsState.dictNotice = "未找到导入文件";
+            else g_settingsState.dictNotice = "已导入" + std::to_string(n);
         }
         drawDictList();
         return APP_SETTINGS;
@@ -598,56 +691,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 u8g2_DrawBox(g_u8g2, 4 + cx, textY + 4, cw, 3);
                 u8g2_SetDrawColor(g_u8g2, 1);
 
-                if (g_ime.composing()) {
-                    std::string code = g_ime.displayCode();
-                    auto &cands = g_ime.candidates();
-                    int pageSize = g_ime.pageSize();
-                    int curPage = g_ime.currentPage();
-                    int totalPages = g_ime.totalPages();
-                    if (totalPages < 1) totalPages = 1;
-
-                    char pageInfo[32];
-                    snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-                    int imeY = SCREEN_H - 67;
-                    u8g2_DrawBox(g_u8g2, 0, imeY, SCREEN_W, 67);
-                    u8g2_SetDrawColor(g_u8g2, 1);
-
-                    int cw = g_font.textWidth(code.c_str()) + 8;
-                    u8g2_DrawBox(g_u8g2, 4, imeY + 4, cw, FONT_H);
-                    u8g2_SetDrawColor(g_u8g2, 0);
-                    g_font.drawText(4, imeY + 4 + g_font.ascent(), code.c_str(), false);
-                    u8g2_SetDrawColor(g_u8g2, 1);
-
-                    int tw = g_font.textWidth(pageInfo);
-                    int pw = tw + 8;
-                    int px = SCREEN_W - pw - 4;
-                    u8g2_DrawBox(g_u8g2, px, imeY + 4, pw, FONT_H);
-                    u8g2_SetDrawColor(g_u8g2, 0);
-                    g_font.drawText(px + 4, imeY + 4 + g_font.ascent(), pageInfo, false);
-                    u8g2_SetDrawColor(g_u8g2, 1);
-
-                    u8g2_SetDrawColor(g_u8g2, 0);
-                    u8g2_DrawHLine(g_u8g2, 0, imeY + FONT_H + 4, SCREEN_W);
-                    u8g2_SetDrawColor(g_u8g2, 1);
-
-                    std::string candLine;
-                    for (int i = 0; i < (int)cands.size(); i++) {
-                        char idx[16];
-                        snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-                        std::string part = std::string(" ") + idx + cands[i];
-                        int curW = g_font.textWidth(candLine.c_str());
-                        int partW = g_font.textWidth(part.c_str());
-                        if (curW + partW + 8 > SCREEN_W) break;
-                        candLine += part;
-                    }
-                    if (!candLine.empty()) {
-                        int candW = g_font.textWidth(candLine.c_str()) + 8;
-                        u8g2_DrawBox(g_u8g2, 4, imeY + FONT_H + 8, candW, FONT_H);
-                        u8g2_SetDrawColor(g_u8g2, 0);
-                        g_font.drawText(4, imeY + FONT_H + 8 + g_font.ascent(), candLine.c_str(), false);
-                        u8g2_SetDrawColor(g_u8g2, 0);
-                    }
-                }
+                if (g_ime.composing()) drawIMEUIFullscreen();
 
                 ui_commit();
                 return APP_SETTINGS;
@@ -758,56 +802,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         u8g2_DrawBox(g_u8g2, 4 + cursorX, textY + cursorLine * FONT_H + 4, cw, 3);
         u8g2_SetDrawColor(g_u8g2, 1);
 
-        if (g_settingsState.imeActive && g_ime.composing()) {
-            std::string code = g_ime.displayCode();
-            auto &cands = g_ime.candidates();
-            int pageSize = g_ime.pageSize();
-            int curPage = g_ime.currentPage();
-            int totalPages = g_ime.totalPages();
-            if (totalPages < 1) totalPages = 1;
-
-            char pageInfo[32];
-            snprintf(pageInfo, sizeof(pageInfo), "%d/%d", curPage, totalPages);
-            int imeY = SCREEN_H - 67;
-            u8g2_DrawBox(g_u8g2, 0, imeY, SCREEN_W, 67);
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            int cw = g_font.textWidth(code.c_str()) + 8;
-            u8g2_DrawBox(g_u8g2, 4, imeY + 4, cw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(4, imeY + 4 + g_font.ascent(), code.c_str(), false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            int tw = g_font.textWidth(pageInfo);
-            int pw = tw + 8;
-            int px = SCREEN_W - pw - 4;
-            u8g2_DrawBox(g_u8g2, px, imeY + 4, pw, FONT_H);
-            u8g2_SetDrawColor(g_u8g2, 0);
-            g_font.drawText(px + 4, imeY + 4 + g_font.ascent(), pageInfo, false);
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-            u8g2_DrawHLine(g_u8g2, 0, imeY + FONT_H + 4, SCREEN_W);
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            std::string candLine;
-            for (int i = 0; i < (int)cands.size(); i++) {
-                char idx[16];
-                snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-                std::string part = std::string(" ") + idx + cands[i];
-                int curW = g_font.textWidth(candLine.c_str());
-                int partW = g_font.textWidth(part.c_str());
-                if (curW + partW + 8 > SCREEN_W) break;
-                candLine += part;
-            }
-            if (!candLine.empty()) {
-                int candW = g_font.textWidth(candLine.c_str()) + 8;
-                u8g2_DrawBox(g_u8g2, 4, imeY + FONT_H + 8, candW, FONT_H);
-                u8g2_SetDrawColor(g_u8g2, 0);
-                g_font.drawText(4, imeY + FONT_H + 8 + g_font.ascent(), candLine.c_str(), false);
-                u8g2_SetDrawColor(g_u8g2, 0);
-            }
-        }
+        if (g_settingsState.imeActive && g_ime.composing()) drawIMEUIFullscreen();
 
         ui_commit();
         return APP_SETTINGS;

@@ -68,8 +68,12 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
                              const std::vector<MdLineInfo> *mdInfoIn = nullptr,
                              const std::set<int> *foldedHeadings = nullptr);
 
-// IME drawing helper
+// IME drawing helpers
+int imeStatusPanelTopY();
+int imeFullscreenPanelTopY();
 void drawIMEUI(int baseY, bool anchorBottom = false);
+void drawIMEUIWithStatusBar();
+void drawIMEUIFullscreen();
 
 // WiFi helper functions
 bool ensure_wifi_connected();

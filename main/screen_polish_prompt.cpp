@@ -17,9 +17,6 @@ extern "C" {
     extern void u8g2_DrawHLine(void *u8g2, int x, int y, int w);
 }
 
-// 正文区域底部:给底部 IME 候选条(约 67px)留白,合成时不遮挡最后一行。
-#define PP_BODY_BOTTOM (SCREEN_H - 67 - 10)
-
 // ── State ─────────────────────────────────────────────────────────────────
 static struct {
     std::string buf;
@@ -99,7 +96,8 @@ static void drawPromptEditor() {
     if (curVR < 0) curVR = 0;
 
     int top = 28 + g_font.descent() + 10;
-    int vis = (PP_BODY_BOTTOM - top + LINE_SPACING - 1) / LINE_SPACING;
+    int bodyBottom = imeFullscreenPanelTopY() - 10;
+    int vis = (bodyBottom - top + LINE_SPACING - 1) / LINE_SPACING;
     if (vis < 1) vis = 1;
     if (g.scroll > curVR) g.scroll = curVR;
     if (curVR >= g.scroll + vis) g.scroll = curVR - vis + 1;
@@ -124,7 +122,7 @@ static void drawPromptEditor() {
     u8g2_SetDrawColor(g_u8g2, 1);
 
     if (g.imeActive && g_ime.composing()) {
-        drawIMEUI(SCREEN_H - 67 - 4);
+        drawIMEUIFullscreen();
     } else {
         ui_draw_status("Ctrl+S保存 Esc取消", "");
     }

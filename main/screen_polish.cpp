@@ -157,7 +157,7 @@ static void drawInstrDialog() {
     u8g2_SetDrawColor(g_u8g2, 1);
 
     if (g.imeActive && g_ime.composing()) {
-        drawIMEUI(SCREEN_H - 67 - 4);
+        drawIMEUIFullscreen();
     } else {
         ui_draw_status("Enter确认 Esc取消", "");
     }

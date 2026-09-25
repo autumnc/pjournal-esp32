@@ -21,6 +21,7 @@ bool app_ime_fullwidth();
 void app_toggle_fullwidth();
 void app_toggle_trad();
 void app_toggle_english();
+void app_toggle_ime_delete_mode();
 
 // Force editor re-initialization on next cycle
 void app_editor_request_reinit();
