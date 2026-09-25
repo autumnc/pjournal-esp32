@@ -46,7 +46,7 @@ public:
     bool typingClickEnabled();  // 打字机模式下是否播放打字音效
     std::string clickChineseMode();  // "key"(每键一声) / "count"(上屏按字数) / "single"(上屏单声)
     int typingClickVolume();  // 0..100,打字机音效音量
-    std::string typingClickTimbre();  // 7 种音色 key,见 typing_click.cpp TIMBRES
+    std::string typingClickTimbre();  // 18 种轴体采样音色 key,见 click_samples.cpp k_sets
 
     void setFlomoEmail(const std::string &v);
     void setFlomoPassword(const std::string &v);

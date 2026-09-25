@@ -1,9 +1,14 @@
 #include "typing_click.h"
+#include "click_samples.h"
 #include "settings_manager.h"
 #include "pcf85063.h"  // pjournal_get_i2c_bus()
 #include "user_config.h"
 #include <esp_log.h>
-#include <esp_timer.h>
+#include <esp_random.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -15,12 +20,16 @@
 
 #define TAG "TypeClick"
 
-#define TC_SAMPLE_RATE  AUDIO_SAMPLE_RATE  // 16000
+// 采样是 48k 的(见 click_samples_data.inc),这里就不再重采样到 16k:
+// 轴体的「脆」全在 8k 以上的高频,降采样会把 18 套音色糊成一团。
+// 打字音走自己独立的 I2S 通道与 ES8311 实例,和 16k 的 voice_input 互不影响
+// (ES8311 在 12.288MHz MCLK / 48k 有精确匹配的系数)。
+#define TC_SAMPLE_RATE  48000
 #define TC_STEREO       2
-#define TC_IDLE_US      (30LL * 1000 * 1000)  // 闲置 30s 自动拆音频
-#define TC_MAX_N        8                      // 多声连发上限(防异常长文本)
-#define TC_GAP_MS       30                     // 多声间静音间隔
-#define TC_CAP_MS       160                    // 单声最大时长(截断上限;风铃等长衰减音色的自然衰减仍<此值)
+#define TC_IDLE_MS      (30 * 1000)  // 闲置 30s 自动拆音频
+#define TC_MAX_N        8            // 待播声数上限(防异常长文本把声音拖远)
+#define TC_GAP_MS       30           // 多声之间的基准静音间隔
+#define TC_RELEASE_MS   3000         // release 等任务拆完音频的上限
 
 static i2s_chan_handle_t s_tx = nullptr;
 static const audio_codec_data_if_t *s_data = nullptr;
@@ -29,30 +38,42 @@ static const audio_codec_gpio_if_t *s_gpio = nullptr;
 static const audio_codec_if_t *s_codec = nullptr;
 static esp_codec_dev_handle_t s_dev = nullptr;
 static bool s_ready = false;
-static int64_t s_last_play_us = 0;
 static int s_vol_cache = -1;
-static std::string s_timbre_cache;
-static std::vector<int16_t> s_click;  // 单声立体声(交错 L/R 同值)
 
-// 音色预设:基频、谐波、attack(ms)、衰减 tau(ms)、峰值(0..1)
-// 键名须与 screen_settings.cpp TIMBRE_OPTS 同步
-struct Timbre { const char *name; double f0; double h2, h3, h5; double attackMs; double tauMs; double peak; };
-static const Timbre TIMBRES[] = {
-    { "mechanical",  1800, 0.00, 0.35, 0.18, 0.4, 6.0, 0.28 },  // 机械:短促脆"嗒"
-    { "soft",         900, 0.15, 0.00, 0.00, 1.5, 16.0, 0.18 }, // 柔和:温和低鸣
-    { "electronic",  2200, 0.00, 0.00, 0.00, 0.5, 8.0, 0.25 },  // 电子:干净"滴"
-    { "clack",       1000, 0.10, 0.55, 0.30, 0.4, 7.0, 0.32 },  // 打字机:低频厚重"咔哒"
-    { "wooden",      1250, 0.00, 0.55, 0.30, 0.2, 3.0, 0.28 },  // 木鱼:短促空心"笃"
-    { "crisp",       2600, 0.05, 0.15, 0.00, 0.2, 5.0, 0.24 },  // 清脆:明亮高音"叮"
-    { "chime",       1400, 0.55, 0.18, 0.08, 0.8, 24.0, 0.15 }, // 风铃:带八度泛音,余音略长
-};
-static const Timbre *timbreOf(const std::string &name) {
-    for (const auto &t : TIMBRES) if (name == t.name) return &t;
-    return &TIMBRES[0];
-}
+static QueueHandle_t s_q = nullptr;         // 每项 = 一次 play 请求要连响几声;0 = 拆音频
+static TaskHandle_t s_task = nullptr;
+static SemaphoreHandle_t s_closed = nullptr;  // 任务拆完音频后 give
+static volatile bool s_abort = false;       // 请求中断当前连发
+static portMUX_TYPE s_pend_mux = portMUX_INITIALIZER_UNLOCKED;
+static int s_pending = 0;                   // 已排队待播的声数
 
 static bool enabled() {
     return g_settings.inputMode() == "typewriter" && g_settings.typingClickEnabled();
+}
+
+static double rand01() { return (double)esp_random() / 4294967296.0; }
+static int clamp16(long v) { return v > 32767 ? 32767 : v < -32767 ? -32767 : (int)v; }
+
+// 一声敲击:随机挑一个 take,按随机步长重采样(步长>1 读得快=音变高),再叠上
+// 这次的音量与左右微差。三个随机量合起来,连着敲才不像一串复读。
+static void makeHit(const ClickSet &set, std::vector<int16_t> &out) {
+    const ClickTake &tk = set.takes[esp_random() % (uint32_t)set.n];
+    const double step = 1.0 + (rand01() * 2.0 - 1.0) * set.detune_pct / 100.0;
+    const double gain = set.gain_pct / 100.0 * (0.92 + 0.16 * rand01());
+    const double pan = (rand01() * 2.0 - 1.0) * 0.12;
+    const double gl = gain * (1.0 - pan * 0.5), gr = gain * (1.0 + pan * 0.5);
+
+    const int n = (int)(tk.frames / step);
+    out.resize((size_t)(n > 0 ? n : 1) * TC_STEREO);
+    for (int i = 0; i < n; i++) {
+        const double pos = i * step;
+        const int i0 = (int)pos;
+        const int i1 = i0 + 1 < tk.frames ? i0 + 1 : tk.frames - 1;
+        const double f = pos - i0;
+        const double v = tk.pcm[i0] * (1.0 - f) + tk.pcm[i1] * f;
+        out[(size_t)i * TC_STEREO] = (int16_t)clamp16(lround(v * gl));
+        out[(size_t)i * TC_STEREO + 1] = (int16_t)clamp16(lround(v * gr));
+    }
 }
 
 // 拆音频:与 voice_audio_deinit 同样逆序 + 先 disable 后 del,防泄漏控制器 0
@@ -73,35 +94,6 @@ static void tcRelease() {
     }
     s_ready = false;
     s_vol_cache = -1;
-    s_click.clear();
-}
-
-// 合成当前音色的单声立体声缓冲(指数衰减到 <0.4% 截断,最长 TC_CAP_MS)
-static void renderClick(const std::string &scheme) {
-    const Timbre &t = *timbreOf(scheme);
-    double ampSum = 1.0 + t.h2 + t.h3 + t.h5;
-    double atkS = t.attackMs / 1000.0, tauS = t.tauMs / 1000.0;
-    int capSamples = TC_CAP_MS * TC_SAMPLE_RATE / 1000;
-    std::vector<int16_t> mono;
-    mono.reserve((size_t)capSamples);
-    const double TWO_PI = 6.283185307179586;
-    for (int i = 0; i < capSamples; i++) {
-        double tt = (double)i / TC_SAMPLE_RATE;
-        double env = tt < atkS ? tt / atkS : exp(-(tt - atkS) / tauS);
-        if (env < 0.004 && tt > atkS) break;
-        double ph = TWO_PI * t.f0 * tt;
-        double wave = (sin(ph) + t.h2 * sin(2.0 * ph) + t.h3 * sin(3.0 * ph) +
-                       t.h5 * sin(5.0 * ph)) / ampSum;
-        double v = env * wave * t.peak * 32767.0;
-        int16_t s = (int16_t)(v < -32767.0 ? -32767 : v > 32767.0 ? 32767 : v);
-        mono.push_back(s);
-    }
-    s_click.resize(mono.size() * TC_STEREO);
-    for (size_t i = 0; i < mono.size(); i++) {
-        s_click[i * 2] = mono[i];
-        s_click[i * 2 + 1] = mono[i];
-    }
-    s_timbre_cache = scheme;
 }
 
 // 逐个打开 ES8311 DAC 输出(TX std),路径与 voice_input 的 TX 配置一致
@@ -205,54 +197,112 @@ static bool tcInit() {
         return false;
     }
 
-    renderClick(g_settings.typingClickTimbre());
     int vol = g_settings.typingClickVolume();
     if (vol > 0) esp_codec_dev_set_out_vol(s_dev, vol);
     s_vol_cache = vol;
     s_ready = true;
-    s_last_play_us = esp_timer_get_time();
-    ESP_LOGI(TAG, "ES8311 DAC ready (vol=%d%%)", vol);
+    ESP_LOGI(TAG, "ES8311 DAC ready @%dHz (vol=%d%%)", TC_SAMPLE_RATE, vol);
     return true;
 }
 
-void typingClickRelease() { tcRelease(); }
+// 连响 count 声。每声都重新合成,所以「上屏按字数」触发的连着几下也是不同的声音。
+static void playBatch(int count) {
+    const ClickSet *set = click_sample_set(g_settings.typingClickTimbre().c_str());
+    if (set == nullptr) return;
 
-void typingClickPlay(int count) {
-    if (!enabled()) return;
-    if (count < 1) count = 1;
-    if (count > TC_MAX_N) count = TC_MAX_N;
-
-    int64_t now = esp_timer_get_time();
-    if (s_ready && now - s_last_play_us > TC_IDLE_US) tcRelease();  // 闲置自停
-    if (!s_ready && !tcInit()) return;
-
-    std::string timbre = g_settings.typingClickTimbre();
-    if (timbre != s_timbre_cache) renderClick(timbre);  // 音色改了 → 重合成
-
-    int vol = g_settings.typingClickVolume();
-    if (vol <= 0) { s_last_play_us = now; return; }  // 静音档
+    const int vol = g_settings.typingClickVolume();
+    if (vol <= 0) return;  // 静音档
     if (vol != s_vol_cache) {
         esp_codec_dev_set_out_vol(s_dev, vol);
         s_vol_cache = vol;
     }
 
-    if (count == 1) {
-        esp_codec_dev_write(s_dev, s_click.data(), (int)(s_click.size() * sizeof(int16_t)));
-    } else {
-        int clickSamples = (int)s_click.size() / TC_STEREO;
-        int gapSamples = TC_GAP_MS * TC_SAMPLE_RATE / 1000;
-        int per = clickSamples + gapSamples;
-        std::vector<int16_t> pcm;
-        pcm.resize((size_t)count * per * TC_STEREO, 0);
-        for (int k = 0; k < count; k++) {
-            int16_t *dst = pcm.data() + (size_t)k * per * TC_STEREO;
-            for (int i = 0; i < clickSamples; i++) {
-                int16_t v = s_click[i * 2];
-                dst[i * 2] = v;
-                dst[i * 2 + 1] = v;
-            }
-        }
-        esp_codec_dev_write(s_dev, pcm.data(), (int)(pcm.size() * sizeof(int16_t)));
+    std::vector<int16_t> hit;  // 一声(立体声交错)
+    std::vector<int16_t> gap;  // 声与声之间的静音
+    for (int k = 0; k < count && !s_abort; k++) {
+        makeHit(*set, hit);
+        esp_codec_dev_write(s_dev, hit.data(), (int)(hit.size() * sizeof(int16_t)));
+        if (k + 1 == count) break;
+        // 间隔也抖一点:固定的 30ms 听起来像节拍器
+        const int n = (int)(TC_GAP_MS * (0.8 + 0.45 * rand01())) * TC_SAMPLE_RATE / 1000;
+        gap.assign((size_t)(n > 0 ? n : 1) * TC_STEREO, 0);
+        esp_codec_dev_write(s_dev, gap.data(), (int)(gap.size() * sizeof(int16_t)));
     }
-    s_last_play_us = now;
+}
+
+// 常驻线程:play() 只入队就返回,渲染和写 I2S 都在这里,UI 线程不会被 DMA 阻塞。
+// 没活干就等着,闲置超过 TC_IDLE_MS 就把设备关掉(别一直占着 ES8311 与控制器 0)。
+static void clickTask(void *) {
+    for (;;) {
+        int n = 0;
+        if (xQueueReceive(s_q, &n, pdMS_TO_TICKS(TC_IDLE_MS)) != pdTRUE) {
+            if (s_ready) { tcRelease(); xSemaphoreGive(s_closed); }
+            continue;
+        }
+        if (n <= 0) {  // 拆音频请求
+            tcRelease();
+            xSemaphoreGive(s_closed);
+            continue;
+        }
+        portENTER_CRITICAL(&s_pend_mux);
+        s_pending -= n;
+        if (s_pending < 0) s_pending = 0;
+        portEXIT_CRITICAL(&s_pend_mux);
+
+        s_abort = false;  // 放在 tcInit 之前:期间来的 release 才不会被这次覆盖掉
+        if (tcInit()) playBatch(n);
+    }
+}
+
+// 首次发声时才建队列与播放线程(和 ES8311 一样懒加载:不打字就不占资源)。
+static bool ensureTask() {
+    if (s_task != nullptr) return true;
+    if (s_q == nullptr) s_q = xQueueCreate(TC_MAX_N, sizeof(int));
+    if (s_closed == nullptr) s_closed = xSemaphoreCreateBinary();
+    if (s_q == nullptr || s_closed == nullptr) {
+        ESP_LOGE(TAG, "click queue alloc failed");
+        return false;
+    }
+    if (xTaskCreate(clickTask, "click", 6144, nullptr, 2, &s_task) != pdPASS) {
+        s_task = nullptr;
+        ESP_LOGE(TAG, "click task create failed");
+        return false;
+    }
+    return true;
+}
+
+void typingClickRelease() {
+    if (s_task == nullptr) return;
+    s_abort = true;  // 让任务尽快收尾当前连发
+    xQueueReset(s_q);
+    portENTER_CRITICAL(&s_pend_mux);
+    s_pending = 0;
+    portEXIT_CRITICAL(&s_pend_mux);
+    xSemaphoreTake(s_closed, 0);  // 清掉闲置自停留下的陈旧令牌
+
+    const int zero = 0;
+    if (xQueueSend(s_q, &zero, 0) != pdTRUE) return;
+    // 等到真正拆完再返回:调用方(voice_input / 切模式)紧接着要独占控制器 0
+    if (xSemaphoreTake(s_closed, pdMS_TO_TICKS(TC_RELEASE_MS)) != pdTRUE)
+        ESP_LOGW(TAG, "click task did not close in %dms", TC_RELEASE_MS);
+}
+
+void typingClickPlay(int count) {
+    if (!enabled()) return;
+    if (count < 1) count = 1;
+    if (count > TC_MAX_N) count = TC_MAX_N;
+    if (!ensureTask()) return;
+
+    portENTER_CRITICAL(&s_pend_mux);
+    const bool room = s_pending + count <= TC_MAX_N;
+    if (room) s_pending += count;
+    portEXIT_CRITICAL(&s_pend_mux);
+    if (!room) return;  // 已经排满:丢掉这次,别让声音越拖越远
+
+    if (xQueueSend(s_q, &count, 0) != pdTRUE) {
+        portENTER_CRITICAL(&s_pend_mux);
+        s_pending -= count;
+        if (s_pending < 0) s_pending = 0;
+        portEXIT_CRITICAL(&s_pend_mux);
+    }
 }

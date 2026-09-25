@@ -24,6 +24,7 @@ idf_component_register(SRCS
     "screen_settings.cpp"
     "quick_edit.cpp"
     "typing_click.cpp"
+    "click_samples.cpp"
     "screen_bt_manage.cpp"
     "screen_file_manager.cpp"
     "file_manager_server.cpp"

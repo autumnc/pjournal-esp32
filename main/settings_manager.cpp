@@ -160,4 +160,4 @@ int SettingsManager::typingClickVolume() {
     return n;
 }
 
-std::string SettingsManager::typingClickTimbre() { return getString("click_timbre", "mechanical"); }
+std::string SettingsManager::typingClickTimbre() { return getString("click_timbre", "mx_brown_pbt"); }

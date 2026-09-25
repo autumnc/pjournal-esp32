@@ -88,11 +88,19 @@ static bool fieldHidden(int idx) {
     return false;
 }
 
-// 打字机音色 key↔中文名,顺序即设置内循环顺序(与 typing_click.cpp TIMBRES 同步)
+// 打字机音色 key↔中文名,顺序即设置内循环顺序(与 click_samples.cpp k_sets 同步)。
+// 素材是 Mechvibes 内置音色包里的 18 种轴体,同一颗轴还分 ABS/PBT 键帽、全行程与否。
 struct TimbreOpt { const char *key; const char *label; };
 static const TimbreOpt TIMBRE_OPTS[] = {
-    {"mechanical", "机械"}, {"soft", "柔和"}, {"electronic", "电子"},
-    {"clack", "打字机"}, {"wooden", "木鱼"}, {"crisp", "清脆"}, {"chime", "风铃"},
+    {"mx_black_abs", "MX黑轴 ABS"},   {"mx_black_pbt", "MX黑轴 PBT"},
+    {"mx_blue_abs", "MX青轴 ABS"},    {"mx_blue_pbt", "MX青轴 PBT"},
+    {"mx_brown_abs", "MX茶轴 ABS"},   {"mx_brown_pbt", "MX茶轴 PBT"},
+    {"mx_red_abs", "MX红轴 ABS"},     {"mx_red_pbt", "MX红轴 PBT"},
+    {"cream_travel", "奶油轴 全行程"}, {"nk_cream", "NK奶油轴"},
+    {"holy_pandas", "圣熊猫"},         {"eg_crystal", "EG水晶紫"},
+    {"eg_oreo", "EG奥利奥"},           {"turquoise", "绿松石 全行程"},
+    {"mx_black_tr", "MX黑轴 全行程"},  {"mx_blue_tr", "MX青轴 全行程"},
+    {"mx_brown_tr", "MX茶轴 全行程"},  {"topre_purple", "静电容紫 PBT"},
 };
 static int timbreIndex(const char *k) {
     for (int i = 0; i < (int)(sizeof(TIMBRE_OPTS) / sizeof(TIMBRE_OPTS[0])); i++)
