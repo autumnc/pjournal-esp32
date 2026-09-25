@@ -49,12 +49,13 @@ enum class UndoGroup {
     Structural,
 };
 
-static struct {
+struct EditorState {
     std::vector<std::string> lines;
     int cx = 0, cy = 0;
     int scroll = 0;
     int targetCx = -1;
     std::string promptText;
+    std::string titleOverride;
     bool promptMode = false;
     bool imeActive = false;
     bool confirmSave = false;
@@ -105,7 +106,11 @@ static struct {
     // 快捷键帮助对话框 (Ctrl+?)
     bool helpActive = false;
     int helpScroll = 0;
-} g_editor;
+};
+
+static EditorState g_editor;
+static EditorState s_stashedEditor;
+static bool s_hasStashedEditor = false;
 
 static volatile bool s_promptTaskDone = false;
 static DeepseekResult s_promptTaskResult = {false, ""};
@@ -135,6 +140,11 @@ static void markDirty() {
 // 打字机模式:光标居中 + 按键音效是否生效
 static bool editorTypewriter() { return g_settings.inputMode() == "typewriter"; }
 static bool editorVertical() { return g_settings.editorOrientation() == "vertical"; }
+
+static const char *editorStatusTitle() {
+    if (!g_editor.titleOverride.empty()) return g_editor.titleOverride.c_str();
+    return g_editor.promptMode ? "提示写作" : "自由写作";
+}
 
 // 行数变化时平移折叠标题的行号,保持折叠集与缓冲区对齐。
 static void foldLinesInserted(int at, int count) {
@@ -898,15 +908,7 @@ static void drawSearchPanel() {
     }
 
     // 状态栏
-    std::string imeLabel;
-    if (!sh.imeActive) imeLabel = "EN";
-    else if (g_ime.isDeleteMode()) imeLabel = "[删]";
-    else if (g_ime.english()) imeLabel = "[英]";
-    else {
-        imeLabel = "[中]";
-        imeLabel += g_ime.fullwidth() ? "\xe2\x97\x8f" : "\xe2\x97\x90";
-        imeLabel += g_ime.trad() ? "繁" : "简";
-    }
+    std::string imeLabel = imeStatusLabel(sh.imeActive);
     std::string right = imeLabel;
     std::string bt = battery_icon_status_text();
     if (!bt.empty()) right += " " + bt;
@@ -1289,16 +1291,8 @@ static void drawEditor() {
             int wc = getWordCount();
             char left[48];
             if (inQuickFileSession()) snprintf(left, sizeof(left), "[%d] 竖排", quickEditIndex());
-            else snprintf(left, sizeof(left), "%s 竖排", g_editor.promptMode ? "提示写作" : "自由写作");
-            std::string imeLabel;
-            if (!g_editor.imeActive) imeLabel = "EN";
-            else if (g_ime.isDeleteMode()) imeLabel = "[删]";
-            else if (g_ime.english()) imeLabel = "[英]";
-            else {
-                imeLabel = "[中]";
-                imeLabel += g_ime.fullwidth() ? "\xe2\x97\x8f" : "\xe2\x97\x90";
-                imeLabel += g_ime.trad() ? "繁" : "简";
-            }
+            else snprintf(left, sizeof(left), "%s 竖排", editorStatusTitle());
+            std::string imeLabel = imeStatusLabel(g_editor.imeActive);
             std::string right = std::to_string(wc) + "字 " + imeLabel;
             std::string bt = battery_icon_status_text();
             if (!bt.empty()) right += " " + bt;
@@ -1427,18 +1421,9 @@ static void drawEditor() {
         if (inQuickFileSession()) {
             snprintf(left, sizeof(left), "[%d]", quickEditIndex());
         } else {
-            const char *mode = g_editor.promptMode ? "提示写作" : "自由写作";
-            snprintf(left, sizeof(left), "%s", mode);
+            snprintf(left, sizeof(left), "%s", editorStatusTitle());
         }
-        std::string imeLabel;
-        if (!g_editor.imeActive) imeLabel = "EN";
-        else if (g_ime.isDeleteMode()) imeLabel = "[删]";
-        else if (g_ime.english()) imeLabel = "[英]";
-        else {
-            imeLabel = "[中]";
-            imeLabel += g_ime.fullwidth() ? "\xe2\x97\x8f" : "\xe2\x97\x90"; // ● or ◐
-            imeLabel += g_ime.trad() ? "繁" : "简";
-        }
+        std::string imeLabel = imeStatusLabel(g_editor.imeActive);
         std::string right = std::to_string(wc) + "字 " + imeLabel;
         std::string bt = battery_icon_status_text();
         if (!bt.empty()) right += " " + bt;
@@ -1589,8 +1574,10 @@ void screen_editor_init(ScreenContext &ctx) {
     g_editor.drawnOnce = false;
     markDirty();
     g_editor.promptText = ctx.promptText;
+    g_editor.titleOverride = ctx.editorTitle;
     g_editor.promptMode = ctx.promptMode && !quickFile;
     ctx.editFilename.clear();
+    ctx.editorTitle.clear();
 
     // 重置查找/替换对话框(重开编辑器时关闭)
     g_editor.search.active = false;
@@ -2329,6 +2316,26 @@ bool app_editor_needs_reinit() {
         return true;
     }
     return false;
+}
+
+void app_editor_stash_session() {
+    if (s_hasStashedEditor) return;
+    s_stashedEditor = g_editor;
+    s_hasStashedEditor = true;
+    g_ime.cancelComposition();
+}
+
+void app_editor_restore_stashed_session() {
+    if (!s_hasStashedEditor) return;
+    g_editor = s_stashedEditor;
+    s_hasStashedEditor = false;
+    g_editor.drawnOnce = false;
+    g_ime.setActive(g_editor.imeActive);
+    markDirty();
+}
+
+bool app_editor_has_stashed_session() {
+    return s_hasStashedEditor;
 }
 
 std::string app_get_editor_text() {

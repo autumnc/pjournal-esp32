@@ -341,6 +341,8 @@ static void drawDictList(bool doCommit = true) {
         snprintf(left, sizeof(left), "a加 d删 i导入 e导出 已选%d", (int)g_settingsState.dictSelected.size());
     }
     std::string right = g_settingsState.dictSearchBuffer.empty() ? "Space多选" : ("/" + g_settingsState.dictSearchBuffer);
+    if (g_settingsState.dictSearching)
+        right += " " + imeStatusLabel(g_settingsState.dictSearchImeActive);
     ui_draw_status(left, right.c_str());
     if (doCommit) ui_commit();
 }
@@ -377,7 +379,7 @@ static void drawDictAdd() {
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawBox(g_u8g2, 4 + cx, FONT_H * 4 + 4, 8, 3);
     u8g2_SetDrawColor(g_u8g2, 1);
-    ui_draw_status("Enter确定 Esc取消", "Ctrl+Space中文");
+    ui_draw_status("Enter确定 Esc取消", imeStatusLabel(g_settingsState.dictAddImeActive).c_str());
     if (g_settingsState.dictAddImeActive && g_ime.composing())
         drawIMEUIWithStatusBar();
     ui_commit();
@@ -422,6 +424,20 @@ static bool parseDictImportLine(const std::string &line, std::string &code,
     return true;
 }
 
+struct DictImportResult {
+    bool opened = false;
+    int imported = 0;
+    int skipped = 0;
+    int malformed = 0;
+};
+
+static std::string dictImportSummary(const DictImportResult &r) {
+    if (!r.opened) return "未找到导入文件";
+    char buf[64];
+    snprintf(buf, sizeof(buf), "导入%d 跳过%d 错%d", r.imported, r.skipped, r.malformed);
+    return buf;
+}
+
 static bool exportCurrentDict() {
     auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
     const char *path = dictExportPath(g_settingsState.dictKind);
@@ -436,22 +452,30 @@ static bool exportCurrentDict() {
     return fclose(f) == 0;
 }
 
-static int importCurrentDict() {
+static DictImportResult importCurrentDict() {
+    DictImportResult result;
     const char *path = dictImportPath(g_settingsState.dictKind);
     FILE *f = fopen(path, "r");
-    if (!f) return -1;
-    int imported = 0;
+    if (!f) return result;
+    result.opened = true;
     char buf[256];
     while (fgets(buf, sizeof(buf), f)) {
+        std::string raw = settingsTrim(buf);
+        if (raw.empty() || raw[0] == '#') continue;
         std::string code, word;
         int count = 1;
         bool trad = false;
-        if (parseDictImportLine(buf, code, word, count, trad) &&
-            g_ime.addUserDictEntry(g_settingsState.dictKind, code, word, count, trad))
-            imported++;
+        if (!parseDictImportLine(buf, code, word, count, trad)) {
+            result.malformed++;
+            continue;
+        }
+        if (g_ime.addUserDictEntry(g_settingsState.dictKind, code, word, count, trad))
+            result.imported++;
+        else
+            result.skipped++;
     }
     fclose(f);
-    return imported;
+    return result;
 }
 
 static std::vector<int> dictFilteredIndices(const std::vector<IME::UserEntryView> &entries) {
@@ -611,9 +635,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         } else if (key == 'e' || key == 'E') {
             g_settingsState.dictNotice = exportCurrentDict() ? "已导出" : "导出失败";
         } else if (key == 'i' || key == 'I') {
-            int n = importCurrentDict();
-            if (n < 0) g_settingsState.dictNotice = "未找到导入文件";
-            else g_settingsState.dictNotice = "已导入" + std::to_string(n);
+            g_settingsState.dictNotice = dictImportSummary(importCurrentDict());
         }
         drawDictList();
         return APP_SETTINGS;
@@ -692,6 +714,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 u8g2_SetDrawColor(g_u8g2, 1);
 
                 if (g_ime.composing()) drawIMEUIFullscreen();
+                else ui_draw_status("Enter保存 Esc取消", imeStatusLabel(g_settingsState.imeActive).c_str());
 
                 ui_commit();
                 return APP_SETTINGS;
@@ -803,6 +826,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         u8g2_SetDrawColor(g_u8g2, 1);
 
         if (g_settingsState.imeActive && g_ime.composing()) drawIMEUIFullscreen();
+        else ui_draw_status("Enter保存 Esc取消", imeStatusLabel(g_settingsState.imeActive).c_str());
 
         ui_commit();
         return APP_SETTINGS;

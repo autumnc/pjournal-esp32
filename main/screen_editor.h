@@ -27,6 +27,11 @@ void app_toggle_ime_delete_mode();
 void app_editor_request_reinit();
 bool app_editor_needs_reinit();
 
+// Park/restore the current editor while a modal flow reuses the editor screen.
+void app_editor_stash_session();
+void app_editor_restore_stashed_session();
+bool app_editor_has_stashed_session();
+
 // 查找/替换对话框是否打开(供 main.cpp 屏蔽全局按键/物理按键)
 bool app_editor_search_active();
 

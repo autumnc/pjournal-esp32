@@ -312,13 +312,74 @@ int imeStatusPanelTopY() {
 }
 
 int imeFullscreenPanelTopY() {
-    return SCREEN_H - (2 * FONT_H + 12);
+    return SCREEN_H - (2 * FONT_H + 8);
+}
+
+int imeCandidateLineWidth() {
+    return SCREEN_W - 12;
+}
+
+std::string imeStatusLabel(bool active) {
+    if (!active) return "EN";
+    if (g_ime.isDeleteMode()) return "[删]";
+    if (g_ime.english()) return "[英]";
+    std::string label = "[中]";
+    label += g_ime.fullwidth() ? "\xe2\x97\x8f" : "\xe2\x97\x90";
+    label += g_ime.trad() ? "繁" : "简";
+    return label;
+}
+
+static void popUtf8Char(std::string &s) {
+    if (s.empty()) return;
+    size_t pos = s.size() - 1;
+    while (pos > 0 && (((unsigned char)s[pos] & 0xC0) == 0x80)) pos--;
+    s.erase(pos);
+}
+
+static std::string fitTextWidth(const std::string &text, int maxW) {
+    if (maxW <= 0) return "";
+    if (g_font.textWidth(text.c_str()) <= maxW) return text;
+    const std::string ell = "...";
+    if (g_font.textWidth(ell.c_str()) > maxW) return "";
+    std::string out = text;
+    while (!out.empty() && g_font.textWidth((out + ell).c_str()) > maxW)
+        popUtf8Char(out);
+    return out.empty() ? ell : out + ell;
+}
+
+static std::string shiftUtf8Char(std::string &s) {
+    if (s.empty()) return "";
+    size_t len = utf8CharLen((unsigned char)s[0]);
+    std::string ch = s.substr(0, len);
+    s.erase(0, len);
+    return ch;
+}
+
+static std::string fitTextWidthMiddle(const std::string &text, int maxW) {
+    if (maxW <= 0) return "";
+    if (g_font.textWidth(text.c_str()) <= maxW) return text;
+    const std::string ell = "...";
+    if (g_font.textWidth(ell.c_str()) > maxW) return "";
+    std::string head = text;
+    std::string tail;
+    bool trimHead = false;
+    while (!head.empty() && g_font.textWidth((head + ell + tail).c_str()) > maxW) {
+        if (trimHead) {
+            tail = shiftUtf8Char(head) + tail;
+        } else {
+            popUtf8Char(head);
+        }
+        trimHead = !trimHead;
+    }
+    return head.empty() ? fitTextWidth(text, maxW) : head + ell + tail;
 }
 
 void drawIMEUI(int baseY, bool anchorBottom) {
     if (!g_ime.composing()) return;
 
     std::string code = g_ime.displayCode();
+    std::string mode = g_ime.modeLabel();
+    if (!mode.empty()) code = code.empty() ? mode : (mode + " " + code);
     auto &cands = g_ime.candidates();
     int pageSize = g_ime.pageSize();
     int curPage = g_ime.currentPage();
@@ -354,15 +415,16 @@ void drawIMEUI(int baseY, bool anchorBottom) {
                  panelBottom - baseY);
     u8g2_SetDrawColor(g_u8g2, 1);
 
+    int tw = g_font.textWidth(pageInfo);
+    int pw = tw + 8;
+    int px = SCREEN_W - pw - 4;
+    code = fitTextWidth(code, px - 12);
     int cw = g_font.textWidth(code.c_str()) + 8;
     u8g2_DrawBox(g_u8g2, 4, codeBase - g_font.ascent(), cw, FONT_H);
     u8g2_SetDrawColor(g_u8g2, 0);
     g_font.drawText(4, codeBase, code.c_str(), false);
     u8g2_SetDrawColor(g_u8g2, 1);
 
-    int tw = g_font.textWidth(pageInfo);
-    int pw = tw + 8;
-    int px = SCREEN_W - pw - 4;
     u8g2_DrawBox(g_u8g2, px, codeBase - g_font.ascent(), pw, FONT_H);
     u8g2_SetDrawColor(g_u8g2, 0);
     g_font.drawText(px + 4, codeBase, pageInfo, false);
@@ -377,9 +439,18 @@ void drawIMEUI(int baseY, bool anchorBottom) {
     for (int i = 0; i < (int)cands.size(); i++) {
         char idx[16];
         snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
-        std::string part = std::string(" ") + idx + cands[i];
+        std::string prefix = std::string(" ") + idx;
+        std::string part = prefix + cands[i];
         int partW = g_font.textWidth(part.c_str());
-        if (x + partW + 8 > SCREEN_W) break;
+        int availW = SCREEN_W - x - 8;
+        bool truncated = false;
+        if (partW > availW) {
+            std::string word = fitTextWidthMiddle(cands[i], availW - g_font.textWidth(prefix.c_str()));
+            part = prefix + word;
+            partW = g_font.textWidth(part.c_str());
+            truncated = true;
+        }
+        if (partW <= 0 || x + partW + 8 > SCREEN_W) break;
         // 白底清出该段区域,高亮候选反白(黑底白字)
         u8g2_SetDrawColor(g_u8g2, 1);
         u8g2_DrawBox(g_u8g2, x, candBase - g_font.ascent(), partW, FONT_H);
@@ -392,6 +463,7 @@ void drawIMEUI(int baseY, bool anchorBottom) {
         }
         g_font.drawText(x, candBase, part.c_str(), false);
         x += partW;
+        if (truncated) break;
     }
     u8g2_SetDrawColor(g_u8g2, 1);
 }

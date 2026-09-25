@@ -124,7 +124,7 @@ static void drawPromptEditor() {
     if (g.imeActive && g_ime.composing()) {
         drawIMEUIFullscreen();
     } else {
-        ui_draw_status("Ctrl+S保存 Esc取消", "");
+        ui_draw_status("Ctrl+S保存 Esc取消", imeStatusLabel(g.imeActive).c_str());
     }
     ui_commit();
 }

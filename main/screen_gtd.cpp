@@ -1779,7 +1779,8 @@ static void drawAdd() {
 
 
 
-    drawIMEUIFullscreen();
+    if (g_ime.composing()) drawIMEUIFullscreen();
+    else ui_draw_status("Enter确定 ESC取消", imeStatusLabel(g.imeActive).c_str());
 
     u8g2_SetDrawColor(g_u8g2, 0);
 
@@ -2817,7 +2818,7 @@ static void drawNoteEditor() {
 
     u8g2_SetDrawColor(g_u8g2, 0);
 
-    ui_draw_status("Enter换行 Ctrl+S保存 ESC取消", "");
+    ui_draw_status("Enter换行 Ctrl+S保存 ESC取消", imeStatusLabel(g.imeActive).c_str());
 
     ui_commit();
 
@@ -3146,7 +3147,7 @@ static void drawDetail() {
 
         if (editingM)
 
-            ui_draw_status("Enter换行 Tab保存 ↑↓选择 ESC返回", "");
+            ui_draw_status("Enter换行 Tab保存 ↑↓选择 ESC返回", imeStatusLabel(g.imeActive).c_str());
 
         else
 

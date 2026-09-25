@@ -71,6 +71,8 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
 // IME drawing helpers
 int imeStatusPanelTopY();
 int imeFullscreenPanelTopY();
+int imeCandidateLineWidth();
+std::string imeStatusLabel(bool active);
 void drawIMEUI(int baseY, bool anchorBottom = false);
 void drawIMEUIWithStatusBar();
 void drawIMEUIFullscreen();

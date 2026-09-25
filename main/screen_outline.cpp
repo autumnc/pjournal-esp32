@@ -449,6 +449,7 @@ static void drawInputOverlay(const char *title) {
     u8g2_SetDrawColor(g_u8g2, 1);
 
     if (g_ime.composing()) drawIMEUIFullscreen();
+    else ui_draw_status("Enter确定 Esc取消", imeStatusLabel(g.imeActive).c_str());
     u8g2_SetDrawColor(g_u8g2, 0);
     ui_commit();
 }
@@ -874,7 +875,7 @@ static void drawOutline() {
                 }
             }
         }
-        ui_draw_status(sl, "");
+        ui_draw_status(sl, g.mode == M_FILTER ? imeStatusLabel(g.imeActive).c_str() : "");
     }
 
     if (composingFilter) drawIMEStatus();
@@ -1605,7 +1606,7 @@ AppState screen_outline_handle(int key, ScreenContext &ctx) {
             }
             u8g2_SetDrawColor(g_u8g2, 0);
             if (g_ime.composing()) drawIMEUIWithStatusBar();
-            ui_draw_status("Enter换行 Tab保存 Esc返回", "");
+            ui_draw_status("Enter换行 Tab保存 Esc返回", imeStatusLabel(g.imeActive).c_str());
             ui_commit();
         }
         return APP_OUTLINE;

@@ -18,6 +18,7 @@
 #include "screen_voice.h"
 #include "screen_polish.h"
 #include "screen_polish_prompt.h"
+#include "ui_helpers.h"
 #include "voice_input.h"
 #include "typing_click.h"
 #include "u8g2_st7305.h"
@@ -452,10 +453,9 @@ extern "C" void app_main() {
     ime.begin();
     // Set candidate page size based on default 22pt font
     ime.setPageSize(7);
-    // 候选字按显示宽度动态分页: 宽度回调复用当前字体, 可用宽度与各界面
-    // 候选行渲染的 curW+partW+8>SCREEN_W 截断阈值一致(SCREEN_W=400)。
+    // 候选字按显示宽度动态分页: 宽度回调复用当前字体, 可用宽度与各界面候选行一致。
     ime.setWidthFn([](const char *s) -> int { return g_font.textWidth(s); });
-    ime.setDisplayWidth(SCREEN_W - 8);
+    ime.setDisplayWidth(imeCandidateLineWidth());
 
     // Initialize Bluetooth keyboard in background (non-blocking, faster boot)
     xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 1);
@@ -472,6 +472,7 @@ extern "C" void app_main() {
         ctx.promptText = "";
     }
     static AppState inspReturnTo = APP_MAIN;
+    static AppState inspEditorReturnTo = APP_MAIN;
 
     // 物理按键状态(时间制,不依赖主循环节拍)
     struct BtnState {
@@ -519,7 +520,9 @@ extern "C" void app_main() {
             key = 0;
         }
         // Ctrl+D → IME user word deletion mode (only when IME active in editor)
-        if (key == 0x04 && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
+        if (key == 0x04 && currentState == APP_EDITOR && app_ime_active() &&
+            !IME::getInstance().predicting() &&
+            !app_editor_search_active() && !app_editor_help_active()) {
             app_toggle_ime_delete_mode();
             {
                 std::string imeStatus = IME::getInstance().takeStatusMessage();
@@ -792,6 +795,7 @@ extern "C" void app_main() {
         // Global Ctrl+I → inspiration panel (works from any screen including editor)
         if (key == KEY_CTRL_I && currentState != APP_INSPIRATION && !app_editor_search_active() && !app_editor_help_active()) {
             inspReturnTo = currentState;
+            if (currentState == APP_EDITOR) inspEditorReturnTo = ctx.prevState;
             currentState = APP_INSPIRATION;
             key = 0;
         }
@@ -915,7 +919,7 @@ extern "C" void app_main() {
             IME::getInstance().setPageSize(7);
             static bool inspInited = false;
             if (!inspInited) {
-                screen_inspiration_init(inspReturnTo);
+                screen_inspiration_init(inspReturnTo, inspEditorReturnTo);
                 inspInited = true;
             }
             if (key > 0) currentState = screen_inspiration_handle(key, ctx);

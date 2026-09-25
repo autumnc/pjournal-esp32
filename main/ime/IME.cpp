@@ -27,11 +27,13 @@ static const int64_t IME_PERF_SLOW_US = 12000;
 static const char *USERDICT_DYNAMIC_PATH = "/sdcard/settings/userdict.txt";
 static const char *USERDICT_FIXED_PATH = "/sdcard/settings/userdict_fixed.txt";
 static const char *USERPREDICT_PATH = "/sdcard/settings/userpredict.txt";
+static const char *USERPREDICT_REJECT_PATH = "/sdcard/settings/userpredict_reject.txt";
 static const char *ENGLISHDICT_PATH = "/sdcard/settings/englishdict.txt";
 static const char *USERDICT_JOURNAL_SUFFIX = ".journal";
 static const size_t USERDICT_FIXED_LIMIT = 500;
 static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
 static const size_t USERPREDICT_LIMIT = 500;
+static const size_t USERPREDICT_REJECT_LIMIT = 300;
 static const size_t ENGLISHDICT_LIMIT = 10000;
 static const int64_t USERDICT_DEFER_SAVE_US = 2000000;
 static const int64_t USERDICT_JOURNAL_DEFER_US = PJOURNAL_IME_USERDICT_JOURNAL_DEFER_US;
@@ -791,12 +793,56 @@ static bool isWeakSinglePredictTail(const std::string &word) {
     return false;
 }
 
+static bool isWeakAutoPhraseChar(const std::string &word) {
+    static const char *WEAK[] = {
+        "的", "了", "着", "过", "在", "是", "有", "和", "与", "及",
+        "就", "都", "也", "还", "很", "更", "最", "把", "被", "给",
+        "我", "你", "他", "她", "它", "这", "那", nullptr
+    };
+    if (utf8TextCharCount(word) != 1) return false;
+    for (int i = 0; WEAK[i]; i++) {
+        if (word == WEAK[i]) return true;
+    }
+    return false;
+}
+
 static bool noisyPredictPair(const std::string &key, const std::string &word) {
     if (!validPredictEntry(key, word)) return true;
     if (key == word) return true;
     if (allSameCjkChars(key) || allSameCjkChars(word)) return true;
     if (utf8TextCharCount(key) <= 1 && isWeakSinglePredictTail(word)) return true;
     return false;
+}
+
+struct RankedPredictCandidate {
+    int score;
+    int sourceRank;
+    int order;
+    std::string key;
+    std::string word;
+};
+
+static void addRankedPredictCandidate(std::vector<RankedPredictCandidate> &items,
+                                      const std::string &key,
+                                      const std::string &word,
+                                      int score,
+                                      int sourceRank,
+                                      int order) {
+    if (noisyPredictPair(key, word)) return;
+    for (auto &item : items) {
+        if (item.word == word) {
+            if (score > item.score ||
+                (score == item.score && sourceRank > item.sourceRank) ||
+                (score == item.score && sourceRank == item.sourceRank && order < item.order)) {
+                item.score = score;
+                item.sourceRank = sourceRank;
+                item.order = order;
+                item.key = key;
+            }
+            return;
+        }
+    }
+    items.push_back({score, sourceRank, order, key, word});
 }
 
 struct RankedCandidate {
@@ -1046,6 +1092,7 @@ void IME::loadUserDict() {
     loadUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
     loadUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
     loadUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
+    loadUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty, USERPREDICT_REJECT_LIMIT);
     loadUserDictJournal(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
     loadUserDictJournal(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
     loadUserDictJournal(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
@@ -1058,6 +1105,7 @@ void IME::loadUserDict() {
         }
     }
     if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+    if (_userPredictRejectDirty) saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
     markUserWordIndexesDirty();
     _userPredictIndexDirty = true;
     _userDictLoaded = true;
@@ -1203,7 +1251,7 @@ void IME::markUserDictDirty(bool &dirty, const char *path, const UserEntry *entr
 
 void IME::flushUserDictSaves(bool force) {
     flushUserDictJournal(force);
-    if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty) {
+    if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty && !_userPredictRejectDirty) {
         _deferredUserDictSinceUs = 0;
         return;
     }
@@ -1213,7 +1261,8 @@ void IME::flushUserDictSaves(bool force) {
     saveUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty);
     saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
     saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
-    if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty)
+    saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
+    if (!_dynamicUserDirty && !_userPredictDirty && !_fixedUserDirty && !_userPredictRejectDirty)
         _deferredUserDictSinceUs = 0;
 }
 
@@ -1662,6 +1711,7 @@ bool IME::readLfHanzi(uint16_t i, char out[4]) {
 
 void IME::bumpFrequency(const std::string &code, const std::string &word, int weight) {
     ensureUserDictLoaded();
+    if (recentlyDeletedWord(word)) return;
     if (weight < 1) weight = 1;
     for (auto &p : _fixedUserWords) {
         if (p.code == code && p.word == word && p.trad == _trad) return;
@@ -1747,6 +1797,37 @@ bool IME::penalizePredictWord(const std::string &word, int weight) {
     return changed;
 }
 
+bool IME::rejectedPredictWord(const std::string &key, const std::string &word) const {
+    if (key.empty() || word.empty()) return false;
+    for (auto &p : _userPredictRejectWords) {
+        if (p.code == key && p.word == word && p.trad == _trad && p.count >= 1)
+            return true;
+    }
+    return false;
+}
+
+void IME::rejectPredictWord(const std::string &key, const std::string &word) {
+    ensureUserDictLoaded();
+    if (!validPredictEntry(key, word)) return;
+    penalizePredictWord(word, 6);
+    for (auto &p : _userPredictRejectWords) {
+        if (p.code == key && p.word == word && p.trad == _trad) {
+            p.count += 1;
+            _userPredictRejectDirty = true;
+            saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
+            return;
+        }
+    }
+    if (_userPredictRejectWords.size() >= USERPREDICT_REJECT_LIMIT) {
+        compactUserEntries(_userPredictRejectWords, USERPREDICT_REJECT_LIMIT);
+        if (_userPredictRejectWords.size() >= USERPREDICT_REJECT_LIMIT)
+            _userPredictRejectWords.pop_back();
+    }
+    _userPredictRejectWords.push_back({key, word, 1, _trad, ""});
+    _userPredictRejectDirty = true;
+    saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
+}
+
 void IME::learnPredictPairs(const std::string &text) {
     if (text.size() < 6) return;
     ensureUserDictLoaded();
@@ -1786,7 +1867,8 @@ void IME::learnPredictPairs(const std::string &text) {
 }
 
 void IME::learnAutoPhraseFromSingle(const std::string &code, const std::string &word) {
-    if (code.empty() || word.empty() || word.size() > 3 || !isCjkChar(word)) {
+    if (code.empty() || word.empty() || word.size() > 3 ||
+        !isCjkChar(word) || isWeakAutoPhraseChar(word) || recentlyDeletedWord(word)) {
         _recentSingleCommits.clear();
         return;
     }
@@ -1801,8 +1883,29 @@ void IME::learnAutoPhraseFromSingle(const std::string &code, const std::string &
             phraseCode += _recentSingleCommits[i].first;
             phraseWord += _recentSingleCommits[i].second;
         }
-        if (phraseWord.size() >= 6) bumpFrequency(phraseCode, phraseWord);
+        if (phraseWord.size() >= 6 && !recentlyDeletedWord(phraseWord))
+            bumpFrequency(phraseCode, phraseWord);
     }
+}
+
+bool IME::recentlyDeletedWord(const std::string &word) const {
+    if (word.empty()) return false;
+    for (auto &w : _recentDeletedWords) {
+        if (w == word) return true;
+    }
+    return false;
+}
+
+void IME::rememberDeletedWord(const std::string &word) {
+    if (word.empty()) return;
+    for (auto it = _recentDeletedWords.begin(); it != _recentDeletedWords.end(); ++it) {
+        if (*it == word) {
+            _recentDeletedWords.erase(it);
+            break;
+        }
+    }
+    _recentDeletedWords.insert(_recentDeletedWords.begin(), word);
+    if (_recentDeletedWords.size() > 16) _recentDeletedWords.pop_back();
 }
 
 void IME::rememberCommittedText(const std::string &text) {
@@ -1859,6 +1962,7 @@ void IME::clearCandidates() {
     _all.clear();
     _candidateHashCount = 0;
     _candLen.clear();
+    _predictCandidateKeys.clear();
     if (_all.capacity() > MAX_CANDIDATES * 2) _all.shrink_to_fit();
     else if (_all.capacity() < MAX_CANDIDATES / 3) _all.reserve(MAX_CANDIDATES / 3);
 }
@@ -1881,6 +1985,7 @@ bool IME::appendCandidate(const std::string &text, int candLen) {
     else
         _candidateHashCount = 0;
     _candLen.push_back(candLen);
+    _predictCandidateKeys.push_back("");
     return true;
 }
 
@@ -1898,8 +2003,23 @@ void IME::setActive(bool on) {
     reset();
 }
 
+std::string IME::modeLabel() const {
+    if (_deleteMode) return "[删]";
+    if (_lfMode) return "[两]";
+    if (_predicting) return "[联]";
+    return "";
+}
+
+void IME::clearLearningContext() {
+    _recentSingleCommits.clear();
+    _lastCommitChar.clear();
+    _lastCommitText.clear();
+}
+
 void IME::reset() {
     _code.clear();
+    _predicting = false;
+    _predChar.clear();
     _displayCodeDirty = true;
     clearCandidates();
     _page.clear();
@@ -1930,7 +2050,6 @@ void IME::setDeleteMode(bool on) {
     _english = false;
     reset();
     _deleteMode = on;
-    _statusMessage = on ? "删除用户词模式" : "退出删除模式";
     if (on) lookup();
 }
 
@@ -3010,47 +3129,63 @@ void IME::beginPredict(const std::string &text) {
     addUniqueString(keys, lastUtf8Char(text));
     if (keys.empty()) return;
 
-    std::string matchedKey;
+    std::vector<RankedPredictCandidate> ranked;
+    int order = 0;
     for (auto &keyText : keys) {
-        size_t before = _all.size();
-        std::vector< std::pair<int, std::string> > userPredict;
+        int keyChars = utf8TextCharCount(keyText);
         auto indexIt = _userPredictIndex.find(keyText);
         if (indexIt != _userPredictIndex.end()) {
             for (uint16_t entryIdx : indexIt->second) {
                 if (entryIdx >= _userPredictWords.size()) continue;
                 auto &p = _userPredictWords[entryIdx];
                 if (p.trad != _trad) continue;
-                int keyChars = utf8TextCharCount(keyText);
-                int score = p.count * 16 + keyChars * 1000;
-                userPredict.push_back({score, p.word});
+                if (rejectedPredictWord(keyText, p.word)) continue;
+                int wordChars = utf8TextCharCount(p.word);
+                int score = p.count * 24 + keyChars * 1500 - std::max(0, wordChars - 2) * 40;
+                addRankedPredictCandidate(ranked, keyText, p.word, score, 300, order++);
             }
         }
-        std::stable_sort(userPredict.begin(), userPredict.end(),
-            [](const std::pair<int, std::string> &a, const std::pair<int, std::string> &b) {
-                if (a.first != b.first) return a.first > b.first;
-                return a.second.length() < b.second.length();
-            });
-        for (auto &p : userPredict) appendCandidate(p.second, 0);
         if (_dict.hasPredictions()) {
             ime::Im3Dictionary::PredictGroup group;
             if (_dict.findPredictGroup(keyText, group))
-                for (auto &word : group.candidates) appendCandidate(word, 0);
+                for (auto &word : group.candidates) {
+                    if (rejectedPredictWord(keyText, word)) continue;
+                    int wordChars = utf8TextCharCount(word);
+                    int score = keyChars * 1500 + 800 - std::max(0, wordChars - 2) * 50;
+                    addRankedPredictCandidate(ranked, keyText, word, score, 200, order++);
+                }
         }
         for (auto &entry : BUILTIN_PREDICT) {
             if (keyText == entry.key) {
-                for (int i = 0; entry.candidates[i]; i++)
-                    appendCandidate(entry.candidates[i], 0);
+                for (int i = 0; entry.candidates[i]; i++) {
+                    std::string word = entry.candidates[i];
+                    if (rejectedPredictWord(keyText, word)) continue;
+                    int wordChars = utf8TextCharCount(word);
+                    int score = keyChars * 1500 + 500 - i * 8 - std::max(0, wordChars - 2) * 60;
+                    addRankedPredictCandidate(ranked, keyText, word, score, 100, order++);
+                }
                 break;
             }
         }
-        if (_all.size() > before && matchedKey.empty()) matchedKey = keyText;
+    }
+    std::stable_sort(ranked.begin(), ranked.end(),
+        [](const RankedPredictCandidate &a, const RankedPredictCandidate &b) {
+            if (a.score != b.score) return a.score > b.score;
+            if (a.sourceRank != b.sourceRank) return a.sourceRank > b.sourceRank;
+            return a.order < b.order;
+        });
+    for (auto &item : ranked) {
+        size_t before = _all.size();
+        if (appendCandidate(item.word, 0) && _all.size() > before)
+            _predictCandidateKeys.back() = item.key;
     }
     if (_all.empty()) {
         _predChar.clear();
         reset();
         return;
     }
-    _predChar = matchedKey.empty() ? keys[0] : matchedKey;
+    _predChar = !_predictCandidateKeys.empty() && !_predictCandidateKeys[0].empty()
+        ? _predictCandidateKeys[0] : keys[0];
     _predicting = true;
     buildPage();
 }
@@ -3073,11 +3208,12 @@ void IME::buildPage() {
         _pageStarts.push_back(0);
         int lineW = 0;
         for (int i = 0; i < (int)_all.size(); i++) {
+            int pageCount = i - (int)_pageStarts.back();
             char num[16];
-            snprintf(num, sizeof(num), " %d.", i - (int)_pageStarts.back() + 1);
+            snprintf(num, sizeof(num), " %d.", pageCount + 1);
             std::string part = std::string(num) + _all[i];
             int partW = _widthFn(part.c_str());
-            if (lineW > 0 && lineW + partW > _displayWidth) {
+            if (lineW > 0 && (pageCount >= 9 || lineW + partW > _displayWidth)) {
                 _pageStarts.push_back(i);
                 lineW = 0;
                 snprintf(num, sizeof(num), " 1.");
@@ -3158,6 +3294,7 @@ bool IME::commit(int idx, std::string &out) {
                     _dynamicUserDirty = true;
                     saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
                     penalizePredictWord(out, 3);
+                    rememberDeletedWord(out);
                     deleted = true;
                     return true;
                 }
@@ -3441,6 +3578,29 @@ bool IME::handleKey(int key, std::string &out) {
         return true;
     }
     if (_predicting) {
+        if (key == 0x04) {
+            if (!_page.empty()) {
+                std::string word = _page[0];
+                std::string rejectKey = (_pageStart >= 0 && _pageStart < (int)_predictCandidateKeys.size() &&
+                                         !_predictCandidateKeys[_pageStart].empty())
+                    ? _predictCandidateKeys[_pageStart] : _predChar;
+                rejectPredictWord(rejectKey, word);
+                for (int i = (int)_all.size() - 1; i >= 0; i--) {
+                    if (_all[i] == word) {
+                        _all.erase(_all.begin() + i);
+                        if (i < (int)_candLen.size()) _candLen.erase(_candLen.begin() + i);
+                        if (i < (int)_predictCandidateKeys.size())
+                            _predictCandidateKeys.erase(_predictCandidateKeys.begin() + i);
+                    }
+                }
+                _candidateHashCount = 0;
+                _pageAnchor = std::min(_pageStart, std::max(0, (int)_all.size() - 1));
+                _statusMessage = "已降低联想:" + word;
+                if (_all.empty()) reset();
+                else buildPage();
+            }
+            return true;
+        }
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
             _predicting = false;
             _code = (char)key;
@@ -3451,7 +3611,10 @@ bool IME::handleKey(int key, std::string &out) {
         if (key >= '1' && key <= '9') {
             int idx = key - '1';
             if (idx < (int)_page.size()) {
-                std::string predKey = _predChar;
+                int candIdx = _pageStart + idx;
+                std::string predKey = (candIdx >= 0 && candIdx < (int)_predictCandidateKeys.size() &&
+                                       !_predictCandidateKeys[candIdx].empty())
+                    ? _predictCandidateKeys[candIdx] : _predChar;
                 out = _page[idx];
                 int learnWeight = 4 + std::min(_curPage, 2);
                 _predicting = false;
@@ -3463,7 +3626,9 @@ bool IME::handleKey(int key, std::string &out) {
         }
         if (key == ' ') {
             if (_page.size() > 0) {
-                std::string predKey = _predChar;
+                std::string predKey = (_pageStart >= 0 && _pageStart < (int)_predictCandidateKeys.size() &&
+                                       !_predictCandidateKeys[_pageStart].empty())
+                    ? _predictCandidateKeys[_pageStart] : _predChar;
                 out = _page[0];
                 int learnWeight = 4 + std::min(_curPage, 2);
                 _predicting = false;
@@ -3476,15 +3641,14 @@ bool IME::handleKey(int key, std::string &out) {
         if (isAsciiPunctKey(key) && key != '-' && key != '=') {
             out = imePunctForKey(key);
             _predicting = false;
-            _lastCommitChar.clear();
-            _lastCommitText.clear();
-            _recentSingleCommits.clear();
+            clearLearningContext();
             return true;
         }
         if (isPredictPagePrevKey(key)) { pagePrev(); return true; }
         if (isPredictPageNextKey(key)) { pageNext(); return true; }
         if (key == '\b' || key == 27 || key == '\n') {
             _predicting = false;
+            clearLearningContext();
             return true;
         }
         _predicting = false;
@@ -3494,7 +3658,9 @@ bool IME::handleKey(int key, std::string &out) {
     if (_fullwidth && _code.length() == 0 && !_deleteMode && !_lfMode && !_vMode) {
         if (((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) ||
             (key >= '0' && key <= '9') || key == ' ') {
-            return handleFullwidthChar(key, out);
+            bool handled = handleFullwidthChar(key, out);
+            if (handled) clearLearningContext();
+            return handled;
         }
     }
     if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
@@ -3528,8 +3694,8 @@ bool IME::handleKey(int key, std::string &out) {
         return true;
     }
     if (_code.length() == 0) {
-        if (handleFullwidthPunct(key, out)) { _lastCommitChar.clear(); _lastCommitText.clear(); return true; }
-        if (_fullwidth && handleFullwidthChar(key, out)) { _lastCommitChar.clear(); _lastCommitText.clear(); return true; }
+        if (handleFullwidthPunct(key, out)) { clearLearningContext(); return true; }
+        if (_fullwidth && handleFullwidthChar(key, out)) { clearLearningContext(); return true; }
         return false;
     }
     // 单引号编码分词: 拼音模式下 ' 显式分隔音节(如 xi'an); 两分模式保留翻页
@@ -3553,12 +3719,12 @@ bool IME::handleKey(int key, std::string &out) {
     }
     if (key == '\n') {
         out = _code;
-        _lastCommitChar.clear();
-        _lastCommitText.clear();
+        clearLearningContext();
         reset();
         return true;
     }
     if (key == '\b') {
+        _recentSingleCommits.clear();
         if (_prefix.length() > 0) {
             _code = _codeOrig;
             if (_code.length() > 0) {
@@ -3580,6 +3746,7 @@ bool IME::handleKey(int key, std::string &out) {
         return true;
     }
     if (key == 27) {
+        clearLearningContext();
         reset();
         return true;
     }

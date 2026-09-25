@@ -50,6 +50,8 @@ public:
 
     bool isLfMode() const { return _lfMode; }
     bool isDeleteMode() const { return _deleteMode; }
+    std::string modeLabel() const;
+    void clearLearningContext();
     void toggleDeleteMode();
     void setDeleteMode(bool on);
     std::string takeStatusMessage() {
@@ -139,6 +141,7 @@ private:
     std::vector<UserEntry> _fixedUserWords;
     std::vector<UserEntry> _dynamicUserWords;
     std::vector<UserEntry> _userPredictWords;
+    std::vector<UserEntry> _userPredictRejectWords;
     std::vector<PendingJournalEntry> _pendingUserDictJournal;
     std::unordered_map<int, std::vector<uint16_t>> _fixedUserCodeIndex;
     std::unordered_map<int, std::vector<uint16_t>> _dynamicUserCodeIndex;
@@ -150,6 +153,7 @@ private:
     bool _fixedUserDirty = false;
     bool _dynamicUserDirty = false;
     bool _userPredictDirty = false;
+    bool _userPredictRejectDirty = false;
     bool _userDictLoaded = false;
     int64_t _deferredUserDictSinceUs = 0;
     int64_t _pendingUserDictJournalSinceUs = 0;
@@ -171,14 +175,19 @@ private:
     void bumpFrequency(const std::string &code, const std::string &word, int weight = 1);
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
     bool penalizePredictWord(const std::string &word, int weight = 2);
+    bool rejectedPredictWord(const std::string &key, const std::string &word) const;
+    void rejectPredictWord(const std::string &key, const std::string &word);
     void learnPredictPairs(const std::string &text);
     void learnAutoPhraseFromSingle(const std::string &code, const std::string &word);
     void rememberCommittedText(const std::string &text);
+    bool recentlyDeletedWord(const std::string &word) const;
+    void rememberDeletedWord(const std::string &word);
     static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
 
     bool _deleteMode = false;
     bool _vMode = false;
     std::vector<std::pair<std::string, std::string>> _recentSingleCommits;
+    std::vector<std::string> _recentDeletedWords;
     int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
@@ -213,6 +222,7 @@ private:
     uint32_t _candidateHashes[MAX_CANDIDATES] = {};
     size_t _candidateHashCount = 0;
     std::vector<int> _candLen;  // code length per candidate in _all
+    std::vector<std::string> _predictCandidateKeys;  // prediction key parallel to _all in predict mode
     std::vector<std::string> _page;
     int _pageStart = 0;
     int _pageSize = 9;

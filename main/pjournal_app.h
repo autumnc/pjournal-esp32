@@ -31,6 +31,7 @@ struct ScreenContext {
     std::string selectedEntry;    // for viewer
     std::string promptText;       // for editor
     bool promptMode = false;      // true = prompt writing, false = free writing
+    std::string editorTitle;      // optional editor status title override
     std::string editContent;      // body text to load into editor (from browser)
     std::string editFilename;     // original filename when editing existing entry
     std::string statusMessage;    // one-shot status message to show
@@ -84,7 +85,7 @@ void screen_outline_init();
 AppState screen_outline_handle(int key, ScreenContext &ctx);
 
 // Inspiration screen
-void screen_inspiration_init(AppState returnTo);
+void screen_inspiration_init(AppState returnTo, AppState editorReturnTo);
 AppState screen_inspiration_handle(int key, ScreenContext &ctx);
 
 // Voice dictation screen

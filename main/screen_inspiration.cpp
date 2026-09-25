@@ -37,6 +37,7 @@ static struct {
     size_t itemCount = 0;
 
     AppState returnTo = APP_MAIN;
+    AppState editorReturnTo = APP_MAIN;
 
     // keyword edit
     std::string editBuf;
@@ -193,6 +194,7 @@ static void drawKeywordEdit() {
     u8g2_SetDrawColor(g_u8g2, 1);
 
     if (g_ime.composing()) drawIMEUIFullscreen();
+    else ui_draw_status("Enter保存 Esc取消", imeStatusLabel(g.imeActive).c_str());
     u8g2_SetDrawColor(g_u8g2, 0);
     ui_commit();
 }
@@ -262,6 +264,7 @@ static void drawSearch() {
     }
 
     if (searchComposing) drawIMEUIFullscreen();
+    else ui_draw_status("Esc返回", imeStatusLabel(g.searchImeActive).c_str());
     ui_commit();
 }
 
@@ -306,8 +309,11 @@ static void drawHelp() {
 
 // ── Init & Handle ───────────────────────────────────────────────────────
 
-void screen_inspiration_init(AppState returnTo) {
+void screen_inspiration_init(AppState returnTo, AppState editorReturnTo) {
     g.returnTo = returnTo;
+    if (returnTo == APP_EDITOR && editorReturnTo != APP_INSPIRATION) {
+        g.editorReturnTo = editorReturnTo;
+    }
     g.mode = IM_LIST;
     g.imeActive = false;
     g_ime.setActive(false);
@@ -424,10 +430,12 @@ AppState screen_inspiration_handle(int key, ScreenContext &ctx) {
                 auto &item = (*g.items)[idx];
                 std::string id = item["id"].asString();
                 g.pendingInspirationId = id;
+                if (g.returnTo == APP_EDITOR) app_editor_stash_session();
                 ctx.editContent = item["content"].asString();
                 ctx.editFilename = "__inspiration_" + id;
                 ctx.promptMode = false;
                 ctx.promptText = "灵感";
+                ctx.editorTitle = "灵感";
                 ctx.prevState = APP_INSPIRATION;
                 ctx.nextState = APP_EDITOR;
                 g.searchImeActive = false; g_ime.setActive(false);
@@ -457,6 +465,11 @@ AppState screen_inspiration_handle(int key, ScreenContext &ctx) {
 
     // ── IM_LIST ──
     if (key == 0x1B || key == 'q' || key == 'Q') {
+        if (g.returnTo == APP_EDITOR) {
+            app_editor_restore_stashed_session();
+            ctx.prevState = g.editorReturnTo;
+        }
+        ctx.nextState = g.returnTo;
         return g.returnTo;
     } else if (key == KEY_UP) {
         if (g.sel > 0) g.sel--;
@@ -476,10 +489,12 @@ AppState screen_inspiration_handle(int key, ScreenContext &ctx) {
         g.sel = (int)g.itemCount - 1;
         g.pendingInspirationId = item["id"].asString();
         // Open text editor for content
+        if (g.returnTo == APP_EDITOR) app_editor_stash_session();
         ctx.editContent = "";
         ctx.editFilename = "__inspiration_" + item["id"].asString();
         ctx.promptMode = false;
         ctx.promptText = "灵感";
+        ctx.editorTitle = "灵感";
         ctx.prevState = APP_INSPIRATION;
         ctx.nextState = APP_EDITOR;
         app_editor_request_reinit();
@@ -496,10 +511,12 @@ AppState screen_inspiration_handle(int key, ScreenContext &ctx) {
         auto &item = (*g.items)[g.sel];
         std::string id = item["id"].asString();
         g.pendingInspirationId = id;
+        if (g.returnTo == APP_EDITOR) app_editor_stash_session();
         ctx.editContent = item["content"].asString();
         ctx.editFilename = "__inspiration_" + id;
         ctx.promptMode = false;
         ctx.promptText = "灵感";
+        ctx.editorTitle = "灵感";
         ctx.prevState = APP_INSPIRATION;
         ctx.nextState = APP_EDITOR;
         app_editor_request_reinit();
