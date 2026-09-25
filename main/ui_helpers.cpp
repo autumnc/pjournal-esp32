@@ -334,7 +334,7 @@ void drawIMEUI(int baseY, bool anchorBottom) {
     // 基线离底 descent+3,分割线、编码行依次向上),词库管理等面板型调用用。
     // 底边锚定状态栏分割线 STATUS_BAR_Y 而非 baseY+67(=STATUS_Y,随字号浮动):
     // 16pt 时 STATUS_Y=282 压过分割线(候选行贴住状态栏),28pt 时 STATUS_Y=270
-    // 偏高浪费正文空间;锚定后与编辑器横排自绘条(IME_CODE_Y/IME_CAND_Y)全字号对齐
+    // 偏高浪费正文空间;锚定后所有有状态栏页面使用同一组行位
     int codeBase, sepY, candBase;
     if (anchorBottom) {
         int bottom = STATUS_BAR_Y;

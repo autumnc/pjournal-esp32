@@ -804,7 +804,6 @@ static void searchFieldView(const std::string &s, int cur, int maxW,
 
 // 绘制第 idx 条匹配:整行墨色文字,命中词 XOR 反显;当前匹配整行反显。
 static void drawSearchMatchLine(int idx, int y, bool isCurrent) {
-    auto &sh = g_editor.search;
     int hlS = 0, hlE = 0;
     std::string line = searchMatchContext(idx, hlS, hlE);
     int outS = 0, outE = 0;
