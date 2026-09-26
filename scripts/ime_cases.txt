@@ -1,0 +1,17 @@
+# code<TAB>candidate<TAB>max_rank
+shuru	输入	1
+shurufa	输入法	1
+shurutiyan	输入体验	1
+changjushuru	长句输入	1
+rj	日记	1
+srf	输入法	1
+lyjp	蓝牙键盘	1
+wentijilu	问题记录	1
+meirifupan	每日复盘	1
+huiyijilu	会议记录	1
+tongbushibai	同步失败	1
+biaodian	标点	1
+jintianxiangxie	今天想写	1
+jintianxiangjilu	今天想记录	1
+mingtianjixuchuli	明天继续处理	1
+wentiyijingjiejue	问题已经解决	1

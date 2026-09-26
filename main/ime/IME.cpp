@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <ctime>
 #include <cstdlib>
+#include <unordered_map>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <sys/stat.h>
@@ -784,6 +785,17 @@ static uint32_t candidateHash(const std::string &text) {
     return h ? h : 1;
 }
 
+static std::string userEntryKey(const std::string &code, const std::string &word, bool trad) {
+    std::string key;
+    key.reserve(code.size() + word.size() + 3);
+    key += code;
+    key += '\t';
+    key += word;
+    key += '\t';
+    key += trad ? '1' : '0';
+    return key;
+}
+
 static bool parseUserDictLine(const std::string &raw, std::string &code,
                               std::string &word, int &count, bool &trad) {
     std::string line = str_trim(raw);
@@ -1117,12 +1129,12 @@ bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
     fclose(f);
     if (allData.empty()) { dirty = false; return true; }
 
-    // Parse lines (same format as before: "code word count" per line)
-    const size_t MAX_READ = 64 * 1024;
+    // Parse lines (same format as before: "code word count" per line). The
+    // dynamic dictionaries can grow past 64KB, so parse the whole file that was
+    // already read into memory instead of silently truncating at the old cap.
     bool hadDuplicates = false;
     size_t pos = 0;
-    size_t bytesRead = 0;
-    while (pos < allData.length() && bytesRead < MAX_READ) {
+    while (pos < allData.length()) {
         size_t nl = allData.find('\n', pos);
         std::string line;
         if (nl == std::string::npos) {
@@ -1132,7 +1144,6 @@ bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
             line = allData.substr(pos, nl - pos);
             pos = nl + 1;
         }
-        bytesRead += line.length() + 1;
         std::string code;
         std::string word;
         int count = 1;
@@ -1242,6 +1253,10 @@ void IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
     if (!f) return;
 
     bool changed = false;
+    std::unordered_map<std::string, size_t> entryIndex;
+    entryIndex.reserve(entries.size() * 2 + 1);
+    for (size_t i = 0; i < entries.size(); i++)
+        entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
     char buf[256];
     while (fgets(buf, sizeof(buf), f)) {
         std::string code;
@@ -1249,23 +1264,24 @@ void IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
         int count = 1;
         bool trad = false;
         if (!parseUserDictLine(buf, code, word, count, trad)) continue;
-        bool merged = false;
-        for (auto &existing : entries) {
-            if (existing.code == code && existing.word == word && existing.trad == trad) {
-                if (existing.count < count) {
-                    existing.count = count;
-                    changed = true;
-                }
-                merged = true;
-                break;
+        auto existingIt = entryIndex.find(userEntryKey(code, word, trad));
+        if (existingIt != entryIndex.end()) {
+            UserEntry &existing = entries[existingIt->second];
+            if (existing.count < count) {
+                existing.count = count;
+                changed = true;
             }
-        }
-        if (!merged) {
+        } else {
             if (entries.size() >= maxEntries) {
                 compactUserEntries(entries, maxEntries);
                 if (entries.size() >= maxEntries) entries.pop_back();
+                entryIndex.clear();
+                entryIndex.reserve(entries.size() * 2 + 1);
+                for (size_t i = 0; i < entries.size(); i++)
+                    entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
             }
             entries.push_back({code, word, count, trad, userInitialForCode(code)});
+            entryIndex[userEntryKey(code, word, trad)] = entries.size() - 1;
             changed = true;
         }
     }
@@ -1312,8 +1328,30 @@ void IME::flushUserDictJournal(bool force) {
         now - _pendingUserDictJournalSinceUs < USERDICT_JOURNAL_DEFER_US)
         return;
 
-    for (auto &item : _pendingUserDictJournal)
-        appendUserDictJournal(item.path.c_str(), item.entry);
+    std::vector<std::string> paths;
+    for (auto &item : _pendingUserDictJournal) {
+        bool seen = false;
+        for (auto &path : paths) {
+            if (path == item.path) { seen = true; break; }
+        }
+        if (!seen) paths.push_back(item.path);
+    }
+    mkdir("/sdcard/settings", 0777);
+    for (auto &path : paths) {
+        std::string journal = userDictJournalPath(path.c_str());
+        FILE *f = fopen(journal.c_str(), "a");
+        if (!f) continue;
+        for (auto &item : _pendingUserDictJournal) {
+            if (item.path != path) continue;
+            const UserEntry &entry = item.entry;
+            std::string line = entry.code + " " + entry.word + " " + std::to_string(entry.count)
+                             + (entry.trad ? " 1" : "") + "\n";
+            fwrite(line.data(), 1, line.size(), f);
+        }
+        fflush(f);
+        fsync(fileno(f));
+        fclose(f);
+    }
     _pendingUserDictJournal.clear();
     _pendingUserDictJournalSinceUs = 0;
 }
@@ -1497,6 +1535,77 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
     dirty = true;
     saveUserDictFile(path, entries, dirty);
     return true;
+}
+
+int IME::addUserDictEntries(UserDictKind kind, const std::vector<UserEntryView> &items,
+                            int *skipped) {
+    ensureUserDictLoaded();
+    int skippedCount = 0;
+    int imported = 0;
+    if (items.empty()) {
+        if (skipped) *skipped = 0;
+        return 0;
+    }
+
+    std::vector<UserEntry> &entries =
+        (kind == FIXED_DICT) ? _fixedUserWords :
+        (kind == PREDICT_DICT) ? _userPredictWords : _dynamicUserWords;
+    bool &dirty =
+        (kind == FIXED_DICT) ? _fixedUserDirty :
+        (kind == PREDICT_DICT) ? _userPredictDirty : _dynamicUserDirty;
+    const char *path =
+        (kind == FIXED_DICT) ? USERDICT_FIXED_PATH :
+        (kind == PREDICT_DICT) ? USERPREDICT_PATH : USERDICT_DYNAMIC_PATH;
+    size_t limit =
+        (kind == FIXED_DICT) ? USERDICT_FIXED_LIMIT :
+        (kind == PREDICT_DICT) ? USERPREDICT_LIMIT : USERDICT_DYNAMIC_LIMIT;
+
+    std::unordered_map<std::string, size_t> entryIndex;
+    entryIndex.reserve(entries.size() * 2 + items.size() * 2 + 1);
+    for (size_t i = 0; i < entries.size(); i++)
+        entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
+
+    bool changed = false;
+    for (auto &item : items) {
+        if (item.word.length() < 3 || item.code.length() == 0 ||
+            (kind == PREDICT_DICT && !validPredictEntry(item.code, item.word))) {
+            skippedCount++;
+            continue;
+        }
+        int count = item.count < 1 ? 1 : item.count;
+        auto existingIt = entryIndex.find(userEntryKey(item.code, item.word, item.trad));
+        if (existingIt != entryIndex.end()) {
+            entries[existingIt->second].count += count;
+            imported++;
+            changed = true;
+            continue;
+        }
+        if (entries.size() >= limit) {
+            if (kind == FIXED_DICT) {
+                skippedCount++;
+                continue;
+            }
+            compactUserEntries(entries, limit);
+            if (entries.size() >= limit) entries.pop_back();
+            entryIndex.clear();
+            entryIndex.reserve(entries.size() * 2 + items.size() * 2 + 1);
+            for (size_t i = 0; i < entries.size(); i++)
+                entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
+        }
+        entries.push_back({item.code, item.word, count, item.trad, userInitialForCode(item.code)});
+        entryIndex[userEntryKey(item.code, item.word, item.trad)] = entries.size() - 1;
+        imported++;
+        changed = true;
+    }
+
+    if (changed) {
+        if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
+        else markUserWordIndexesDirty();
+        dirty = true;
+        saveUserDictFile(path, entries, dirty);
+    }
+    if (skipped) *skipped = skippedCount;
+    return imported;
 }
 
 void IME::removeUserDictEntries(UserDictKind kind, const std::vector<int> &indices) {
@@ -2641,6 +2750,7 @@ void IME::lookup() {
     }
 
     // Phase 4c: curated supplemental phrases for shorthand initials.
+    bool curatedInitialFilled = false;
     if (!hasVowel && qlen >= 2 && _all.size() < IME_FAST_CANDIDATE_LIMIT) {
         int64_t t = IME_PERF_NOW();
         std::vector<RankedCandidate> segInitFreq;
@@ -2668,7 +2778,7 @@ void IME::lookup() {
         }
         sortRankedCandidates(segInitFreq);
         for (auto &f : segInitFreq) {
-            appendCandidate(f.word, f.candLen);
+            if (appendCandidate(f.word, f.candLen)) curatedInitialFilled = true;
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
         perf.userInitialUs += IME_PERF_NOW() - t;
@@ -2719,7 +2829,8 @@ void IME::lookup() {
     }
 
     // Phase 6: initial match (no vowel, consonant-only)
-    if (!hasVowel && qlen >= IME_DICT_INITIAL_MIN_LEN && _dict.hasWords()) {
+    if (!hasVowel && qlen >= IME_DICT_INITIAL_MIN_LEN && _dict.hasWords() &&
+        !(curatedInitialFilled && qlen <= 2)) {
         int64_t t = IME_PERF_NOW();
         struct ScoredPhrase {
             int score;
@@ -3760,7 +3871,7 @@ bool IME::handleKey(int key, std::string &out) {
                 out = _page[idx];
                 int learnWeight = 4 + std::min(_curPage, 2);
                 _predicting = false;
-                bumpPredictFrequency(predKey, out, true, learnWeight);
+                bumpPredictFrequency(predKey, out, false, learnWeight);
                 rememberCommittedText(out);
                 beginPredict(predictKeyForCommittedText(out));
             }
@@ -3774,7 +3885,7 @@ bool IME::handleKey(int key, std::string &out) {
                 out = _page[0];
                 int learnWeight = 4 + std::min(_curPage, 2);
                 _predicting = false;
-                bumpPredictFrequency(predKey, out, true, learnWeight);
+                bumpPredictFrequency(predKey, out, false, learnWeight);
                 rememberCommittedText(out);
                 beginPredict(predictKeyForCommittedText(out));
             }

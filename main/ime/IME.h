@@ -72,6 +72,8 @@ public:
     bool addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word);
     bool addUserDictEntry(UserDictKind kind, const std::string &code, const std::string &word,
                           int count, bool trad);
+    int addUserDictEntries(UserDictKind kind, const std::vector<UserEntryView> &items,
+                           int *skipped = nullptr);
     void removeUserDictEntries(UserDictKind kind, const std::vector<int> &indices);
     void clearUserDict(UserDictKind kind);
     size_t userDictSize(UserDictKind kind) const;

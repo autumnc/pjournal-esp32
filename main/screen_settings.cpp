@@ -35,7 +35,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"vertical_ref_line", "竖排参考线", false, false},
     {"_vertical_ref_line_style", "参考线样式", false, true},
     {"_input_mode", "输入模式", false, true},
-    {"ime_fuzzy", "拼音模糊音", false, false},
+    {"_ime_fuzzy", "拼音模糊音", false, true},
     {"click_enabled", "打字音效", false, false},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -152,6 +152,23 @@ static const char *voiceAsrServiceNext(int idx) {
     int n = (int)(sizeof(VOICE_ASR_SERVICE_OPTS) / sizeof(VOICE_ASR_SERVICE_OPTS[0]));
     return VOICE_ASR_SERVICE_OPTS[(idx + 1) % n].key;
 }
+// 拼音模糊音设置: key 是 settings 文件值,label 是设置页显示
+static const TimbreOpt IME_FUZZY_OPTS[] = {
+    {"zcs", "z/zh c/ch s/sh"},
+    {"zcs,nl", "+ n/l"},
+    {"zcs,eneng,ining", "+ 前后鼻音"},
+    {"all", "全部"},
+    {"off", "关闭"},
+};
+static int imeFuzzyIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(IME_FUZZY_OPTS) / sizeof(IME_FUZZY_OPTS[0])); i++)
+        if (strcmp(k, IME_FUZZY_OPTS[i].key) == 0) return i;
+    return 0;
+}
+static const char *imeFuzzyNext(int idx) {
+    int n = (int)(sizeof(IME_FUZZY_OPTS) / sizeof(IME_FUZZY_OPTS[0]));
+    return IME_FUZZY_OPTS[(idx + 1) % n].key;
+}
 // UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
 static int fieldAt(int sel) {
     int lastVisible = -1, vis = 0;
@@ -210,6 +227,12 @@ static struct {
     int dictSearchCursor = 0;
     bool dictSearchImeActive = false;
     std::string dictNotice;
+    bool dictCacheValid = false;
+    bool dictFilterCacheValid = false;
+    IME::UserDictKind dictCacheKind = IME::FIXED_DICT;
+    std::string dictFilterCacheQuery;
+    std::vector<IME::UserEntryView> dictEntriesCache;
+    std::vector<int> dictFilteredCache;
 } g_settingsState;
 
 static const char *dictKindLabel(IME::UserDictKind kind) {
@@ -234,6 +257,12 @@ static const char *dictImportPath(IME::UserDictKind kind) {
     if (kind == IME::FIXED_DICT) return "/sdcard/settings/userdict_fixed_import.txt";
     if (kind == IME::PREDICT_DICT) return "/sdcard/settings/userpredict_import.txt";
     return "/sdcard/settings/userdict_import.txt";
+}
+
+static const char *dictImportErrorPath(IME::UserDictKind kind) {
+    if (kind == IME::FIXED_DICT) return "/sdcard/settings/userdict_fixed_import_errors.txt";
+    if (kind == IME::PREDICT_DICT) return "/sdcard/settings/userpredict_import_errors.txt";
+    return "/sdcard/settings/userdict_import_errors.txt";
 }
 
 static IME::UserDictKind dictKindFromSelection(int sel) {
@@ -269,7 +298,22 @@ static void eraseBeforeCursor(std::string &s, int &cursor) {
     cursor = prev;
 }
 
-static std::vector<int> dictFilteredIndices(const std::vector<IME::UserEntryView> &entries);
+static void invalidateDictCache() {
+    g_settingsState.dictCacheValid = false;
+    g_settingsState.dictFilterCacheValid = false;
+}
+
+static const std::vector<IME::UserEntryView> &currentDictEntries() {
+    if (!g_settingsState.dictCacheValid || g_settingsState.dictCacheKind != g_settingsState.dictKind) {
+        g_settingsState.dictEntriesCache = g_ime.userDictEntries(g_settingsState.dictKind);
+        g_settingsState.dictCacheKind = g_settingsState.dictKind;
+        g_settingsState.dictCacheValid = true;
+        g_settingsState.dictFilterCacheValid = false;
+    }
+    return g_settingsState.dictEntriesCache;
+}
+
+static const std::vector<int> &dictFilteredIndices(const std::vector<IME::UserEntryView> &entries);
 
 static void drawDictChoose() {
     ui_clear();
@@ -282,8 +326,8 @@ static void drawDictChoose() {
 }
 
 static void drawDictList(bool doCommit = true) {
-    auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
-    auto filtered = dictFilteredIndices(entries);
+    auto &entries = currentDictEntries();
+    auto &filtered = dictFilteredIndices(entries);
     int total = (int)filtered.size();
     if (g_settingsState.dictSelection >= total) g_settingsState.dictSelection = total - 1;
     if (g_settingsState.dictSelection < 0) g_settingsState.dictSelection = 0;
@@ -389,11 +433,11 @@ static void drawDictAdd() {
 
 static bool parseDictAdd(const std::string &line, std::string &code, std::string &word) {
     std::string s = settingsTrim(line);
-    size_t sp = s.find(' ');
+    size_t sp = s.find_first_of(" \t");
     if (sp == std::string::npos) return false;
     code = settingsTrim(s.substr(0, sp));
     std::string rest = settingsTrim(s.substr(sp + 1));
-    size_t sp2 = rest.find(' ');
+    size_t sp2 = rest.find_first_of(" \t");
     word = settingsTrim(sp2 == std::string::npos ? rest : rest.substr(0, sp2));
     return !code.empty() && !word.empty();
 }
@@ -404,13 +448,13 @@ static bool parseDictImportLine(const std::string &line, std::string &code,
     count = 1;
     trad = false;
     std::string s = settingsTrim(line);
-    size_t sp1 = s.find(' ');
+    size_t sp1 = s.find_first_of(" \t");
     if (sp1 == std::string::npos) return true;
     std::string rest = settingsTrim(s.substr(sp1 + 1));
-    size_t sp2 = rest.find(' ');
+    size_t sp2 = rest.find_first_of(" \t");
     if (sp2 == std::string::npos) return true;
     std::string tail = settingsTrim(rest.substr(sp2 + 1));
-    size_t sp3 = tail.find(' ');
+    size_t sp3 = tail.find_first_of(" \t");
     std::string countText = sp3 == std::string::npos ? tail : tail.substr(0, sp3);
     bool countOk = !countText.empty();
     int parsed = 0;
@@ -441,7 +485,7 @@ static std::string dictImportSummary(const DictImportResult &r) {
 }
 
 static bool exportCurrentDict() {
-    auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
+    auto &entries = currentDictEntries();
     const char *path = dictExportPath(g_settingsState.dictKind);
     mkdir("/sdcard/settings", 0777);
     FILE *f = fopen(path, "w");
@@ -460,6 +504,8 @@ static DictImportResult importCurrentDict() {
     FILE *f = fopen(path, "r");
     if (!f) return result;
     result.opened = true;
+    std::vector<IME::UserEntryView> parsedEntries;
+    std::vector<std::string> badLines;
     char buf[256];
     while (fgets(buf, sizeof(buf), f)) {
         std::string raw = settingsTrim(buf);
@@ -469,26 +515,47 @@ static DictImportResult importCurrentDict() {
         bool trad = false;
         if (!parseDictImportLine(buf, code, word, count, trad)) {
             result.malformed++;
+            badLines.push_back(raw);
             continue;
         }
-        if (g_ime.addUserDictEntry(g_settingsState.dictKind, code, word, count, trad))
-            result.imported++;
-        else
-            result.skipped++;
+        parsedEntries.push_back({code, word, count, trad});
     }
     fclose(f);
+    const char *errPath = dictImportErrorPath(g_settingsState.dictKind);
+    if (badLines.empty()) {
+        remove(errPath);
+    } else {
+        FILE *ef = fopen(errPath, "w");
+        if (ef) {
+            for (auto &line : badLines) {
+                fwrite(line.data(), 1, line.size(), ef);
+                fwrite("\n", 1, 1, ef);
+            }
+            fclose(ef);
+        }
+    }
+    int skipped = 0;
+    result.imported = g_ime.addUserDictEntries(g_settingsState.dictKind, parsedEntries, &skipped);
+    result.skipped = skipped;
     return result;
 }
 
-static std::vector<int> dictFilteredIndices(const std::vector<IME::UserEntryView> &entries) {
-    std::vector<int> out;
+static const std::vector<int> &dictFilteredIndices(const std::vector<IME::UserEntryView> &entries) {
     std::string q = settingsTrim(g_settingsState.dictSearchBuffer);
+    if (g_settingsState.dictFilterCacheValid &&
+        g_settingsState.dictFilterCacheQuery == q &&
+        g_settingsState.dictFilteredCache.size() <= entries.size())
+        return g_settingsState.dictFilteredCache;
+    g_settingsState.dictFilteredCache.clear();
+    g_settingsState.dictFilteredCache.reserve(entries.size());
     for (int i = 0; i < (int)entries.size(); i++) {
         if (q.empty() || entries[i].code.find(q) != std::string::npos ||
             entries[i].word.find(q) != std::string::npos)
-            out.push_back(i);
+            g_settingsState.dictFilteredCache.push_back(i);
     }
-    return out;
+    g_settingsState.dictFilterCacheQuery = q;
+    g_settingsState.dictFilterCacheValid = true;
+    return g_settingsState.dictFilteredCache;
 }
 
 static bool connect_wifi_from_settings() {
@@ -519,6 +586,7 @@ void screen_settings_init() {
     g_settingsState.dictSearchCursor = 0;
     g_settingsState.dictSearchImeActive = false;
     g_settingsState.dictNotice.clear();
+    invalidateDictCache();
 }
 
 AppState screen_settings_handle(int key, ScreenContext &ctx) {
@@ -532,6 +600,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.dictSelection = (g_settingsState.dictSelection + 1) % 3;
         } else if (key == 0x0A || key == 0x0D) {
             g_settingsState.dictKind = dictKindFromSelection(g_settingsState.dictSelection);
+            invalidateDictCache();
             g_settingsState.dictSelection = 0;
             g_settingsState.dictScroll = 0;
             g_settingsState.dictSelected.clear();
@@ -550,6 +619,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 if (!imeOut.empty()) {
                     g_settingsState.dictSearchBuffer.insert(g_settingsState.dictSearchCursor, imeOut);
                     g_settingsState.dictSearchCursor += (int)imeOut.length();
+                    g_settingsState.dictFilterCacheValid = false;
                 }
                 drawDictSearch();
                 return APP_SETTINGS;
@@ -572,6 +642,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             eraseBeforeCursor(g_settingsState.dictSearchBuffer, g_settingsState.dictSearchCursor);
             g_settingsState.dictSelection = 0;
             g_settingsState.dictScroll = 0;
+            g_settingsState.dictFilterCacheValid = false;
         } else if (key == KEY_LEFT) {
             moveCursorLeft(g_settingsState.dictSearchBuffer, g_settingsState.dictSearchCursor);
         } else if (key == KEY_RIGHT) {
@@ -581,14 +652,15 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.dictSearchCursor++;
             g_settingsState.dictSelection = 0;
             g_settingsState.dictScroll = 0;
+            g_settingsState.dictFilterCacheValid = false;
         }
         drawDictSearch();
         return APP_SETTINGS;
     }
 
     if (g_settingsState.mode == SETTINGS_DICT_LIST) {
-        auto entries = g_ime.userDictEntries(g_settingsState.dictKind);
-        auto filtered = dictFilteredIndices(entries);
+        auto &entries = currentDictEntries();
+        auto &filtered = dictFilteredIndices(entries);
         int total = (int)filtered.size();
         if (key == 0x1B || key == 'q' || key == 'Q') {
             g_settingsState.mode = SETTINGS_DICT_CHOOSE;
@@ -624,12 +696,14 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 for (int idx : g_settingsState.dictSelected) indices.push_back(idx);
             }
             g_ime.removeUserDictEntries(g_settingsState.dictKind, indices);
+            invalidateDictCache();
             g_settingsState.dictSelected.clear();
             if (g_settingsState.dictSelection >= total - (int)indices.size())
                 g_settingsState.dictSelection = std::max(0, total - (int)indices.size() - 1);
             g_settingsState.dictNotice = "已删除";
         } else if ((key == 'c' || key == 'C') && !entries.empty()) {
             g_ime.clearUserDict(g_settingsState.dictKind);
+            invalidateDictCache();
             g_settingsState.dictSelected.clear();
             g_settingsState.dictSelection = 0;
             g_settingsState.dictScroll = 0;
@@ -638,6 +712,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.dictNotice = exportCurrentDict() ? "已导出" : "导出失败";
         } else if (key == 'i' || key == 'I') {
             g_settingsState.dictNotice = dictImportSummary(importCurrentDict());
+            invalidateDictCache();
         }
         drawDictList();
         return APP_SETTINGS;
@@ -666,8 +741,10 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_ime.setActive(false);
         } else if (key == 0x0A || key == 0x0D) {
             std::string code, word;
-            if (parseDictAdd(g_settingsState.dictAddBuffer, code, word))
+            if (parseDictAdd(g_settingsState.dictAddBuffer, code, word)) {
                 g_ime.addUserDictEntry(g_settingsState.dictKind, code, word);
+                invalidateDictCache();
+            }
             g_settingsState.mode = SETTINGS_DICT_LIST;
             g_settingsState.dictAddBuffer.clear();
             g_settingsState.dictAddCursor = 0;
@@ -986,6 +1063,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     g_settingsState.selection = fieldVisibleCount() - 1;
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_ime_fuzzy") == 0) {
+                g_settings.setString("ime_fuzzy",
+                    imeFuzzyNext(imeFuzzyIndex(g_settings.imeFuzzy().c_str())));
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_click_volume") == 0) {
                 static const int LV[] = {0, 20, 40, 60, 80, 100};
                 const int n = (int)(sizeof(LV) / sizeof(LV[0]));
@@ -1059,6 +1141,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_input_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.inputMode() == "typewriter" ? "打字机模式" : "正常模式");
+            } else if (strcmp(f.key, "_ime_fuzzy") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         IME_FUZZY_OPTS[imeFuzzyIndex(g_settings.imeFuzzy().c_str())].label);
             } else if (strcmp(f.key, "_click_chinese") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          CLICK_CHINESE_OPTS[clickChineseIndex(g_settings.clickChineseMode().c_str())].label);

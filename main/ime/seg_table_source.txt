@@ -159,6 +159,18 @@ cao gao	草稿
 hui yi	会议
 hui yi ji lu	会议记录
 hui yi ji yao	会议纪要
+jin tian xiang xie	今天想写
+jin tian xiang ji lu	今天想记录
+jin tian wan cheng	今天完成
+jin tian xu yao	今天需要
+ming tian ji xu	明天继续
+ming tian ji xu chu li	明天继续处理
+zuo tian wan cheng	昨天完成
+wen ti yi jing jie jue	问题已经解决
+wen ti xu yao chu li	问题需要处理
+xiang fa xian ji lu	想法先记录
+ling gan xian ji lu	灵感先记录
+xia yi bu ji xu	下一步继续
 shou ji	手机
 dian nao	电脑
 she bei	设备
