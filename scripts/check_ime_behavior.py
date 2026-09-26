@@ -324,6 +324,10 @@ def main():
     require_source_contains("dict export", (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8"), "exportCurrentDict")
     require_source_contains("dict import", (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8"), "importCurrentDict")
     require_source_contains("dict import stats", (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8"), "DictImportResult")
+    require_source_contains("ime fuzzy setting", (ROOT / "main" / "settings_manager.h").read_text(encoding="utf-8"), "imeFuzzy")
+    require_source_contains("ime fuzzy engine", ime_cpp, "fuzzyOptionEnabled")
+    require_source_contains("ime exact phrase promotion", ime_cpp, "exactPhraseMatches")
+    require_source_contains("ime offline simulator", (ROOT / "scripts" / "ime_query_sim.py").read_text(encoding="utf-8"), "Offline approximate IME candidate query")
     require_source_contains("ime3 doc header", ime3_doc, "IME3 Dictionary Format")
     require_source_contains("ime3 doc prediction", ime3_doc, "Prediction Section")
 

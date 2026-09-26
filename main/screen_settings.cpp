@@ -35,6 +35,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"vertical_ref_line", "竖排参考线", false, false},
     {"_vertical_ref_line_style", "参考线样式", false, true},
     {"_input_mode", "输入模式", false, true},
+    {"ime_fuzzy", "拼音模糊音", false, false},
     {"click_enabled", "打字音效", false, false},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -218,8 +219,9 @@ static const char *dictKindLabel(IME::UserDictKind kind) {
 }
 
 static int dictKindLimit(IME::UserDictKind kind) {
-    if (kind == IME::DYNAMIC_DICT) return 1000;
-    return 500;
+    if (kind == IME::DYNAMIC_DICT) return 5000;
+    if (kind == IME::PREDICT_DICT) return 2000;
+    return 1000;
 }
 
 static const char *dictExportPath(IME::UserDictKind kind) {

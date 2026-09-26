@@ -41,6 +41,7 @@ public:
     std::string appMode();  // "journal"(个人日记) 或 "quick"(快捷编辑)
     std::string homeView();  // "week"(周视图) 或 "month"(月视图)
     std::string inputMode();  // "normal"(正常) 或 "typewriter"(打字机)
+    std::string imeFuzzy();  // comma/space separated fuzzy pinyin options
     std::string editorOrientation();  // "horizontal"(横排) 或 "vertical"(竖排)
     std::string verticalReferenceLineStyle();  // "solid"(实线) / "dash"(虚线) / "dot"(点状虚线)
     bool typingClickEnabled();  // 打字机模式下是否播放打字音效

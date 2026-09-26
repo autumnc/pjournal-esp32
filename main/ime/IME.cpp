@@ -3,6 +3,7 @@
 #include "seg_table.h"
 #include "trad_table.h"
 #include "kaomoji_table.h"
+#include "settings_manager.h"
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -30,10 +31,10 @@ static const char *USERPREDICT_PATH = "/sdcard/settings/userpredict.txt";
 static const char *USERPREDICT_REJECT_PATH = "/sdcard/settings/userpredict_reject.txt";
 static const char *ENGLISHDICT_PATH = "/sdcard/settings/englishdict.txt";
 static const char *USERDICT_JOURNAL_SUFFIX = ".journal";
-static const size_t USERDICT_FIXED_LIMIT = 500;
-static const size_t USERDICT_DYNAMIC_LIMIT = 1000;
-static const size_t USERPREDICT_LIMIT = 500;
-static const size_t USERPREDICT_REJECT_LIMIT = 300;
+static const size_t USERDICT_FIXED_LIMIT = 1000;
+static const size_t USERDICT_DYNAMIC_LIMIT = 5000;
+static const size_t USERPREDICT_LIMIT = 2000;
+static const size_t USERPREDICT_REJECT_LIMIT = 1000;
 static const size_t ENGLISHDICT_LIMIT = 10000;
 static const int64_t USERDICT_DEFER_SAVE_US = 2000000;
 static const int64_t USERDICT_JOURNAL_DEFER_US = PJOURNAL_IME_USERDICT_JOURNAL_DEFER_US;
@@ -512,8 +513,88 @@ static void addUniqueString(std::vector<std::string> &items, const std::string &
     items.push_back(value);
 }
 
+static bool fuzzyOptionEnabled(const char *name) {
+    std::string cfg = g_settings.imeFuzzy();
+    if (cfg.empty() || cfg == "0" || cfg == "off" || cfg == "none") return false;
+    if (cfg == "1" || cfg == "all") return true;
+    std::string needle = name;
+    std::string token;
+    auto flush = [&]() -> bool {
+        if (token == needle) return true;
+        if (needle == "zcs" && (token == "z" || token == "c" || token == "s")) return true;
+        if (needle == "nl" && (token == "ln" || token == "n/l" || token == "l/n")) return true;
+        if (needle == "eneng" && (token == "eng" || token == "en/eng" || token == "eng/en")) return true;
+        if (needle == "ining" && (token == "ing" || token == "in/ing" || token == "ing/in")) return true;
+        return false;
+    };
+    for (char ch : cfg) {
+        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+        if ((ch >= 'a' && ch <= 'z') || ch == '/') {
+            token += ch;
+        } else {
+            if (!token.empty() && flush()) return true;
+            token.clear();
+        }
+    }
+    return !token.empty() && flush();
+}
+
+static void addFuzzyPrefixAlias(std::vector<std::string> &out, const std::string &code,
+                                const char *from, const char *to) {
+    if (code.length() < strlen(from) + 1) return;
+    size_t fl = strlen(from);
+    if (code.compare(0, fl, from) != 0) return;
+    if (!strchr("aeiouv", code[fl])) return;
+    addUniqueString(out, std::string(to) + code.substr(fl));
+}
+
+static void addFuzzyFinalAlias(std::vector<std::string> &out, const std::string &code,
+                               const char *from, const char *to) {
+    std::vector<ime::PinyinSplit> splits = ime::PinyinEngine::splitVariants(code, false, 4);
+    size_t fromLen = strlen(from);
+    for (auto &split : splits) {
+        for (size_t i = 0; i < split.tokens.size(); i++) {
+            const std::string &s = split.tokens[i].text;
+            if (s.length() <= fromLen || s.compare(s.length() - fromLen, fromLen, from) != 0)
+                continue;
+            std::string alias;
+            for (size_t j = 0; j < split.tokens.size(); j++) {
+                std::string part = split.tokens[j].text;
+                if (j == i)
+                    part = part.substr(0, part.length() - fromLen) + to;
+                alias += part;
+            }
+            addUniqueString(out, alias);
+        }
+    }
+}
+
+static void addFuzzyAliasCodes(std::vector<std::string> &out, const std::string &code) {
+    if (code.length() < 2) return;
+    if (fuzzyOptionEnabled("zcs")) {
+        addFuzzyPrefixAlias(out, code, "zh", "z");
+        addFuzzyPrefixAlias(out, code, "ch", "c");
+        addFuzzyPrefixAlias(out, code, "sh", "s");
+        addFuzzyPrefixAlias(out, code, "z", "zh");
+        addFuzzyPrefixAlias(out, code, "c", "ch");
+        addFuzzyPrefixAlias(out, code, "s", "sh");
+    }
+    if (fuzzyOptionEnabled("nl")) {
+        addFuzzyPrefixAlias(out, code, "n", "l");
+        addFuzzyPrefixAlias(out, code, "l", "n");
+    }
+    if (fuzzyOptionEnabled("eneng")) {
+        addFuzzyFinalAlias(out, code, "en", "eng");
+        addFuzzyFinalAlias(out, code, "eng", "en");
+    }
+    if (fuzzyOptionEnabled("ining")) {
+        addFuzzyFinalAlias(out, code, "in", "ing");
+        addFuzzyFinalAlias(out, code, "ing", "in");
+    }
+}
+
 static std::string fuzzyInitialAliasCode(const std::string &code) {
-    if (code.length() < 2) return "";
+    if (code.length() < 2 || !fuzzyOptionEnabled("zcs")) return "";
     auto withPrefix = [&](const char *from, const char *to) -> std::string {
         size_t fl = strlen(from);
         if (code.compare(0, fl, from) != 0) return "";
@@ -540,6 +621,7 @@ static std::vector<std::string> alternateInputCodes(const std::string &code) {
     if (!spelling.empty()) addUniqueString(out, leadingZeroInitialAliasCode(spelling));
     std::string fuzzy = fuzzyInitialAliasCode(code);
     addUniqueString(out, fuzzy);
+    addFuzzyAliasCodes(out, code);
     if (!fuzzy.empty()) {
         addUniqueString(out, leadingZeroInitialAliasCode(fuzzy));
         addUniqueString(out, pinyinSpellingAliasCode(fuzzy));
@@ -2282,6 +2364,66 @@ void IME::lookup() {
         }
         perf.userPhraseUs += IME_PERF_NOW() - t;
         if (_all.size() >= _candidateLimit) { perf.exitName = "user-exact-phrase-limit"; buildPage(); return; }
+    }
+
+    // Long full-pinyin input benefits from exact phrase promotion before the
+    // broad single-character scan. This keeps "shurufa" and longer diary-style
+    // phrases from being buried behind many one-character candidates.
+    if (hasVowel && !incompletePinyinInput && qlen >= 4 && _dict.hasWords() &&
+        _all.size() < _candidateLimit) {
+        int64_t t = IME_PERF_NOW();
+        std::vector<RankedCandidate> exactPhraseMatches;
+        const uint8_t *wordData = _dict.wordData();
+        auto collectExactPhrase = [&](const char *scanCode, int scanLen, bool aliasScan) {
+            if (!scanCode || scanLen < 4) return;
+            size_t wlo = 0, whi = _dict.wordDataSize();
+            _dict.wordWindow(scanCode, scanLen, wlo, whi);
+            size_t wpos = wlo;
+            int safety = 0;
+            while (wpos < whi && safety++ < IME_MAX_PHRASE_GROUP_SCAN) {
+                uint8_t cl = wordData[wpos];
+                if (cl == 0 || wpos + 1 + cl > whi) break;
+                const char *wc = (const char *)wordData + wpos + 1;
+                size_t next = wpos + 1 + cl;
+                if (next >= whi) break;
+                uint8_t n = wordData[next++];
+                int cmpLen = std::min((int)cl, scanLen);
+                int cmp = strncmp(wc, scanCode, cmpLen);
+                if (cmp > 0) break;
+                bool groupMatch = ((int)cl == scanLen &&
+                                   strncmp(wc, scanCode, scanLen) == 0);
+                for (uint8_t j = 0; j < n && next < whi; j++) {
+                    uint8_t wl = wordData[next++];
+                    if (wl == 0 || next + wl + 1 > whi) {
+                        next = whi;
+                        break;
+                    }
+                    uint8_t wf = wordData[next + wl];
+                    if (groupMatch) {
+                        std::string w((const char *)wordData + next, wl);
+                        if (wordVisible(_trad, w, wf)) {
+                            int consumedLen = aliasScan ? qlen : scanLen;
+                            int score = phraseCandidateScore(w, scanLen, scanLen,
+                                                             (int)primarySplit.tokens.size()) + 2000;
+                            addRankedCandidate(exactPhraseMatches, w, consumedLen, score, 15);
+                        }
+                    }
+                    next += wl + 1;
+                }
+                wpos = next;
+            }
+        };
+        collectExactPhrase(q, qlen, false);
+        for (auto &aliasCode : aliasCodes)
+            collectExactPhrase(aliasCode.c_str(), (int)aliasCode.length(), true);
+        sortRankedCandidates(exactPhraseMatches);
+        int promoted = 0;
+        for (auto &m : exactPhraseMatches) {
+            if (appendCandidate(m.word, m.candLen)) promoted++;
+            if (promoted >= 6 || _all.size() >= _candidateLimit) break;
+        }
+        perf.userPhraseUs += IME_PERF_NOW() - t;
+        if (_all.size() >= _candidateLimit) { perf.exitName = "exact-phrase-limit"; buildPage(); return; }
     }
 
     // Phase 2: single char prefix match (dictionary)

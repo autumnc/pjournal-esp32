@@ -102,6 +102,93 @@ xiu gai	修改
 bao cun	保存
 sou suo	搜索
 sou suo jie guo	搜索结果
+chang yong	常用
+chang yong ci	常用词
+chang yong ci zu	常用词组
+chang yong duan yu	常用短语
+ri ji ji lu	日记记录
+jin tian	今天
+ming tian	明天
+zuo tian	昨天
+shang wu	上午
+xia wu	下午
+wan shang	晚上
+qing xu	情绪
+xin qing	心情
+gan shou	感受
+xiang fa	想法
+ling gan lai yuan	灵感来源
+gong zuo	工作
+gong zuo ri zhi	工作日志
+xue xi	学习
+xue xi ji lu	学习记录
+xiang mu	项目
+xiang mu jin zhan	项目进展
+wen ti	问题
+wen ti ji lu	问题记录
+jie jue	解决
+jie jue fang an	解决方案
+fu pan	复盘
+mei ri fu pan	每日复盘
+zhou bao	周报
+yue bao	月报
+zong jie	总结
+jie duan zong jie	阶段总结
+xia yi bu	下一步
+xia yi bu ji hua	下一步计划
+ji hua	计划
+ri cheng	日程
+an pai	安排
+ti xing	提醒
+qing dan	清单
+ren wu qing dan	任务清单
+wan cheng	完成
+yi wan cheng	已完成
+wei wan cheng	未完成
+jin zhan	进展
+mu biao	目标
+duan qi mu biao	短期目标
+chang qi mu biao	长期目标
+guan jian	关键
+guan jian ci	关键词
+bei wang	备忘
+bei wang lu	备忘录
+duan luo	段落
+wen zhang	文章
+cao gao	草稿
+hui yi	会议
+hui yi ji lu	会议记录
+hui yi ji yao	会议纪要
+shou ji	手机
+dian nao	电脑
+she bei	设备
+gu zhang	故障
+gu zhang pai cha	故障排查
+ri zhi	日志
+cuo wu	错误
+cuo wu xin xi	错误信息
+pei zhi	配置
+pei zhi wen jian	配置文件
+lian jie	连接
+lian jie shi bai	连接失败
+bao cun shi bai	保存失败
+tong bu shi bai	同步失败
+tong bu cheng gong	同步成功
+dao ru shi bai	导入失败
+dao chu shi bai	导出失败
+shu ru ti yan	输入体验
+hou xuan pai xu	候选排序
+mo hu yin	模糊音
+shuang pin	双拼
+wu bi	五笔
+chang ju	长句
+chang ju shu ru	长句输入
+zheng ju	整句
+zheng ju shu ru	整句输入
+li xian	离线
+li xian jian cha	离线检查
+hui gui	回归
+hui gui jian cha	回归检查
 
 # Yong pinyin supplemental phrases verified against pypinyin.
 bai wu yi yong shi shu sheng	百无一用是书生
