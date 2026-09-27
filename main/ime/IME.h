@@ -178,7 +178,6 @@ private:
     void markUserWordIndexesDirty();
     void rebuildUserWordIndexes();
     void rebuildUserPredictIndex();
-    void addUserWord(const std::string &code, const std::string &word);
     void bumpFrequency(const std::string &code, const std::string &word, int weight = 1);
     bool penalizeUserWord(const std::string &code, const std::string &word, int weight = 2);
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
@@ -202,6 +201,7 @@ private:
     void appendEnglishInlineCandidates(const std::string &code);
     int stableCandidateBoost(const std::string &word) const;
     void rememberCandidateStability();
+    void rebuildRecentBoostIndex();
     void logCandidateDebug(const char *stage, const std::string &word, int score, int context, int stable) const;
     static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
 
@@ -209,6 +209,9 @@ private:
     bool _vMode = false;
     std::vector<std::pair<std::string, std::string>> _recentSingleCommits;
     std::vector<std::pair<std::string, std::string>> _recentCommittedWords;
+    // word -> indices into _recentCommittedWords, ascending. Rebuilt only when the
+    // list changes (on commit), so recentCommitBoost() is an O(1) lookup per candidate.
+    std::unordered_map<std::string, std::vector<uint8_t>> _recentBoostByWord;
     std::vector<std::string> _recentDeletedWords;
     std::string _lastLearningCode;
     std::string _lastLearningWord;
@@ -218,7 +221,12 @@ private:
     std::string _lastRejectedWord;
     std::string _lastRejectedContext;
     int64_t _lastRejectedUs = 0;
-    std::vector<std::string> _previousLookupCandidates;
+    // Previous screen candidates, kept as hashes so per-keystroke rebuild does not
+    // churn the heap (a map/vector of strings would malloc+free every lookup).
+    static const int STABLE_BOOST_SLOTS = 24;
+    uint32_t _stableBoostHashes[STABLE_BOOST_SLOTS] = {};
+    int16_t _stableBoostValues[STABLE_BOOST_SLOTS] = {};
+    int _stableBoostCount = 0;
     int64_t _lastAsciiCommitUs = 0;
     int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
     bool _englishCompose = false;
@@ -300,7 +308,8 @@ private:
     void clearCandidates();
     void rebuildCandidateHashes();
     bool appendCandidate(const std::string &text, int candLen);
-    void appendSingleCharCandidates(const std::string &prefix, int candLen);  // 主词典单字前缀候选
+    void appendSingleCharCandidates(const std::string &prefix, int candLen,
+                                    size_t cap = 0);  // cap=0 用 _candidateLimit
     void buildPage();
     bool pagePrev();
     bool pageNext();

@@ -69,6 +69,9 @@ static const int IME_KEY_UP = 0x80;
 static const int IME_KEY_DOWN = 0x81;
 static const int IME_KEY_LEFT = 0x82;
 static const int IME_KEY_RIGHT = 0x83;
+// 短码(2 字母纯辅音)预算只有 12, 单字展开一旦填满就没有槽位留给精选简码词组
+// (Phase 4c)和词典简码(Phase 6)。给这两个阶段预留几个槽位, 保证简码可达。
+static const size_t IME_SHORTCUT_RESERVE = 3;
 static inline std::string str_trim(const std::string &s);
 #if PJOURNAL_IME_FAST_LOOKUP
 static const int IME_SEG_TABLE_MIN_LEN = 2;
@@ -822,9 +825,12 @@ static uint32_t utf8CodepointAt(const std::string &text, size_t pos) {
     return 0;
 }
 
-static bool isCjkChar(const std::string &text) {
-    uint32_t cp = utf8CodepointAt(text, 0);
+static inline bool isCjkCodepoint(uint32_t cp) {
     return (cp >= 0x3400 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
+}
+
+static bool isCjkChar(const std::string &text) {
+    return isCjkCodepoint(utf8CodepointAt(text, 0));
 }
 
 static bool validPredictEntry(const std::string &key, const std::string &word) {
@@ -1024,24 +1030,6 @@ struct RankedCandidate {
     std::string word;
 };
 
-static void addRankedCandidate(std::vector<RankedCandidate> &items,
-                               const std::string &word,
-                               int candLen,
-                               int score,
-                               int sourceRank) {
-    for (auto &item : items) {
-        if (item.word == word) {
-            if (score > item.score || (score == item.score && sourceRank > item.sourceRank)) {
-                item.score = score;
-                item.candLen = candLen;
-                item.sourceRank = sourceRank;
-            }
-            return;
-        }
-    }
-    items.push_back({score, candLen, sourceRank, word});
-}
-
 static void sortRankedCandidates(std::vector<RankedCandidate> &items) {
     std::stable_sort(items.begin(), items.end(),
         [](const RankedCandidate &a, const RankedCandidate &b) {
@@ -1050,6 +1038,40 @@ static void sortRankedCandidates(std::vector<RankedCandidate> &items) {
             return a.word.length() < b.word.length();
         });
 }
+
+// Ranked candidate accumulator keyed by word. Replacing the old linear "is this
+// word already present" scan keeps the per-record build loops O(n) instead of
+// O(n^2) string comparisons, which dominated the wide scan phases.
+struct RankedList {
+    std::vector<RankedCandidate> items;
+    std::unordered_map<std::string, uint16_t> index;
+
+    void add(const std::string &word, int candLen, int score, int sourceRank) {
+        auto it = index.find(word);
+        if (it != index.end()) {
+            RankedCandidate &item = items[it->second];
+            if (score > item.score || (score == item.score && sourceRank > item.sourceRank)) {
+                item.score = score;
+                item.candLen = candLen;
+                item.sourceRank = sourceRank;
+            }
+            return;
+        }
+        if (items.size() >= UINT16_MAX) return;
+        index.emplace(word, (uint16_t)items.size());
+        items.push_back({score, candLen, sourceRank, word});
+    }
+    void sort() { sortRankedCandidates(items); }
+    // Keep only the first `keep` entries after sorting. The word index no longer
+    // matches the shrunk vector, so drop it -- these lists are only read afterwards.
+    void truncate(size_t keep) {
+        if (items.size() <= keep) return;
+        items.resize(keep);
+        index.clear();
+    }
+    size_t size() const { return items.size(); }
+    bool empty() const { return items.empty(); }
+};
 
 static std::string predictKeyForCommittedText(const std::string &text) {
     std::string tail = cjkTailText(text, 4);
@@ -1211,6 +1233,10 @@ bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
     // dynamic dictionaries can grow past 64KB, so parse the whole file that was
     // already read into memory instead of silently truncating at the old cap.
     bool hadDuplicates = false;
+    // Hash the (code, word, trad) key instead of rescanning `entries` per line:
+    // the dynamic dict allows 5000 entries, where the old linear scan was O(n^2).
+    std::unordered_map<std::string, size_t> entryIndex;
+    entryIndex.reserve(allData.size() / 12 + 16);
     size_t pos = 0;
     while (pos < allData.length()) {
         size_t nl = allData.find('\n', pos);
@@ -1227,22 +1253,23 @@ bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
         int count = 1;
         bool trad = false;
         if (parseUserDictLine(line, code, word, count, trad)) {
-            bool isDup = false;
-            for (auto &existing : entries) {
-                if (existing.code == code && existing.word == word && existing.trad == trad) {
-                    isDup = true;
-                    hadDuplicates = true;
-                    if (existing.count < count) existing.count = count;
-                    break;
-                }
-            }
-            if (!isDup) {
+            auto existingIt = entryIndex.find(userEntryKey(code, word, trad));
+            if (existingIt != entryIndex.end()) {
+                UserEntry &existing = entries[existingIt->second];
+                hadDuplicates = true;
+                if (existing.count < count) existing.count = count;
+            } else {
                 if (entries.size() >= maxEntries) {
                     compactUserEntries(entries, maxEntries);
                     if (entries.size() >= maxEntries) entries.pop_back();
                     hadDuplicates = true;
+                    entryIndex.clear();
+                    entryIndex.reserve(entries.size() * 2 + 1);
+                    for (size_t i = 0; i < entries.size(); i++)
+                        entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
                 }
                 entries.push_back({code, word, count, trad, userInitialForCode(code)});
+                entryIndex[userEntryKey(code, word, trad)] = entries.size() - 1;
             }
         }
     }
@@ -1530,24 +1557,6 @@ void IME::rebuildUserPredictIndex() {
         _userPredictIndex[_userPredictWords[i].code].push_back((uint16_t)i);
     }
     _userPredictIndexDirty = false;
-}
-
-void IME::addUserWord(const std::string &code, const std::string &word) {
-    ensureUserDictLoaded();
-    if (word.length() < 3 || code.length() == 0) return;
-    for (auto &p : _fixedUserWords)
-        if (p.code == code && p.word == word && p.trad == _trad) return;
-    for (auto &p : _dynamicUserWords)
-        if (p.code == code && p.word == word && p.trad == _trad) return;
-    if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) {
-        compactUserEntries(_dynamicUserWords, USERDICT_DYNAMIC_LIMIT);
-        if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) _dynamicUserWords.pop_back();
-        markUserWordIndexesDirty();
-    }
-    _dynamicUserWords.push_back({code, word, 0, _trad, userInitialForCode(code)});
-    markUserWordIndexesDirty();
-    // The following bumpFrequency() call records the first real count and queues
-    // the deferred journal write, keeping commit latency off the SD card path.
 }
 
 void IME::removeUserWord(const std::string &code, const std::string &word) {
@@ -2115,7 +2124,8 @@ bool IME::penalizePredictWord(const std::string &word, int weight) {
     }
     if (changed) {
         _userPredictDirty = true;
-        saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+        // 走和其它学习路径同一套延迟落盘, 避免在删除/拒绝按键上做全量 SD 写。
+        flushUserDictSaves(false);
     }
     return changed;
 }
@@ -2137,7 +2147,7 @@ void IME::rejectPredictWord(const std::string &key, const std::string &word) {
         if (p.code == key && p.word == word && p.trad == _trad) {
             p.count += 1;
             _userPredictRejectDirty = true;
-            saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
+            flushUserDictSaves(false);
             return;
         }
     }
@@ -2148,7 +2158,7 @@ void IME::rejectPredictWord(const std::string &key, const std::string &word) {
     }
     _userPredictRejectWords.push_back({key, word, 1, _trad, ""});
     _userPredictRejectDirty = true;
-    saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
+    flushUserDictSaves(false);
 }
 
 void IME::learnPredictPairs(const std::string &text) {
@@ -2221,14 +2231,24 @@ void IME::rememberRecentCommit(const std::string &code, const std::string &word)
     }
     _recentCommittedWords.insert(_recentCommittedWords.begin(), {code, word});
     if (_recentCommittedWords.size() > 32) _recentCommittedWords.pop_back();
+    rebuildRecentBoostIndex();
+}
+
+// Indices stay ascending so recentCommitBoost() visits a word's entries in the
+// same order the old linear scan did, preserving the exact first-match semantics.
+void IME::rebuildRecentBoostIndex() {
+    _recentBoostByWord.clear();
+    for (size_t i = 0; i < _recentCommittedWords.size(); i++)
+        _recentBoostByWord[_recentCommittedWords[i].second].push_back((uint8_t)i);
 }
 
 int IME::recentCommitBoost(const std::string &code, const std::string &word) const {
     if (code.empty() || word.empty()) return 0;
-    for (size_t i = 0; i < _recentCommittedWords.size(); i++) {
-        const auto &item = _recentCommittedWords[i];
-        if (item.second != word) continue;
-        int boost = 6000 - (int)i * 180;
+    auto it = _recentBoostByWord.find(word);
+    if (it == _recentBoostByWord.end()) return 0;
+    for (uint8_t idx : it->second) {
+        const auto &item = _recentCommittedWords[idx];
+        int boost = 6000 - (int)idx * 180;
         if (boost <= 0) return 0;
         if (item.first == code) return boost + 4000;
         if (item.first.size() >= code.size() &&
@@ -2363,36 +2383,48 @@ int IME::contextCandidateBoost(const std::string &word) {
     rebuildContextBoostScores();
     auto it = _contextBoostScores.find(word);
     if (it != _contextBoostScores.end()) return it->second;
+    // 逐前缀回退。用字节偏移判断 CJK, 避免给每个字分配临时 std::string——
+    // 本函数在候选扫描循环里逐个调用, 短词命中时分配量很可观。
     int best = 0;
-    std::string prefix;
     int chars = 0;
-    for (size_t pos = 0; pos < word.size() && chars < 4; ) {
-        std::string ch = utf8CharAt(word, pos);
-        if (!isCjkChar(ch)) break;
-        prefix += ch;
+    size_t pos = 0;
+    while (pos < word.size() && chars < 4) {
+        if (!isCjkCodepoint(utf8CodepointAt(word, pos))) break;
         pos = utf8CharEnd(word, pos);
         chars++;
-        auto pit = _contextBoostScores.find(prefix);
+        auto pit = _contextBoostScores.find(word.substr(0, pos));
         if (pit != _contextBoostScores.end())
             best = std::max(best, pit->second - 300);
     }
     return best;
 }
 
+// Compares candidate hashes rather than strings so this stays allocation-free on
+// the per-keystroke path. A hash collision would only grant a small boost to an
+// unrelated candidate, which cannot meaningfully reorder the list.
 int IME::stableCandidateBoost(const std::string &word) const {
-    if (word.empty() || _previousLookupCandidates.empty()) return 0;
-    for (size_t i = 0; i < _previousLookupCandidates.size() && i < 24; i++) {
-        if (_previousLookupCandidates[i] == word)
-            return 420 - (int)i * 12;
+    if (word.empty() || _stableBoostCount == 0) return 0;
+    uint32_t h = candidateHash(word);
+    for (int i = 0; i < _stableBoostCount; i++) {
+        if (_stableBoostHashes[i] == h) return _stableBoostValues[i];
     }
     return 0;
 }
 
 void IME::rememberCandidateStability() {
-    _previousLookupCandidates.clear();
-    size_t n = std::min(_all.size(), (size_t)32);
-    _previousLookupCandidates.reserve(n);
-    for (size_t i = 0; i < n; i++) _previousLookupCandidates.push_back(_all[i]);
+    _stableBoostCount = 0;
+    size_t n = std::min(_all.size(), (size_t)STABLE_BOOST_SLOTS);
+    for (size_t i = 0; i < n; i++) {
+        uint32_t h = candidateHash(_all[i]);
+        bool seen = false;
+        for (int j = 0; j < _stableBoostCount; j++) {
+            if (_stableBoostHashes[j] == h) { seen = true; break; }
+        }
+        if (seen) continue;  // first occurrence keeps the highest boost, as before
+        _stableBoostHashes[_stableBoostCount] = h;
+        _stableBoostValues[_stableBoostCount] = (int16_t)(420 - (int)i * 12);
+        _stableBoostCount++;
+    }
 }
 
 void IME::logCandidateDebug(const char *stage, const std::string &word,
@@ -2764,7 +2796,7 @@ void IME::lookup() {
 
     if (_deleteMode) {
         int64_t t = IME_PERF_NOW();
-        std::vector< std::pair<int, std::string> > userMatches;
+        RankedList userMatches;
         auto codeMatchesDelete = [&](const std::string &entryCode) -> bool {
             if (qlen == 0 || userCodeMatchesPrefix(entryCode, q, qlen)) return true;
             for (auto &aliasCode : aliasCodes) {
@@ -2787,17 +2819,7 @@ void IME::lookup() {
         }
         auto scanDeleteEntry = [&](const UserEntry &p) {
             if (p.trad != _trad) return;
-            if (codeMatchesDelete(p.code)) {
-                bool found = false;
-                for (auto &m : userMatches) {
-                    if (m.second == p.word) {
-                        found = true;
-                        if (m.first < p.count) m.first = p.count;
-                        break;
-                    }
-                }
-                if (!found) userMatches.push_back({p.count, p.word});
-            }
+            if (codeMatchesDelete(p.code)) userMatches.add(p.word, 0, p.count, 0);
         };
         if (qlen == 0) {
             for (auto &p : _dynamicUserWords) scanDeleteEntry(p);
@@ -2807,12 +2829,9 @@ void IME::lookup() {
                 scanDeleteEntry(_dynamicUserWords[entryIdx]);
             }
         }
-        std::sort(userMatches.begin(), userMatches.end(),
-            [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
-                return a.first > b.first;
-        });
-        for (auto &m : userMatches) {
-            appendCandidate(m.second, 0);
+        userMatches.sort();
+        for (auto &m : userMatches.items) {
+            appendCandidate(m.word, 0);
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
         perf.userUs += IME_PERF_NOW() - t;
@@ -2822,12 +2841,12 @@ void IME::lookup() {
     }
 
     // Phase 1: user dict single chars — highest priority (phrases emitted in Phase 3)
-    std::vector<RankedCandidate> userWordFreq;
-    std::vector<RankedCandidate> userPrefixWordFreq;
-    std::vector<RankedCandidate> userExactWordFreq;
+    RankedList userWordFreq;
+    RankedList userPrefixWordFreq;
+    RankedList userExactWordFreq;
     {
         int64_t t = IME_PERF_NOW();
-        std::vector<RankedCandidate> userSingleFreq;
+        RankedList userSingleFreq;
         bool collectUserPhrases = hasVowel && !incompletePinyinInput && qlen >= 3;
         bool skipBroadConsonantUserScan = _fixedCandidatePaging && !hasVowel && qlen <= 2;
         bool skipSingleSyllableUserScan = hasVowel && primarySplit.tokens.size() <= 1 && qlen >= 3;
@@ -2872,20 +2891,20 @@ void IME::lookup() {
             bool exactCodeMatch = pinyinCodeEqualsAny(matchedCode, pinyinCode, aliasCodes);
             if (singleWord) {
                 // single char
-                addRankedCandidate(userSingleFreq, p.word, 0, score, sourceRank);
+                userSingleFreq.add(p.word, 0, score, sourceRank);
             } else {
                 // phrase
                 auto &target = exactCodeMatch ? userWordFreq : userPrefixWordFreq;
-                addRankedCandidate(target, p.word, 0, score, sourceRank);
+                target.add(p.word, 0, score, sourceRank);
                 if ((int)target.size() > IME_MAX_USER_PHRASE_KEEP) {
-                    sortRankedCandidates(target);
-                    target.resize(IME_MAX_USER_PHRASE_KEEP);
+                    target.sort();
+                    target.truncate(IME_MAX_USER_PHRASE_KEEP);
                 }
                 if (exactCodeMatch) {
-                    addRankedCandidate(userExactWordFreq, p.word, qlen, score, sourceRank);
+                    userExactWordFreq.add(p.word, qlen, score, sourceRank);
                     if ((int)userExactWordFreq.size() > IME_MAX_USER_PHRASE_KEEP) {
-                        sortRankedCandidates(userExactWordFreq);
-                        userExactWordFreq.resize(IME_MAX_USER_PHRASE_KEEP);
+                        userExactWordFreq.sort();
+                        userExactWordFreq.truncate(IME_MAX_USER_PHRASE_KEEP);
                     }
                 }
             }
@@ -2894,8 +2913,8 @@ void IME::lookup() {
         if (!skipBroadConsonantUserScan && !skipSingleSyllableUserScan) {
             scanUserWords(_fixedUserWords, _fixedUserCodeIndex, _fixedUserCodePrefixIndex, 30);
             scanUserWords(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserCodePrefixIndex, 20);
-            sortRankedCandidates(userSingleFreq);
-            for (auto &f : userSingleFreq) {
+            userSingleFreq.sort();
+            for (auto &f : userSingleFreq.items) {
                 appendCandidate(f.word, f.candLen);
                 if (_all.size() >= _candidateLimit) break;
             }
@@ -2908,9 +2927,9 @@ void IME::lookup() {
     if (hasVowel && !incompletePinyinInput && primarySplit.tokens.size() > 1 &&
         !userExactWordFreq.empty()) {
         int64_t t = IME_PERF_NOW();
-        sortRankedCandidates(userExactWordFreq);
+        userExactWordFreq.sort();
         int promoted = 0;
-        for (auto &f : userExactWordFreq) {
+        for (auto &f : userExactWordFreq.items) {
             if (appendCandidate(f.word, f.candLen) && ++promoted >= 4) break;
             if (_all.size() >= _candidateLimit) break;
         }
@@ -2925,7 +2944,7 @@ void IME::lookup() {
         qlen >= 4 && _dict.hasWords() &&
         _all.size() < _candidateLimit) {
         int64_t t = IME_PERF_NOW();
-        std::vector<RankedCandidate> exactPhraseMatches;
+        RankedList exactPhraseMatches;
         const uint8_t *wordData = _dict.wordData();
         auto collectExactPhrase = [&](const char *scanCode, int scanLen, bool aliasScan) {
             if (!scanCode || scanLen < 4) return;
@@ -2963,7 +2982,7 @@ void IME::lookup() {
                                       + recentCommitBoost(std::string(scanCode, scanLen), w)
                                       + ctxBoost + stableBoost;
                             logCandidateDebug("exact-phrase", w, score, ctxBoost, stableBoost);
-                            addRankedCandidate(exactPhraseMatches, w, consumedLen, score, 15);
+                            exactPhraseMatches.add(w, consumedLen, score, 15);
                         }
                     }
                     next += wl + 1;
@@ -2974,9 +2993,9 @@ void IME::lookup() {
         collectExactPhrase(q, qlen, false);
         for (auto &aliasCode : aliasCodes)
             collectExactPhrase(aliasCode.c_str(), (int)aliasCode.length(), true);
-        sortRankedCandidates(exactPhraseMatches);
+        exactPhraseMatches.sort();
         int promoted = 0;
-        for (auto &m : exactPhraseMatches) {
+        for (auto &m : exactPhraseMatches.items) {
             if (appendCandidate(m.word, m.candLen)) promoted++;
             if (promoted >= 6 || _all.size() >= _candidateLimit) break;
         }
@@ -3023,7 +3042,12 @@ void IME::lookup() {
     }
     if (!hasVowel && _all.size() < _candidateLimit) {
         std::string fallback = ime::PinyinEngine::singleKeyFallbackSyllable(pinyinCode);
-        if (!fallback.empty()) appendSingleCharCandidates(fallback, qlen);
+        if (!fallback.empty()) {
+            // zh/ch/sh 的单字展开会占满整个短码预算, 先把槽位留给简码阶段。
+            size_t cap = _candidateLimit;
+            if (qlen >= 2 && cap > IME_SHORTCUT_RESERVE) cap -= IME_SHORTCUT_RESERVE;
+            appendSingleCharCandidates(fallback, qlen, cap);
+        }
     }
     if (hasVowel && _all.size() < _candidateLimit) {
         std::string alias = zeroInitialAlias(pinyinCode);
@@ -3053,7 +3077,7 @@ void IME::lookup() {
             addSegPrefixCandidates(segIndices, SEG_CODE_ORDER, SEG_CODE_INDEX,
                                    aliasCode.c_str(), (int)aliasCode.length());
         }
-        std::vector<RankedCandidate> segMatches;
+        RankedList segMatches;
         for (uint16_t segIdx : segIndices) {
             int i = segIdx;
             int matchedLen = 0;
@@ -3082,10 +3106,10 @@ void IME::lookup() {
             int stableBoost = stableCandidateBoost(w);
             score += ctxBoost + stableBoost;
             logCandidateDebug("seg", w, score, ctxBoost, stableBoost);
-            addRankedCandidate(segMatches, w, entryCodeLen, score, 10);
+            segMatches.add(w, entryCodeLen, score, 10);
         }
-        sortRankedCandidates(segMatches);
-        for (auto &m : segMatches) {
+        segMatches.sort();
+        for (auto &m : segMatches.items) {
             if (appendCandidate(m.word, m.candLen) && m.candLen > _maxMatchLen)
                 _maxMatchLen = m.candLen;
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
@@ -3097,8 +3121,8 @@ void IME::lookup() {
     // Phase 3: user dict phrases — after dictionary single chars, before dictionary phrases
     {
         int64_t t = IME_PERF_NOW();
-        sortRankedCandidates(userWordFreq);
-        for (auto &f : userWordFreq) {
+        userWordFreq.sort();
+        for (auto &f : userWordFreq.items) {
             appendCandidate(f.word, f.candLen);
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
@@ -3214,8 +3238,8 @@ void IME::lookup() {
     // Exact user phrases stay early; prefix-only phrases must not bury dictionary exact matches.
     if (!userPrefixWordFreq.empty()) {
         int64_t t = IME_PERF_NOW();
-        sortRankedCandidates(userPrefixWordFreq);
-        for (auto &f : userPrefixWordFreq) {
+        userPrefixWordFreq.sort();
+        for (auto &f : userPrefixWordFreq.items) {
             appendCandidate(f.word, f.candLen);
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
@@ -3231,9 +3255,9 @@ void IME::lookup() {
 
     // Phase 4c: curated supplemental phrases for shorthand initials.
     bool curatedInitialFilled = false;
-    if (!hasVowel && qlen >= 2 && _all.size() < IME_FAST_CANDIDATE_LIMIT) {
+    if (!hasVowel && qlen >= 2 && _all.size() < _candidateLimit) {
         int64_t t = IME_PERF_NOW();
-        std::vector<RankedCandidate> segInitFreq;
+        RankedList segInitFreq;
         std::vector<uint16_t> segIndices;
         addSegPrefixCandidates(segIndices, SEG_INITIAL_ORDER, SEG_INITIAL_INDEX, q, qlen);
         addSegPrefixCandidates(segIndices, SEG_COMPACT_INITIAL_ORDER, SEG_COMPACT_INITIAL_INDEX, q, qlen);
@@ -3258,22 +3282,22 @@ void IME::lookup() {
             int stableBoost = stableCandidateBoost(SEG_TABLE[i].word);
             score += ctxBoost + stableBoost;
             logCandidateDebug("seg-initial", SEG_TABLE[i].word, score, ctxBoost, stableBoost);
-            addRankedCandidate(segInitFreq, SEG_TABLE[i].word, qlen, score, compactMatch ? 11 : 10);
+            segInitFreq.add(SEG_TABLE[i].word, qlen, score, compactMatch ? 11 : 10);
         }
-        sortRankedCandidates(segInitFreq);
-        for (auto &f : segInitFreq) {
+        segInitFreq.sort();
+        for (auto &f : segInitFreq.items) {
             if (appendCandidate(f.word, f.candLen)) curatedInitialFilled = true;
-            if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
+            if (_all.size() >= _candidateLimit) break;
         }
         perf.userInitialUs += IME_PERF_NOW() - t;
-        if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "seg-initial-limit"; buildPage(); return; }
+        if (_all.size() >= _candidateLimit) { perf.exitName = "seg-initial-limit"; buildPage(); return; }
     }
 
     // Phase 5: user dict initial match
     if (!hasVowel && qlen >= IME_USER_INITIAL_MIN_LEN &&
         (_fixedUserWords.size() > 0 || _dynamicUserWords.size() > 0)) {
         int64_t t = IME_PERF_NOW();
-        std::vector< std::pair<int, std::string> > userInitFreq;
+        RankedList userInitFreq;
         auto scanInitialWords = [&](const std::vector<UserEntry> &entries,
                                     const std::unordered_map<int, std::vector<uint16_t>> &index,
                                     const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex) {
@@ -3292,26 +3316,15 @@ void IME::lookup() {
                 int stableBoost = stableCandidateBoost(p.word);
                 score += ctxBoost + stableBoost;
                 logCandidateDebug("user-initial", p.word, score, ctxBoost, stableBoost);
-                bool found = false;
-                for (auto &uf : userInitFreq) {
-                    if (uf.second == p.word) {
-                        found = true;
-                        if (uf.first < score) uf.first = score;
-                        break;
-                    }
-                }
-                if (!found) userInitFreq.push_back({score, p.word});
+                userInitFreq.add(p.word, 0, score, 0);
             }
         }
         };
         scanInitialWords(_fixedUserWords, _fixedUserInitialIndex, _fixedUserInitialPrefixIndex);
         scanInitialWords(_dynamicUserWords, _dynamicUserInitialIndex, _dynamicUserInitialPrefixIndex);
-        std::sort(userInitFreq.begin(), userInitFreq.end(),
-            [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
-                return a.first > b.first;
-        });
-        for (auto &f : userInitFreq) {
-            appendCandidate(f.second, 0);
+        userInitFreq.sort();
+        for (auto &f : userInitFreq.items) {
+            appendCandidate(f.word, 0);
             if (_all.size() >= _candidateLimit) break;
         }
         perf.userInitialUs += IME_PERF_NOW() - t;
@@ -3328,21 +3341,24 @@ void IME::lookup() {
             std::string word;
         };
         std::vector<ScoredPhrase> initialCandidates;
+        std::unordered_map<std::string, uint16_t> initialIndex;
         int initialCollectLimit = std::min<int>(IME_MAX_INITIAL_COLLECT, (int)_candidateLimit * 3);
         if (_fixedCandidatePaging) initialCollectLimit = std::min<int>(initialCollectLimit, (int)_candidateLimit);
         initialCandidates.reserve(initialCollectLimit);
         auto addInitialCandidate = [&](const std::string &word, int candLen, int score) {
-            for (auto &item : initialCandidates) {
-                if (item.word == word) {
-                    if (item.score < score) {
-                        item.score = score;
-                        item.candLen = candLen;
-                    }
-                    return;
+            auto it = initialIndex.find(word);
+            if (it != initialIndex.end()) {
+                ScoredPhrase &item = initialCandidates[it->second];
+                if (item.score < score) {
+                    item.score = score;
+                    item.candLen = candLen;
                 }
+                return;
             }
-            if ((int)initialCandidates.size() < initialCollectLimit)
+            if ((int)initialCandidates.size() < initialCollectLimit) {
+                initialIndex.emplace(word, (uint16_t)initialCandidates.size());
                 initialCandidates.push_back({score, candLen, word});
+            }
         };
         int scanBudget = IME_MAX_INITIAL_GROUP_SCAN;
         if (qlen <= 2) scanBudget = std::min(IME_MAX_SHORT_INITIAL_GROUP_SCAN, 24);
@@ -3709,7 +3725,7 @@ void IME::lookupSegmented() {
     rebuildUserWordIndexes();
 
     // 1) 用户词典: 显式分词和去分隔编码共享学习结果
-    std::vector< std::pair<int, std::string> > userMatches;
+    RankedList userMatches;
     auto scanSegmentedUserWords = [&](const std::vector<UserEntry> &entries,
                                       const std::unordered_map<int, std::vector<uint16_t>> &index,
                                       const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex) {
@@ -3734,25 +3750,14 @@ void IME::lookupSegmented() {
         }
         if (!matched) continue;
         int score = userCandidateScore(matchedCode, p.count, (int)q.length());
-        bool found = false;
-        for (auto &m : userMatches) {
-            if (m.second == p.word) {
-                found = true;
-                if (m.first < score) m.first = score;
-                break;
-            }
-        }
-        if (!found) userMatches.push_back({score, p.word});
+        userMatches.add(p.word, 0, score, 0);
     }
     };
     scanSegmentedUserWords(_fixedUserWords, _fixedUserCodeIndex, _fixedUserCodePrefixIndex);
     scanSegmentedUserWords(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserCodePrefixIndex);
-    std::sort(userMatches.begin(), userMatches.end(),
-        [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
-            return a.first > b.first;
-    });
-    for (auto &m : userMatches) {
-        appendCandidate(m.second, fullLen);
+    userMatches.sort();
+    for (auto &m : userMatches.items) {
+        appendCandidate(m.word, fullLen);
         if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
     }
 
@@ -3846,9 +3851,10 @@ void IME::lookupSegmented() {
 
 // 主词典单字前缀匹配: 与 lookup() Phase 2 相同扫描, 但消费长度由调用方指定
 // (分词逐字续拼时是跳到下一段的字节偏移, 而非词典码长)。
-void IME::appendSingleCharCandidates(const std::string &prefix, int candLen) {
+void IME::appendSingleCharCandidates(const std::string &prefix, int candLen, size_t cap) {
     int qlen = (int)prefix.length();
-    if (qlen < 1 || _all.size() >= _candidateLimit) return;
+    if (cap == 0) cap = _candidateLimit;
+    if (qlen < 1 || _all.size() >= cap) return;
     uint32_t lo, hi;
     searchWindow(prefix.c_str(), qlen, lo, hi);
     uint32_t scanEnd = hi;
@@ -3862,7 +3868,7 @@ void IME::appendSingleCharCandidates(const std::string &prefix, int candLen) {
     int scanBudget = (candLen > 0 && candLen <= 2) ?
         IME_MAX_SHORT_CONSONANT_SINGLE_SCAN : IME_MAX_SINGLE_RECORD_SCAN;
     int scanned = 0;
-    for (uint32_t i = lo; i < scanEnd && _all.size() < _candidateLimit &&
+    for (uint32_t i = lo; i < scanEnd && _all.size() < cap &&
                           scanned++ < scanBudget; i++) {
         char code[7];
         if (!readCode(i, code)) break;
@@ -4062,7 +4068,7 @@ bool IME::commit(int idx, std::string &out, bool bySpace) {
                     _dynamicUserWords.erase(it);
                     markUserWordIndexesDirty();
                     _dynamicUserDirty = true;
-                    saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
+                    flushUserDictSaves(false);
                     penalizePredictWord(out, 3);
                     rememberDeletedWord(out);
                     deleted = true;
@@ -4121,7 +4127,6 @@ bool IME::commit(int idx, std::string &out, bool bySpace) {
         if (hasUpperSuffix) _prefix += _code.substr(pLen);
         _displayCodeDirty = true;
         if (!hasUpperSuffix) {
-            addUserWord(learnCode, _prefix);
             bumpFrequency(learnCode, _prefix, learnWeight);
             for (auto &code : alternateLearningCodes(learnCode)) bumpFrequency(code, _prefix);
             rememberReplacementPreference(learnCode, _prefix);

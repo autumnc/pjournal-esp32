@@ -30,7 +30,14 @@ std::string SettingsManager::get(const std::string &key) {
     std::string path = std::string(BASE_DIR) + "/" + key;
     repairSafeWriteFile(path);
     FILE *f = fopen(path.c_str(), "r");
-    if (!f) return "";
+    if (!f) {
+        // Cache the miss too: most keys are never written, and settings are only
+        // ever created through set() (which updates the cache), so an absent key
+        // stays absent. Without this, every read of such a key paid 3 stat() calls
+        // plus a failed fopen on the SD card.
+        s_cache[key] = "";
+        return "";
+    }
     std::string val;
     char buf[256];
     int n;
