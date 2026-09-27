@@ -146,6 +146,8 @@ std::string SettingsManager::homeView() { return getString("home_view", "week");
 
 std::string SettingsManager::inputMode() { return getString("input_mode", "normal"); }
 std::string SettingsManager::imeFuzzy() { return getString("ime_fuzzy", "zcs"); }
+std::string SettingsManager::imePredictMode() { return getString("ime_predict_mode", "always"); }
+bool SettingsManager::imeDebug() { return getString("ime_debug", "0") == "1"; }
 std::string SettingsManager::editorOrientation() { return getString("editor_orientation", "horizontal"); }
 std::string SettingsManager::verticalReferenceLineStyle() { return getString("vertical_ref_line_style", "solid"); }
 

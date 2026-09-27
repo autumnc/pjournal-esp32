@@ -60,9 +60,10 @@ public:
         return msg;
     }
 
-    void beginPredict(const std::string &text);
+    void beginPredict(const std::string &text, bool afterSpaceCommit = false);
     void endPredict() { _predicting = false; _predChar = ""; }
     bool predicting() const { return _predicting; }
+    void handleHostBackspace();
     void cancelComposition() { reset(); }
     void flushUserDictSavesNow() { flushUserDictSaves(true); }
 
@@ -149,6 +150,10 @@ private:
     std::unordered_map<int, std::vector<uint16_t>> _dynamicUserCodeIndex;
     std::unordered_map<int, std::vector<uint16_t>> _fixedUserInitialIndex;
     std::unordered_map<int, std::vector<uint16_t>> _dynamicUserInitialIndex;
+    std::unordered_map<std::string, std::vector<uint16_t>> _fixedUserCodePrefixIndex;
+    std::unordered_map<std::string, std::vector<uint16_t>> _dynamicUserCodePrefixIndex;
+    std::unordered_map<std::string, std::vector<uint16_t>> _fixedUserInitialPrefixIndex;
+    std::unordered_map<std::string, std::vector<uint16_t>> _dynamicUserInitialPrefixIndex;
     std::unordered_map<std::string, std::vector<uint16_t>> _userPredictIndex;
     bool _userWordIndexesDirty = true;
     bool _userPredictIndexDirty = true;
@@ -175,6 +180,7 @@ private:
     void rebuildUserPredictIndex();
     void addUserWord(const std::string &code, const std::string &word);
     void bumpFrequency(const std::string &code, const std::string &word, int weight = 1);
+    bool penalizeUserWord(const std::string &code, const std::string &word, int weight = 2);
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
     bool penalizePredictWord(const std::string &word, int weight = 2);
     bool rejectedPredictWord(const std::string &key, const std::string &word) const;
@@ -189,6 +195,14 @@ private:
                                       int typedLen);
     bool recentlyDeletedWord(const std::string &word) const;
     void rememberDeletedWord(const std::string &word);
+    void rememberLastLearning(const std::string &code, const std::string &word);
+    void rememberReplacementPreference(const std::string &code, const std::string &word);
+    int contextCandidateBoost(const std::string &word);
+    void rebuildContextBoostScores();
+    void appendEnglishInlineCandidates(const std::string &code);
+    int stableCandidateBoost(const std::string &word) const;
+    void rememberCandidateStability();
+    void logCandidateDebug(const char *stage, const std::string &word, int score, int context, int stable) const;
     static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
 
     bool _deleteMode = false;
@@ -196,6 +210,16 @@ private:
     std::vector<std::pair<std::string, std::string>> _recentSingleCommits;
     std::vector<std::pair<std::string, std::string>> _recentCommittedWords;
     std::vector<std::string> _recentDeletedWords;
+    std::string _lastLearningCode;
+    std::string _lastLearningWord;
+    std::string _lastLearningContext;
+    int64_t _lastLearningUs = 0;
+    std::string _lastRejectedCode;
+    std::string _lastRejectedWord;
+    std::string _lastRejectedContext;
+    int64_t _lastRejectedUs = 0;
+    std::vector<std::string> _previousLookupCandidates;
+    int64_t _lastAsciiCommitUs = 0;
     int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
@@ -216,6 +240,7 @@ private:
 #endif
 
     void searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi);
+    void wordWindowCached(const char *code, int len, size_t &lo, size_t &hi);
     static int pinyinPrefixLen(const std::string &code);
     bool parseHeader(const uint8_t *hdrIndex, size_t total);
     bool readCode(uint32_t i, char out[MAX_CODE_LEN + 1]);
@@ -242,6 +267,18 @@ private:
     int _displayWidth = 0;               // 候选行可用像素宽度(0=退化为固定 _pageSize 分页)
     bool _fixedCandidatePaging = false;  // 短辅音输入走固定分页, 避免热路径反复测字宽
     size_t _candidateLimit = MAX_CANDIDATES;
+    std::string _singleWindowCacheCode;
+    int _singleWindowCacheLen = 0;
+    uint32_t _singleWindowCacheLo = 0;
+    uint32_t _singleWindowCacheHi = 0;
+    std::string _wordWindowCacheCode;
+    int _wordWindowCacheLen = 0;
+    size_t _wordWindowCacheLo = 0;
+    size_t _wordWindowCacheHi = 0;
+    std::string _fuzzyConfigCache;
+    int64_t _fuzzyConfigCacheUs = 0;
+    std::string _contextBoostScoresContext;
+    std::unordered_map<std::string, int> _contextBoostScores;
 
     mutable std::string _displayCodeCache;
     mutable bool _displayCodeDirty = true;
@@ -267,7 +304,7 @@ private:
     void buildPage();
     bool pagePrev();
     bool pageNext();
-    bool commit(int idx, std::string &out);
+    bool commit(int idx, std::string &out, bool bySpace = false);
     bool handleFullwidthPunct(int key, std::string &out);
     bool handleFullwidthChar(int key, std::string &out);
 };

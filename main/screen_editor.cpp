@@ -2092,6 +2092,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             while (prev > 0 && ((unsigned char)g_editor.lines[g_editor.cy][prev] & 0xC0) == 0x80) prev--;
             g_editor.lines[g_editor.cy].erase(prev, g_editor.cx - prev);
             g_editor.cx = prev;
+            if (g_editor.imeActive) g_ime.handleHostBackspace();
         } else if (g_editor.cy > 0) {
             recordUndoSnapshot(UndoGroup::Delete);
             g_editor.cx = (int)g_editor.lines[g_editor.cy-1].length();

@@ -36,6 +36,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_vertical_ref_line_style", "参考线样式", false, true},
     {"_input_mode", "输入模式", false, true},
     {"_ime_fuzzy", "拼音模糊音", false, true},
+    {"_ime_predict_mode", "联想候选", false, true},
     {"click_enabled", "打字音效", false, false},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -168,6 +169,18 @@ static int imeFuzzyIndex(const char *k) {
 static const char *imeFuzzyNext(int idx) {
     int n = (int)(sizeof(IME_FUZZY_OPTS) / sizeof(IME_FUZZY_OPTS[0]));
     return IME_FUZZY_OPTS[(idx + 1) % n].key;
+}
+static const TimbreOpt IME_PREDICT_OPTS[] = {
+    {"always", "总是"}, {"space", "空格后"}, {"off", "关闭"},
+};
+static int imePredictIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(IME_PREDICT_OPTS) / sizeof(IME_PREDICT_OPTS[0])); i++)
+        if (strcmp(k, IME_PREDICT_OPTS[i].key) == 0) return i;
+    return 0;
+}
+static const char *imePredictNext(int idx) {
+    int n = (int)(sizeof(IME_PREDICT_OPTS) / sizeof(IME_PREDICT_OPTS[0]));
+    return IME_PREDICT_OPTS[(idx + 1) % n].key;
 }
 // UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
 static int fieldAt(int sel) {
@@ -1068,6 +1081,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     imeFuzzyNext(imeFuzzyIndex(g_settings.imeFuzzy().c_str())));
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_ime_predict_mode") == 0) {
+                g_settings.setString("ime_predict_mode",
+                    imePredictNext(imePredictIndex(g_settings.imePredictMode().c_str())));
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_click_volume") == 0) {
                 static const int LV[] = {0, 20, 40, 60, 80, 100};
                 const int n = (int)(sizeof(LV) / sizeof(LV[0]));
@@ -1144,6 +1162,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_ime_fuzzy") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          IME_FUZZY_OPTS[imeFuzzyIndex(g_settings.imeFuzzy().c_str())].label);
+            } else if (strcmp(f.key, "_ime_predict_mode") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         IME_PREDICT_OPTS[imePredictIndex(g_settings.imePredictMode().c_str())].label);
             } else if (strcmp(f.key, "_click_chinese") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          CLICK_CHINESE_OPTS[clickChineseIndex(g_settings.clickChineseMode().c_str())].label);

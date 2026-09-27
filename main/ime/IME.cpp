@@ -85,6 +85,9 @@ static const int IME_MAX_SINGLE_RECORD_SCAN = 120;
 static const int IME_MAX_SHORT_CONSONANT_SINGLE_SCAN = 18;
 static const int IME_MAX_PARTIAL_RECORD_SCAN = 180;
 static const int IME_MAX_INITIAL_COLLECT = 72;
+static const int IME_MAX_USER_FIXED_SCAN = 24;
+static const int IME_MAX_USER_PREFIX_SCAN = 160;
+static const int IME_MAX_USER_PHRASE_KEEP = 32;
 static const size_t IME_FAST_CANDIDATE_LIMIT = 80;
 static const size_t IME_SHORT_CONSONANT_CANDIDATE_LIMIT = 12;
 static const size_t IME_PARTIAL_PINYIN_CANDIDATE_LIMIT = 12;
@@ -103,6 +106,9 @@ static const int IME_MAX_SINGLE_RECORD_SCAN = 1000000;
 static const int IME_MAX_SHORT_CONSONANT_SINGLE_SCAN = 1000000;
 static const int IME_MAX_PARTIAL_RECORD_SCAN = 1000000;
 static const int IME_MAX_INITIAL_COLLECT = 300;
+static const int IME_MAX_USER_FIXED_SCAN = 5000;
+static const int IME_MAX_USER_PREFIX_SCAN = 5000;
+static const int IME_MAX_USER_PHRASE_KEEP = 300;
 static const size_t IME_FAST_CANDIDATE_LIMIT = 300;
 static const size_t IME_SHORT_CONSONANT_CANDIDATE_LIMIT = 300;
 static const size_t IME_PARTIAL_PINYIN_CANDIDATE_LIMIT = 300;
@@ -120,7 +126,14 @@ static const char *BUILTIN_ENGLISH_WORDS[] = {
     "plugin", "project", "prompt", "python", "release", "request", "screen",
     "search", "setting", "storage", "sync", "system", "task", "today",
     "token", "update", "upload", "user", "version", "voice", "wifi", "word",
-    "work", "write"
+    "work", "write", "espidf", "esp32", "freertos", "lvgl", "lvgl9", "wifi6"
+};
+
+static const char *TECH_INLINE_WORDS[] = {
+    "api", "app", "build", "cache", "commit", "config", "debug", "esp-idf",
+    "esp32", "esp32s3", "espidf", "firmware", "flash", "freertos", "github",
+    "github.com", "input", "lvgl", "lvgl9", "markdown", "openai", "python",
+    "release", "sync", "token", "upload", "wifi", "wifi6", nullptr
 };
 
 struct BuiltinPredictEntry {
@@ -296,14 +309,60 @@ static void addSegPrefixCandidates(std::vector<uint16_t> &indices,
 static void addUserPrefixIndexMatches(std::vector<uint16_t> &indices,
                                       const std::unordered_map<int, std::vector<uint16_t>> &index,
                                       const char *code,
-                                      int len) {
+                                      int len,
+                                      int maxItems = 0) {
     int k = segPrefixKey(code, len);
     auto it = index.find(k);
     if (it == index.end()) return;
     for (uint16_t idx : it->second) {
+        if (maxItems > 0 && (int)indices.size() >= maxItems) break;
         if (std::find(indices.begin(), indices.end(), idx) == indices.end())
             indices.push_back(idx);
     }
+}
+
+static std::string userPrefixKeyString(const char *code, int len) {
+    if (!code || len < 3) return "";
+    int n = std::min(len, 4);
+    for (int i = 0; i < n; i++) {
+        if (code[i] < 'a' || code[i] > 'z') return "";
+    }
+    return std::string(code, n);
+}
+
+static void addUserPrefixIndexMatches(std::vector<uint16_t> &indices,
+                                      const std::unordered_map<std::string, std::vector<uint16_t>> &index,
+                                      const char *code,
+                                      int len,
+                                      int maxItems = 0) {
+    std::string k = userPrefixKeyString(code, len);
+    if (k.empty()) return;
+    auto it = index.find(k);
+    if (it == index.end()) return;
+    for (uint16_t idx : it->second) {
+        if (maxItems > 0 && (int)indices.size() >= maxItems) break;
+        if (std::find(indices.begin(), indices.end(), idx) == indices.end())
+            indices.push_back(idx);
+    }
+}
+
+static void addUserLookupIndexMatches(std::vector<uint16_t> &indices,
+                                      const std::unordered_map<int, std::vector<uint16_t>> &index,
+                                      const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex,
+                                      const char *code,
+                                      int len,
+                                      int maxItems = 0) {
+    if (!code || len <= 0) return;
+    if (len <= 2) {
+        addUserPrefixIndexMatches(indices, index, code, len, maxItems);
+        return;
+    }
+    addUserPrefixIndexMatches(indices, prefixIndex, code, len, maxItems);
+}
+
+static bool userLookupAliasPreciseEnough(const std::string &aliasCode, int typedLen) {
+    if (aliasCode.empty()) return false;
+    return (int)aliasCode.length() >= std::min(typedLen, 3);
 }
 
 static std::vector<std::string> splitSyllableText(const char *text) {
@@ -514,8 +573,7 @@ static void addUniqueString(std::vector<std::string> &items, const std::string &
     items.push_back(value);
 }
 
-static bool fuzzyOptionEnabled(const char *name) {
-    std::string cfg = g_settings.imeFuzzy();
+static bool fuzzyOptionEnabledInConfig(const std::string &cfg, const char *name) {
     if (cfg.empty() || cfg == "0" || cfg == "off" || cfg == "none") return false;
     if (cfg == "1" || cfg == "all") return true;
     std::string needle = name;
@@ -570,9 +628,10 @@ static void addFuzzyFinalAlias(std::vector<std::string> &out, const std::string 
     }
 }
 
-static void addFuzzyAliasCodes(std::vector<std::string> &out, const std::string &code) {
+static void addFuzzyAliasCodes(std::vector<std::string> &out, const std::string &code,
+                               const std::string &fuzzyCfg) {
     if (code.length() < 2) return;
-    if (fuzzyOptionEnabled("zcs")) {
+    if (fuzzyOptionEnabledInConfig(fuzzyCfg, "zcs")) {
         addFuzzyPrefixAlias(out, code, "zh", "z");
         addFuzzyPrefixAlias(out, code, "ch", "c");
         addFuzzyPrefixAlias(out, code, "sh", "s");
@@ -580,22 +639,22 @@ static void addFuzzyAliasCodes(std::vector<std::string> &out, const std::string 
         addFuzzyPrefixAlias(out, code, "c", "ch");
         addFuzzyPrefixAlias(out, code, "s", "sh");
     }
-    if (fuzzyOptionEnabled("nl")) {
+    if (fuzzyOptionEnabledInConfig(fuzzyCfg, "nl")) {
         addFuzzyPrefixAlias(out, code, "n", "l");
         addFuzzyPrefixAlias(out, code, "l", "n");
     }
-    if (fuzzyOptionEnabled("eneng")) {
+    if (fuzzyOptionEnabledInConfig(fuzzyCfg, "eneng")) {
         addFuzzyFinalAlias(out, code, "en", "eng");
         addFuzzyFinalAlias(out, code, "eng", "en");
     }
-    if (fuzzyOptionEnabled("ining")) {
+    if (fuzzyOptionEnabledInConfig(fuzzyCfg, "ining")) {
         addFuzzyFinalAlias(out, code, "in", "ing");
         addFuzzyFinalAlias(out, code, "ing", "in");
     }
 }
 
-static std::string fuzzyInitialAliasCode(const std::string &code) {
-    if (code.length() < 2 || !fuzzyOptionEnabled("zcs")) return "";
+static std::string fuzzyInitialAliasCode(const std::string &code, const std::string &fuzzyCfg) {
+    if (code.length() < 2 || !fuzzyOptionEnabledInConfig(fuzzyCfg, "zcs")) return "";
     auto withPrefix = [&](const char *from, const char *to) -> std::string {
         size_t fl = strlen(from);
         if (code.compare(0, fl, from) != 0) return "";
@@ -613,21 +672,26 @@ static std::string fuzzyInitialAliasCode(const std::string &code) {
     return "";
 }
 
-static std::vector<std::string> alternateInputCodes(const std::string &code) {
+static std::vector<std::string> alternateInputCodes(const std::string &code,
+                                                   const std::string &fuzzyCfg) {
     std::vector<std::string> out;
     std::string leading = leadingZeroInitialAliasCode(code);
     addUniqueString(out, leading);
     std::string spelling = pinyinSpellingAliasCode(code);
     addUniqueString(out, spelling);
     if (!spelling.empty()) addUniqueString(out, leadingZeroInitialAliasCode(spelling));
-    std::string fuzzy = fuzzyInitialAliasCode(code);
+    std::string fuzzy = fuzzyInitialAliasCode(code, fuzzyCfg);
     addUniqueString(out, fuzzy);
-    addFuzzyAliasCodes(out, code);
+    addFuzzyAliasCodes(out, code, fuzzyCfg);
     if (!fuzzy.empty()) {
         addUniqueString(out, leadingZeroInitialAliasCode(fuzzy));
         addUniqueString(out, pinyinSpellingAliasCode(fuzzy));
     }
     return out;
+}
+
+static std::vector<std::string> alternateInputCodes(const std::string &code) {
+    return alternateInputCodes(code, g_settings.imeFuzzy());
 }
 
 static std::vector<std::string> alternateLearningCodes(const std::string &code) {
@@ -670,6 +734,7 @@ struct ImePerfTrace {
     int64_t initialUs = 0;
     int64_t shorthandUs = 0;
     int64_t partialUs = 0;
+    int64_t recentUs = 0;
     bool hasVowel = false;
     bool incomplete = false;
     bool fixedPaging = false;
@@ -689,18 +754,24 @@ struct ImePerfTrace {
             phraseUs < IME_PERF_SLOW_US &&
             initialUs < IME_PERF_SLOW_US &&
             shorthandUs < IME_PERF_SLOW_US &&
-            partialUs < IME_PERF_SLOW_US)
+            partialUs < IME_PERF_SLOW_US &&
+            recentUs < IME_PERF_SLOW_US)
             return;
+        int64_t trackedUs = setupUs + userUs + singleUs + segUs + userPhraseUs +
+                            phraseUs + phraseSortUs + userInitialUs + initialUs +
+                            shorthandUs + partialUs + recentUs;
+        int64_t otherUs = totalUs > trackedUs ? totalUs - trackedUs : 0;
         ESP_LOGW(IME_TAG,
                  "perf lookup code='%s' exit=%s total=%lldus cand=%u limit=%u hv=%d inc=%d fixed=%d "
                  "setup=%lld user=%lld single=%lld seg=%lld userPhrase=%lld phrase=%lld sort=%lld "
-                 "userInit=%lld init=%lld shorthand=%lld partial=%lld",
+                 "userInit=%lld init=%lld shorthand=%lld partial=%lld recent=%lld other=%lld",
                  code.c_str(), exitName, (long long)totalUs, (unsigned)candidates.size(),
                  (unsigned)limit, hasVowel ? 1 : 0, incomplete ? 1 : 0, fixedPaging ? 1 : 0,
                  (long long)setupUs, (long long)userUs, (long long)singleUs,
                  (long long)segUs, (long long)userPhraseUs, (long long)phraseUs,
                  (long long)phraseSortUs, (long long)userInitialUs,
-                 (long long)initialUs, (long long)shorthandUs, (long long)partialUs);
+                 (long long)initialUs, (long long)shorthandUs, (long long)partialUs,
+                 (long long)recentUs, (long long)otherUs);
     }
 };
 
@@ -854,6 +925,13 @@ static std::string cjkTailText(const std::string &text, int maxChars) {
     int start = std::max<int>(0, (int)chars.size() - maxChars);
     for (int i = start; i < (int)chars.size(); i++) out += chars[i];
     return out;
+}
+
+static void addContextTailKeys(std::vector<std::string> &keys, const std::string &text) {
+    addUniqueString(keys, cjkTailText(text, 4));
+    addUniqueString(keys, cjkTailText(text, 3));
+    addUniqueString(keys, cjkTailText(text, 2));
+    addUniqueString(keys, lastUtf8Char(text));
 }
 
 static int utf8TextCharCount(const std::string &text) {
@@ -1394,27 +1472,54 @@ void IME::rebuildUserWordIndexes() {
     if (!_userWordIndexesDirty) return;
     auto build = [](const std::vector<UserEntry> &entries,
                     std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                    std::unordered_map<int, std::vector<uint16_t>> &initialIndex) {
+                    std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                    std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                    std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
         codeIndex.clear();
         initialIndex.clear();
+        codePrefixIndex.clear();
+        initialPrefixIndex.clear();
         for (size_t i = 0; i < entries.size() && i <= UINT16_MAX; i++) {
             const UserEntry &p = entries[i];
             int codeKey = segPrefixKey(p.code.c_str(), (int)p.code.length());
             if (codeKey < 26 * 26) codeIndex[codeKey].push_back((uint16_t)i);
+            std::string codePrefixKey = userPrefixKeyString(p.code.c_str(), (int)p.code.length());
+            if (!codePrefixKey.empty()) codePrefixIndex[codePrefixKey].push_back((uint16_t)i);
             if (!p.initial.empty()) {
                 int initialKey = segPrefixKey(p.initial.c_str(), (int)p.initial.length());
                 if (initialKey < 26 * 26) initialIndex[initialKey].push_back((uint16_t)i);
+                std::string initialPrefixKey = userPrefixKeyString(p.initial.c_str(), (int)p.initial.length());
+                if (!initialPrefixKey.empty()) initialPrefixIndex[initialPrefixKey].push_back((uint16_t)i);
             }
             if (p.code.find('\'') != std::string::npos) {
                 std::string compact = ime::PinyinEngine::removeSplit(p.code);
                 int compactKey = segPrefixKey(compact.c_str(), (int)compact.length());
                 if (compactKey < 26 * 26 && compactKey != codeKey)
                     codeIndex[compactKey].push_back((uint16_t)i);
+                std::string compactPrefixKey = userPrefixKeyString(compact.c_str(), (int)compact.length());
+                if (!compactPrefixKey.empty() && compactPrefixKey != codePrefixKey)
+                    codePrefixIndex[compactPrefixKey].push_back((uint16_t)i);
             }
         }
+        auto sortByCount = [&](auto &map) {
+            for (auto &kv : map) {
+                std::stable_sort(kv.second.begin(), kv.second.end(),
+                    [&](uint16_t a, uint16_t b) {
+                        int ca = a < entries.size() ? entries[a].count : 0;
+                        int cb = b < entries.size() ? entries[b].count : 0;
+                        return ca > cb;
+                    });
+            }
+        };
+        sortByCount(codeIndex);
+        sortByCount(initialIndex);
+        sortByCount(codePrefixIndex);
+        sortByCount(initialPrefixIndex);
     };
-    build(_fixedUserWords, _fixedUserCodeIndex, _fixedUserInitialIndex);
-    build(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserInitialIndex);
+    build(_fixedUserWords, _fixedUserCodeIndex, _fixedUserInitialIndex,
+          _fixedUserCodePrefixIndex, _fixedUserInitialPrefixIndex);
+    build(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserInitialIndex,
+          _dynamicUserCodePrefixIndex, _dynamicUserInitialPrefixIndex);
     _userWordIndexesDirty = false;
 }
 
@@ -1928,6 +2033,33 @@ void IME::bumpFrequency(const std::string &code, const std::string &word, int we
     }
 }
 
+bool IME::penalizeUserWord(const std::string &code, const std::string &word, int weight) {
+    ensureUserDictLoaded();
+    if (word.empty()) return false;
+    if (weight < 1) weight = 1;
+    bool changed = false;
+    for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ) {
+        if (it->word == word && it->trad == _trad &&
+            (code.empty() || it->code == code)) {
+            if (it->count <= weight) {
+                it = _dynamicUserWords.erase(it);
+                markUserWordIndexesDirty();
+            } else {
+                it->count -= weight;
+                ++it;
+            }
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+    if (changed) {
+        _dynamicUserDirty = true;
+        flushUserDictSaves(false);
+    }
+    return changed;
+}
+
 void IME::bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow, int weight) {
     ensureUserDictLoaded();
     if (key.empty() || word.empty()) return;
@@ -2150,14 +2282,189 @@ void IME::rememberDeletedWord(const std::string &word) {
     if (_recentDeletedWords.size() > 16) _recentDeletedWords.pop_back();
 }
 
+void IME::rememberLastLearning(const std::string &code, const std::string &word) {
+    if (code.empty() || word.empty()) return;
+    _lastLearningCode = code;
+    _lastLearningWord = word;
+    _lastLearningContext = _lastCommitText;
+    _lastLearningUs = esp_timer_get_time();
+}
+
+void IME::rememberReplacementPreference(const std::string &code, const std::string &word) {
+    if (code.empty() || word.empty() || _lastRejectedWord.empty() || _lastRejectedUs == 0)
+        return;
+    int64_t now = esp_timer_get_time();
+    if (now - _lastRejectedUs > 8000000) {
+        _lastRejectedCode.clear();
+        _lastRejectedWord.clear();
+        _lastRejectedContext.clear();
+        _lastRejectedUs = 0;
+        return;
+    }
+    if (_lastRejectedCode == code && _lastRejectedWord != word) {
+        bumpFrequency(code, word, 5);
+        penalizeUserWord(code, _lastRejectedWord, 3);
+        if (!_lastRejectedContext.empty())
+            bumpPredictFrequency(_lastRejectedContext, word, false, 3);
+        _lastRejectedCode.clear();
+        _lastRejectedWord.clear();
+        _lastRejectedContext.clear();
+        _lastRejectedUs = 0;
+    }
+}
+
+void IME::rebuildContextBoostScores() {
+    if (_contextBoostScoresContext == _lastCommitText) return;
+    _contextBoostScoresContext = _lastCommitText;
+    _contextBoostScores.clear();
+    if (_lastCommitText.empty()) return;
+    ensureUserDictLoaded();
+    rebuildUserPredictIndex();
+    std::vector<std::string> keys;
+    addContextTailKeys(keys, _lastCommitText);
+    auto addScore = [&](const std::string &word, int score) {
+        if (word.empty()) return;
+        auto it = _contextBoostScores.find(word);
+        if (it == _contextBoostScores.end() || it->second < score)
+            _contextBoostScores[word] = score;
+    };
+    for (auto &key : keys) {
+        int keyChars = utf8TextCharCount(key);
+        if (keyChars <= 0) continue;
+        auto indexIt = _userPredictIndex.find(key);
+        if (indexIt != _userPredictIndex.end()) {
+            for (uint16_t entryIdx : indexIt->second) {
+                if (entryIdx >= _userPredictWords.size()) continue;
+                const UserEntry &p = _userPredictWords[entryIdx];
+                if (p.trad != _trad) continue;
+                addScore(p.word, 9000 + keyChars * 900 + std::min(p.count, 1000) * 12);
+            }
+        }
+        if (_dict.hasPredictions()) {
+            ime::Im3Dictionary::PredictGroup group;
+            if (_dict.findPredictGroup(key, group)) {
+                for (size_t i = 0; i < group.candidates.size(); i++) {
+                    addScore(group.candidates[i], 5200 + keyChars * 650 - (int)i * 80);
+                }
+            }
+        }
+        for (auto &entry : BUILTIN_PREDICT) {
+            if (key != entry.key) continue;
+            for (int i = 0; entry.candidates[i]; i++) {
+                addScore(entry.candidates[i], 3600 + keyChars * 550 - i * 60);
+            }
+            break;
+        }
+    }
+}
+
+int IME::contextCandidateBoost(const std::string &word) {
+    if (word.empty() || _lastCommitText.empty()) return 0;
+    rebuildContextBoostScores();
+    auto it = _contextBoostScores.find(word);
+    if (it != _contextBoostScores.end()) return it->second;
+    int best = 0;
+    std::string prefix;
+    int chars = 0;
+    for (size_t pos = 0; pos < word.size() && chars < 4; ) {
+        std::string ch = utf8CharAt(word, pos);
+        if (!isCjkChar(ch)) break;
+        prefix += ch;
+        pos = utf8CharEnd(word, pos);
+        chars++;
+        auto pit = _contextBoostScores.find(prefix);
+        if (pit != _contextBoostScores.end())
+            best = std::max(best, pit->second - 300);
+    }
+    return best;
+}
+
+int IME::stableCandidateBoost(const std::string &word) const {
+    if (word.empty() || _previousLookupCandidates.empty()) return 0;
+    for (size_t i = 0; i < _previousLookupCandidates.size() && i < 24; i++) {
+        if (_previousLookupCandidates[i] == word)
+            return 420 - (int)i * 12;
+    }
+    return 0;
+}
+
+void IME::rememberCandidateStability() {
+    _previousLookupCandidates.clear();
+    size_t n = std::min(_all.size(), (size_t)32);
+    _previousLookupCandidates.reserve(n);
+    for (size_t i = 0; i < n; i++) _previousLookupCandidates.push_back(_all[i]);
+}
+
+void IME::logCandidateDebug(const char *stage, const std::string &word,
+                            int score, int context, int stable) const {
+    if (!g_settings.imeDebug()) return;
+    ESP_LOGI(IME_TAG, "rank %s code='%s' word='%s' score=%d context=%d stable=%d recent=%d",
+             stage ? stage : "?", _code.c_str(), word.c_str(), score, context, stable,
+             recentCommitBoost(_code, word));
+}
+
+void IME::appendEnglishInlineCandidates(const std::string &code) {
+    if (code.length() < 2 || _all.size() >= _candidateLimit) return;
+    for (char c : code) {
+        if (c < 'a' || c > 'z') return;
+    }
+    bool likelyTech = false;
+    for (int i = 0; TECH_INLINE_WORDS[i]; i++) {
+        if (std::string(TECH_INLINE_WORDS[i]).find(code) == 0) {
+            likelyTech = true;
+            break;
+        }
+    }
+    if (!likelyTech && !_englishDictLoaded) return;
+    if (!likelyTech && code.length() < 4) return;
+    loadEnglishDict();
+    int added = 0;
+    for (int i = 0; TECH_INLINE_WORDS[i] && added < 8 && _all.size() < _candidateLimit; i++) {
+        std::string w = TECH_INLINE_WORDS[i];
+        if (w.find(code) == 0 && appendCandidate(w, (int)code.length())) added++;
+    }
+    auto it = std::lower_bound(_englishWords.begin(), _englishWords.end(), code);
+    for (; it != _englishWords.end() && added < 6 && _all.size() < _candidateLimit; ++it) {
+        if (it->find(code) != 0) break;
+        if (appendCandidate(*it, (int)code.length())) added++;
+    }
+}
+
+void IME::handleHostBackspace() {
+    if (_lastLearningWord.empty() || _lastLearningUs == 0) return;
+    int64_t now = esp_timer_get_time();
+    if (now - _lastLearningUs > 4000000) {
+        _lastLearningCode.clear();
+        _lastLearningWord.clear();
+        _lastLearningContext.clear();
+        _lastLearningUs = 0;
+        return;
+    }
+    rememberDeletedWord(_lastLearningWord);
+    penalizeUserWord(_lastLearningCode, _lastLearningWord, 3);
+    penalizePredictWord(_lastLearningWord, 3);
+    _lastRejectedCode = _lastLearningCode;
+    _lastRejectedWord = _lastLearningWord;
+    _lastRejectedContext = _lastLearningContext;
+    _lastRejectedUs = now;
+    _lastCommitText = _lastLearningContext;
+    _lastCommitChar = lastUtf8Char(_lastCommitText);
+    _lastLearningCode.clear();
+    _lastLearningWord.clear();
+    _lastLearningContext.clear();
+    _lastLearningUs = 0;
+}
+
 void IME::rememberCommittedText(const std::string &text) {
     if (text.empty()) return;
     std::string first = utf8CharAt(text, 0);
     if (!isCjkChar(first)) {
         _lastCommitChar.clear();
         _lastCommitText.clear();
+        _lastAsciiCommitUs = esp_timer_get_time();
         return;
     }
+    _lastAsciiCommitUs = 0;
     std::string prevKey = !_lastCommitText.empty() ? _lastCommitText : _lastCommitChar;
     if (!prevKey.empty() && first.size() >= 3) {
         if (!noisyPredictPair(prevKey, first))
@@ -2308,11 +2615,38 @@ int IME::pinyinPrefixLen(const std::string &code) {
 }
 
 void IME::searchWindow(const char *code, int len, uint32_t &lo, uint32_t &hi) {
+    if (code && len > 0 && _singleWindowCacheLen == len &&
+        _singleWindowCacheCode.size() == (size_t)len &&
+        strncmp(_singleWindowCacheCode.c_str(), code, len) == 0) {
+        lo = _singleWindowCacheLo;
+        hi = _singleWindowCacheHi;
+        return;
+    }
     _dict.singleWindow(code, len, lo, hi);
+    _singleWindowCacheCode.assign(code ? code : "", code && len > 0 ? len : 0);
+    _singleWindowCacheLen = len;
+    _singleWindowCacheLo = lo;
+    _singleWindowCacheHi = hi;
+}
+
+void IME::wordWindowCached(const char *code, int len, size_t &lo, size_t &hi) {
+    if (code && len > 0 && _wordWindowCacheLen == len &&
+        _wordWindowCacheCode.size() == (size_t)len &&
+        strncmp(_wordWindowCacheCode.c_str(), code, len) == 0) {
+        lo = _wordWindowCacheLo;
+        hi = _wordWindowCacheHi;
+        return;
+    }
+    _dict.wordWindow(code, len, lo, hi);
+    _wordWindowCacheCode.assign(code ? code : "", code && len > 0 ? len : 0);
+    _wordWindowCacheLen = len;
+    _wordWindowCacheLo = lo;
+    _wordWindowCacheHi = hi;
 }
 
 void IME::lookup() {
     ImePerfTrace perf(_code, _all);
+    rememberCandidateStability();
     clearCandidates();
     _pageStart = 0;
     _curPage = 0;
@@ -2368,11 +2702,16 @@ void IME::lookup() {
     static std::string cachedMetaFuzzy;
     static std::vector<std::string> cachedAliasCodes;
     static ime::PinyinSplit cachedPrimarySplit;
-    std::string fuzzyCfg = g_settings.imeFuzzy();
+    int64_t nowUs = esp_timer_get_time();
+    if (_fuzzyConfigCacheUs == 0 || nowUs - _fuzzyConfigCacheUs > 2000000) {
+        _fuzzyConfigCache = g_settings.imeFuzzy();
+        _fuzzyConfigCacheUs = nowUs;
+    }
+    const std::string &fuzzyCfg = _fuzzyConfigCache;
     if (cachedMetaCode != pinyinCode || cachedMetaFuzzy != fuzzyCfg) {
         cachedMetaCode = pinyinCode;
         cachedMetaFuzzy = fuzzyCfg;
-        cachedAliasCodes = alternateInputCodes(pinyinCode);
+        cachedAliasCodes = alternateInputCodes(pinyinCode, fuzzyCfg);
         cachedPrimarySplit = ime::PinyinEngine::primarySplit(pinyinCode, true);
     }
     const std::vector<std::string> &aliasCodes = cachedAliasCodes;
@@ -2429,16 +2768,22 @@ void IME::lookup() {
         auto codeMatchesDelete = [&](const std::string &entryCode) -> bool {
             if (qlen == 0 || userCodeMatchesPrefix(entryCode, q, qlen)) return true;
             for (auto &aliasCode : aliasCodes) {
+                if (!userLookupAliasPreciseEnough(aliasCode, qlen)) continue;
                 if (userCodeMatchesPrefix(entryCode, aliasCode.c_str(), (int)aliasCode.length())) return true;
             }
             return false;
         };
         std::vector<uint16_t> deleteIndices;
         if (qlen > 0) {
-            addUserPrefixIndexMatches(deleteIndices, _dynamicUserCodeIndex, q, qlen);
+            addUserLookupIndexMatches(deleteIndices, _dynamicUserCodeIndex,
+                                      _dynamicUserCodePrefixIndex, q, qlen);
             for (auto &aliasCode : aliasCodes)
-                addUserPrefixIndexMatches(deleteIndices, _dynamicUserCodeIndex,
+            {
+                if (!userLookupAliasPreciseEnough(aliasCode, qlen)) continue;
+                addUserLookupIndexMatches(deleteIndices, _dynamicUserCodeIndex,
+                                          _dynamicUserCodePrefixIndex,
                                           aliasCode.c_str(), (int)aliasCode.length());
+            }
         }
         auto scanDeleteEntry = [&](const UserEntry &p) {
             if (p.trad != _trad) return;
@@ -2483,54 +2828,85 @@ void IME::lookup() {
     {
         int64_t t = IME_PERF_NOW();
         std::vector<RankedCandidate> userSingleFreq;
+        bool collectUserPhrases = hasVowel && !incompletePinyinInput && qlen >= 3;
+        bool skipBroadConsonantUserScan = _fixedCandidatePaging && !hasVowel && qlen <= 2;
+        bool skipSingleSyllableUserScan = hasVowel && primarySplit.tokens.size() <= 1 && qlen >= 3;
         auto scanUserWords = [&](const std::vector<UserEntry> &entries,
                                  const std::unordered_map<int, std::vector<uint16_t>> &index,
+                                 const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex,
                                  int sourceRank) {
         std::vector<uint16_t> indices;
-        addUserPrefixIndexMatches(indices, index, q, qlen);
+        int scanLimit = _fixedCandidatePaging ? IME_MAX_USER_FIXED_SCAN : IME_MAX_USER_PREFIX_SCAN;
+        addUserLookupIndexMatches(indices, index, prefixIndex, q, qlen, scanLimit);
         for (auto &aliasCode : aliasCodes)
-            addUserPrefixIndexMatches(indices, index, aliasCode.c_str(), (int)aliasCode.length());
+        {
+            if ((int)indices.size() >= scanLimit) break;
+            if (!userLookupAliasPreciseEnough(aliasCode, qlen)) continue;
+            addUserLookupIndexMatches(indices, index, prefixIndex,
+                                      aliasCode.c_str(), (int)aliasCode.length(),
+                                      scanLimit);
+        }
+        int scanned = 0;
         for (uint16_t entryIdx : indices) {
+            if (scanned++ >= scanLimit) break;
             if (entryIdx >= entries.size()) continue;
             auto &p = entries[entryIdx];
             if (p.trad != _trad) continue;
+            bool singleWord = p.word.length() <= 3;
+            if (!singleWord && !collectUserPhrases) continue;
             std::string matchedCode;
             bool matched = userCodeMatchesPrefix(p.code, q, qlen, &matchedCode);
             for (auto &aliasCode : aliasCodes) {
                 if (matched) break;
+                if (!userLookupAliasPreciseEnough(aliasCode, qlen)) continue;
                 matched = userCodeMatchesPrefix(p.code, aliasCode.c_str(),
                                                 (int)aliasCode.length(), &matchedCode);
             }
             if (!matched) continue;
             int score = userCandidateScore(matchedCode, p.count, qlen);
             score += recentCommitBoost(matchedCode, p.word);
+            int ctxBoost = singleWord ? 0 : contextCandidateBoost(p.word);
+            int stableBoost = stableCandidateBoost(p.word);
+            score += ctxBoost + stableBoost;
+            logCandidateDebug("user", p.word, score, ctxBoost, stableBoost);
             bool exactCodeMatch = pinyinCodeEqualsAny(matchedCode, pinyinCode, aliasCodes);
-            if (p.word.length() <= 3) {
+            if (singleWord) {
                 // single char
                 addRankedCandidate(userSingleFreq, p.word, 0, score, sourceRank);
             } else {
                 // phrase
                 auto &target = exactCodeMatch ? userWordFreq : userPrefixWordFreq;
                 addRankedCandidate(target, p.word, 0, score, sourceRank);
+                if ((int)target.size() > IME_MAX_USER_PHRASE_KEEP) {
+                    sortRankedCandidates(target);
+                    target.resize(IME_MAX_USER_PHRASE_KEEP);
+                }
                 if (exactCodeMatch) {
                     addRankedCandidate(userExactWordFreq, p.word, qlen, score, sourceRank);
+                    if ((int)userExactWordFreq.size() > IME_MAX_USER_PHRASE_KEEP) {
+                        sortRankedCandidates(userExactWordFreq);
+                        userExactWordFreq.resize(IME_MAX_USER_PHRASE_KEEP);
+                    }
                 }
             }
         }
         };
-        scanUserWords(_fixedUserWords, _fixedUserCodeIndex, 30);
-        scanUserWords(_dynamicUserWords, _dynamicUserCodeIndex, 20);
-        sortRankedCandidates(userSingleFreq);
-        for (auto &f : userSingleFreq) {
-            appendCandidate(f.word, f.candLen);
-            if (_all.size() >= _candidateLimit) break;
+        if (!skipBroadConsonantUserScan && !skipSingleSyllableUserScan) {
+            scanUserWords(_fixedUserWords, _fixedUserCodeIndex, _fixedUserCodePrefixIndex, 30);
+            scanUserWords(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserCodePrefixIndex, 20);
+            sortRankedCandidates(userSingleFreq);
+            for (auto &f : userSingleFreq) {
+                appendCandidate(f.word, f.candLen);
+                if (_all.size() >= _candidateLimit) break;
+            }
         }
         perf.userUs += IME_PERF_NOW() - t;
         if (_all.size() >= _candidateLimit) { perf.exitName = "user-single-limit"; buildPage(); return; }
     }
 
     // Frequently selected full-code phrases should not be buried behind many single chars.
-    if (hasVowel && !incompletePinyinInput && !userExactWordFreq.empty()) {
+    if (hasVowel && !incompletePinyinInput && primarySplit.tokens.size() > 1 &&
+        !userExactWordFreq.empty()) {
         int64_t t = IME_PERF_NOW();
         sortRankedCandidates(userExactWordFreq);
         int promoted = 0;
@@ -2545,7 +2921,8 @@ void IME::lookup() {
     // Long full-pinyin input benefits from exact phrase promotion before the
     // broad single-character scan. This keeps "shurufa" and longer diary-style
     // phrases from being buried behind many one-character candidates.
-    if (hasVowel && !incompletePinyinInput && qlen >= 4 && _dict.hasWords() &&
+    if (hasVowel && !incompletePinyinInput && primarySplit.tokens.size() > 1 &&
+        qlen >= 4 && _dict.hasWords() &&
         _all.size() < _candidateLimit) {
         int64_t t = IME_PERF_NOW();
         std::vector<RankedCandidate> exactPhraseMatches;
@@ -2553,7 +2930,7 @@ void IME::lookup() {
         auto collectExactPhrase = [&](const char *scanCode, int scanLen, bool aliasScan) {
             if (!scanCode || scanLen < 4) return;
             size_t wlo = 0, whi = _dict.wordDataSize();
-            _dict.wordWindow(scanCode, scanLen, wlo, whi);
+            wordWindowCached(scanCode, scanLen, wlo, whi);
             size_t wpos = wlo;
             int safety = 0;
             while (wpos < whi && safety++ < IME_MAX_PHRASE_GROUP_SCAN) {
@@ -2579,9 +2956,13 @@ void IME::lookup() {
                         std::string w((const char *)wordData + next, wl);
                         if (wordVisible(_trad, w, wf)) {
                             int consumedLen = aliasScan ? qlen : scanLen;
+                            int ctxBoost = contextCandidateBoost(w);
+                            int stableBoost = stableCandidateBoost(w);
                             int score = phraseCandidateScore(w, scanLen, scanLen,
                                                              (int)primarySplit.tokens.size()) + 2000
-                                      + recentCommitBoost(std::string(scanCode, scanLen), w);
+                                      + recentCommitBoost(std::string(scanCode, scanLen), w)
+                                      + ctxBoost + stableBoost;
+                            logCandidateDebug("exact-phrase", w, score, ctxBoost, stableBoost);
                             addRankedCandidate(exactPhraseMatches, w, consumedLen, score, 15);
                         }
                     }
@@ -2603,7 +2984,11 @@ void IME::lookup() {
         if (_all.size() >= _candidateLimit) { perf.exitName = "exact-phrase-limit"; buildPage(); return; }
     }
 
-    appendRecentCommitCandidates(pinyinCode, aliasCodes, qlen);
+    {
+        int64_t t = IME_PERF_NOW();
+        appendRecentCommitCandidates(pinyinCode, aliasCodes, qlen);
+        perf.recentUs += IME_PERF_NOW() - t;
+    }
     if (_all.size() >= _candidateLimit) { perf.exitName = "recent-limit"; buildPage(); return; }
 
     // Phase 2: single char prefix match (dictionary)
@@ -2693,6 +3078,10 @@ void IME::lookup() {
             if (!phraseMatureForTyped(entryCodeLen, matchedLen, chars)) continue;
             int score = phraseCandidateScore(w, entryCodeLen, matchedLen, SEG_TABLE[i].syllableCount);
             score += recentCommitBoost(SEG_TABLE[i].code, w);
+            int ctxBoost = contextCandidateBoost(w);
+            int stableBoost = stableCandidateBoost(w);
+            score += ctxBoost + stableBoost;
+            logCandidateDebug("seg", w, score, ctxBoost, stableBoost);
             addRankedCandidate(segMatches, w, entryCodeLen, score, 10);
         }
         sortRankedCandidates(segMatches);
@@ -2725,7 +3114,7 @@ void IME::lookup() {
         auto scanPhrasePrefix = [&](const char *scanCode, int scanLen, bool aliasScan) {
             if (!scanCode || scanLen < IME_PHRASE_PREFIX_MIN_LEN) return;
             size_t wlo = 0, whi = _dict.wordDataSize();
-            _dict.wordWindow(scanCode, scanLen, wlo, whi);
+            wordWindowCached(scanCode, scanLen, wlo, whi);
             size_t wpos = wlo;
             int safety = 0;
             int scanBudget = IME_MAX_PHRASE_GROUP_SCAN;
@@ -2790,8 +3179,13 @@ void IME::lookup() {
             std::stable_sort(order.begin(), order.end(),
                 [this, qlen, &primarySplit](int a, int b) {
                     int syllables = (int)primarySplit.tokens.size();
-                    return phraseCandidateScore(_all[a], _candLen[a], qlen, syllables) >
-                           phraseCandidateScore(_all[b], _candLen[b], qlen, syllables);
+                    int scoreA = phraseCandidateScore(_all[a], _candLen[a], qlen, syllables)
+                               + contextCandidateBoost(_all[a])
+                               + stableCandidateBoost(_all[a]);
+                    int scoreB = phraseCandidateScore(_all[b], _candLen[b], qlen, syllables)
+                               + contextCandidateBoost(_all[b])
+                               + stableCandidateBoost(_all[b]);
+                    return scoreA > scoreB;
                 });
             std::vector<std::string> sortedAll(_all.begin(), _all.begin() + p4Start);
             std::vector<int> sortedLen(_candLen.begin(), _candLen.begin() + p4Start);
@@ -2829,6 +3223,12 @@ void IME::lookup() {
     if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "user-prefix-phrase-limit"; buildPage(); return; }
     }
 
+    // Low-priority inline English candidates for technical mixed input. These
+    // stay behind Chinese phrase paths so common pinyin is not hijacked.
+    if (hasVowel && !incompletePinyinInput && _all.size() < _candidateLimit) {
+        appendEnglishInlineCandidates(pinyinCode);
+    }
+
     // Phase 4c: curated supplemental phrases for shorthand initials.
     bool curatedInitialFilled = false;
     if (!hasVowel && qlen >= 2 && _all.size() < IME_FAST_CANDIDATE_LIMIT) {
@@ -2854,6 +3254,10 @@ void IME::lookup() {
             if (compactMatch) score += 500;
             if (chars >= 2) score += chars;
             if (matchedInitLen > qlen) score -= std::min(6000, (matchedInitLen - qlen) * 900);
+            int ctxBoost = contextCandidateBoost(SEG_TABLE[i].word);
+            int stableBoost = stableCandidateBoost(SEG_TABLE[i].word);
+            score += ctxBoost + stableBoost;
+            logCandidateDebug("seg-initial", SEG_TABLE[i].word, score, ctxBoost, stableBoost);
             addRankedCandidate(segInitFreq, SEG_TABLE[i].word, qlen, score, compactMatch ? 11 : 10);
         }
         sortRankedCandidates(segInitFreq);
@@ -2871,9 +3275,10 @@ void IME::lookup() {
         int64_t t = IME_PERF_NOW();
         std::vector< std::pair<int, std::string> > userInitFreq;
         auto scanInitialWords = [&](const std::vector<UserEntry> &entries,
-                                    const std::unordered_map<int, std::vector<uint16_t>> &index) {
+                                    const std::unordered_map<int, std::vector<uint16_t>> &index,
+                                    const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex) {
         std::vector<uint16_t> indices;
-        addUserPrefixIndexMatches(indices, index, q, qlen);
+        addUserLookupIndexMatches(indices, index, prefixIndex, q, qlen);
         for (uint16_t entryIdx : indices) {
             if (entryIdx >= entries.size()) continue;
             auto &p = entries[entryIdx];
@@ -2883,6 +3288,10 @@ void IME::lookup() {
             if ((int)init.length() >= qlen && strncmp(init.c_str(), q, qlen) == 0) {
                 int score = p.count * 8 + (((int)init.length() == qlen) ? 100000 : std::max(0, 64 - ((int)init.length() - qlen)));
                 score += recentCommitBoost(p.code, p.word);
+                int ctxBoost = contextCandidateBoost(p.word);
+                int stableBoost = stableCandidateBoost(p.word);
+                score += ctxBoost + stableBoost;
+                logCandidateDebug("user-initial", p.word, score, ctxBoost, stableBoost);
                 bool found = false;
                 for (auto &uf : userInitFreq) {
                     if (uf.second == p.word) {
@@ -2895,8 +3304,8 @@ void IME::lookup() {
             }
         }
         };
-        scanInitialWords(_fixedUserWords, _fixedUserInitialIndex);
-        scanInitialWords(_dynamicUserWords, _dynamicUserInitialIndex);
+        scanInitialWords(_fixedUserWords, _fixedUserInitialIndex, _fixedUserInitialPrefixIndex);
+        scanInitialWords(_dynamicUserWords, _dynamicUserInitialIndex, _dynamicUserInitialPrefixIndex);
         std::sort(userInitFreq.begin(), userInitFreq.end(),
             [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
                 return a.first > b.first;
@@ -2919,7 +3328,9 @@ void IME::lookup() {
             std::string word;
         };
         std::vector<ScoredPhrase> initialCandidates;
-        initialCandidates.reserve(std::min<int>(IME_MAX_INITIAL_COLLECT, (int)_candidateLimit * 6));
+        int initialCollectLimit = std::min<int>(IME_MAX_INITIAL_COLLECT, (int)_candidateLimit * 3);
+        if (_fixedCandidatePaging) initialCollectLimit = std::min<int>(initialCollectLimit, (int)_candidateLimit);
+        initialCandidates.reserve(initialCollectLimit);
         auto addInitialCandidate = [&](const std::string &word, int candLen, int score) {
             for (auto &item : initialCandidates) {
                 if (item.word == word) {
@@ -2930,20 +3341,20 @@ void IME::lookup() {
                     return;
                 }
             }
-            if ((int)initialCandidates.size() < IME_MAX_INITIAL_COLLECT)
+            if ((int)initialCandidates.size() < initialCollectLimit)
                 initialCandidates.push_back({score, candLen, word});
         };
         int scanBudget = IME_MAX_INITIAL_GROUP_SCAN;
-        if (qlen <= 2) scanBudget = IME_MAX_SHORT_INITIAL_GROUP_SCAN;
+        if (qlen <= 2) scanBudget = std::min(IME_MAX_SHORT_INITIAL_GROUP_SCAN, 24);
         else if (qlen == 3) scanBudget = IME_MAX_MEDIUM_INITIAL_GROUP_SCAN;
         else scanBudget = IME_MAX_LONG_INITIAL_GROUP_SCAN;
         const uint8_t *wordData = _dict.wordData();
         size_t slo = 0, shi = _dict.wordDataSize();
-        _dict.wordWindow(q, 1, slo, shi);
+        wordWindowCached(q, 1, slo, shi);
         size_t spos = slo;
         int safety = 0;
         while (spos < shi && safety++ < scanBudget &&
-               (int)initialCandidates.size() < IME_MAX_INITIAL_COLLECT) {
+               (int)initialCandidates.size() < initialCollectLimit) {
             uint8_t cl = wordData[spos];
             if (cl == 0 || spos + 1 + cl > shi) break;
             const char *wc = (const char *)wordData + spos + 1;
@@ -2964,6 +3375,10 @@ void IME::lookup() {
                     std::string w((const char *)wordData + next, wl);
                     if (wordVisible(_trad, w, wf)) {
                         int score = initialPhraseCandidateScoreFromLength((int)groupInit.length(), qlen, w);
+                        int ctxBoost = _fixedCandidatePaging ? 0 : contextCandidateBoost(w);
+                        int stableBoost = _fixedCandidatePaging ? 0 : stableCandidateBoost(w);
+                        score += ctxBoost + stableBoost;
+                        logCandidateDebug("initial", w, score, ctxBoost, stableBoost);
                         if (score >= 0) addInitialCandidate(w, cl, score);
                     }
                 }
@@ -3016,7 +3431,7 @@ void IME::lookup() {
         }
         if (shorthandTail && _dict.hasWords() && _all.size() < IME_FAST_CANDIDATE_LIMIT) {
             size_t slo = 0, shi = _dict.wordDataSize();
-            _dict.wordWindow(typedInit.c_str(), 1, slo, shi);
+            wordWindowCached(typedInit.c_str(), 1, slo, shi);
             size_t spos = slo;
             int safety = 0;
             const uint8_t *wordData = _dict.wordData();
@@ -3296,11 +3711,16 @@ void IME::lookupSegmented() {
     // 1) 用户词典: 显式分词和去分隔编码共享学习结果
     std::vector< std::pair<int, std::string> > userMatches;
     auto scanSegmentedUserWords = [&](const std::vector<UserEntry> &entries,
-                                      const std::unordered_map<int, std::vector<uint16_t>> &index) {
+                                      const std::unordered_map<int, std::vector<uint16_t>> &index,
+                                      const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex) {
     std::vector<uint16_t> indices;
     addUserPrefixIndexMatches(indices, index, q.c_str(), (int)q.length());
+    addUserPrefixIndexMatches(indices, prefixIndex, q.c_str(), (int)q.length());
     for (auto &aliasCode : aliasCodes)
+    {
         addUserPrefixIndexMatches(indices, index, aliasCode.c_str(), (int)aliasCode.length());
+        addUserPrefixIndexMatches(indices, prefixIndex, aliasCode.c_str(), (int)aliasCode.length());
+    }
     for (uint16_t entryIdx : indices) {
         if (entryIdx >= entries.size()) continue;
         auto &p = entries[entryIdx];
@@ -3325,8 +3745,8 @@ void IME::lookupSegmented() {
         if (!found) userMatches.push_back({score, p.word});
     }
     };
-    scanSegmentedUserWords(_fixedUserWords, _fixedUserCodeIndex);
-    scanSegmentedUserWords(_dynamicUserWords, _dynamicUserCodeIndex);
+    scanSegmentedUserWords(_fixedUserWords, _fixedUserCodeIndex, _fixedUserCodePrefixIndex);
+    scanSegmentedUserWords(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserCodePrefixIndex);
     std::sort(userMatches.begin(), userMatches.end(),
         [](const std::pair<int,std::string> &a, const std::pair<int,std::string> &b) {
             return a.first > b.first;
@@ -3377,7 +3797,7 @@ void IME::lookupSegmented() {
         auto scanExactPhrase = [&](const std::string &scanCode) {
             if (scanCode.length() < 2) return;
             size_t wlo = 0, whi = _dict.wordDataSize();
-            _dict.wordWindow(scanCode.c_str(), (int)scanCode.length(), wlo, whi);
+            wordWindowCached(scanCode.c_str(), (int)scanCode.length(), wlo, whi);
             size_t wpos = wlo;
             int safety = 0;
             int scanLen = (int)scanCode.length();
@@ -3455,16 +3875,16 @@ void IME::appendSingleCharCandidates(const std::string &prefix, int candLen) {
     }
 }
 
-void IME::beginPredict(const std::string &text) {
+void IME::beginPredict(const std::string &text, bool afterSpaceCommit) {
     reset();
+    std::string mode = g_settings.imePredictMode();
+    if (mode == "off") return;
+    if (mode == "space" && !afterSpaceCommit) return;
     if (text.empty()) return;
     ensureUserDictLoaded();
     rebuildUserPredictIndex();
     std::vector<std::string> keys;
-    addUniqueString(keys, cjkTailText(text, 4));
-    addUniqueString(keys, cjkTailText(text, 3));
-    addUniqueString(keys, cjkTailText(text, 2));
-    addUniqueString(keys, lastUtf8Char(text));
+    addContextTailKeys(keys, text);
     if (keys.empty()) return;
 
     std::vector<RankedPredictCandidate> ranked;
@@ -3542,6 +3962,7 @@ void IME::buildPage() {
     if (!_fixedCandidatePaging && _widthFn && _displayWidth > 0) {
         // 按显示宽度分页: 与各界面候选行渲染一致, " 编号." 前缀 + 候选文本,
         // 一行放不下则把该候选归入下一页, 保证候选不被隐藏。
+        int anchor = _pageAnchor;
         _pageStarts.clear();
         _pageStarts.push_back(0);
         int lineW = 0;
@@ -3564,6 +3985,11 @@ void IME::buildPage() {
                 partW = numWidths[1] + _candidateWidths[i];
             }
             lineW += partW;
+            if (anchor < 0 && (int)_pageStarts.size() > _curPage + 1) break;
+            if (anchor >= 0 && (int)_pageStarts.size() > _curPage + 1 &&
+                _pageStarts.back() > anchor) {
+                break;
+            }
         }
         if (_pageAnchor >= 0) {
             for (int i = 0; i < (int)_pageStarts.size(); i++) {
@@ -3618,7 +4044,7 @@ bool IME::pageNext() {
     return true;
 }
 
-bool IME::commit(int idx, std::string &out) {
+bool IME::commit(int idx, std::string &out, bool bySpace) {
     if (idx < 0 || idx >= (int)_page.size()) return false;
     out = _page[idx];
     if (_vMode || _englishCompose) {
@@ -3698,7 +4124,9 @@ bool IME::commit(int idx, std::string &out) {
             addUserWord(learnCode, _prefix);
             bumpFrequency(learnCode, _prefix, learnWeight);
             for (auto &code : alternateLearningCodes(learnCode)) bumpFrequency(code, _prefix);
+            rememberReplacementPreference(learnCode, _prefix);
             rememberRecentCommit(learnCode, _prefix);
+            rememberLastLearning(learnCode, _prefix);
         }
         out = _prefix;
     } else {
@@ -3708,7 +4136,9 @@ bool IME::commit(int idx, std::string &out) {
             bumpFrequency(learnCode, out, learnWeight);
             for (auto &code : alternateLearningCodes(learnCode)) bumpFrequency(code, out);
             learnAutoPhraseFromSingle(learnCode, out);
+            rememberReplacementPreference(learnCode, out);
             rememberRecentCommit(learnCode, out);
+            rememberLastLearning(learnCode, out);
         } else {
             _recentSingleCommits.clear();
         }
@@ -3719,7 +4149,7 @@ bool IME::commit(int idx, std::string &out) {
     std::string predictKey = predictKeyForCommittedText(out);
     rememberCommittedText(out);
     reset();
-    beginPredict(predictKey);
+    beginPredict(predictKey, bySpace);
     return true;
 }
 
@@ -3730,6 +4160,12 @@ bool IME::handleFullwidthPunct(int key, std::string &out) {
         _recentSingleCommits.clear();
         return true;
     };
+    if (_lastAsciiCommitUs > 0 && esp_timer_get_time() - _lastAsciiCommitUs < 8000000 &&
+        (key == '.' || key == ',' || key == ':' || key == ';' || key == '!' || key == '?' ||
+         key == '-' || key == '/' || key == '@')) {
+        out.assign(1, (char)key);
+        return punctDone();
+    }
     switch (key) {
     case ',':  out = "，"; return punctDone(); // ，
     case '.':  out = "。"; return punctDone(); // 。
@@ -3944,7 +4380,6 @@ bool IME::handleKey(int key, std::string &out) {
                 }
                 _candidateHashCount = 0;
                 _pageAnchor = std::min(_pageStart, std::max(0, (int)_all.size() - 1));
-                _statusMessage = "已降低联想:" + word;
                 if (_all.empty()) reset();
                 else buildPage();
             }
@@ -3989,8 +4424,10 @@ bool IME::handleKey(int key, std::string &out) {
                 int learnWeight = 4 + std::min(_curPage, 2);
                 _predicting = false;
                 bumpPredictFrequency(predKey, out, false, learnWeight);
+                rememberReplacementPreference(predKey, out);
+                rememberLastLearning(predKey, out);
                 rememberCommittedText(out);
-                beginPredict(predictKeyForCommittedText(out));
+                beginPredict(predictKeyForCommittedText(out), false);
             }
             return true;
         }
@@ -4003,8 +4440,10 @@ bool IME::handleKey(int key, std::string &out) {
                 int learnWeight = 4 + std::min(_curPage, 2);
                 _predicting = false;
                 bumpPredictFrequency(predKey, out, false, learnWeight);
+                rememberReplacementPreference(predKey, out);
+                rememberLastLearning(predKey, out);
                 rememberCommittedText(out);
-                beginPredict(predictKeyForCommittedText(out));
+                beginPredict(predictKeyForCommittedText(out), true);
             }
             return true;
         }
@@ -4083,7 +4522,7 @@ bool IME::handleKey(int key, std::string &out) {
         return true;
     }
     if (key == ' ') {
-        if (_page.size() > 0) commit(0, out);
+        if (_page.size() > 0) commit(0, out, true);
         else reset();
         return true;
     }
