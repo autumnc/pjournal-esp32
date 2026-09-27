@@ -182,6 +182,11 @@ private:
     void learnPredictPairs(const std::string &text);
     void learnAutoPhraseFromSingle(const std::string &code, const std::string &word);
     void rememberCommittedText(const std::string &text);
+    void rememberRecentCommit(const std::string &code, const std::string &word);
+    int recentCommitBoost(const std::string &code, const std::string &word) const;
+    void appendRecentCommitCandidates(const std::string &code,
+                                      const std::vector<std::string> &aliasCodes,
+                                      int typedLen);
     bool recentlyDeletedWord(const std::string &word) const;
     void rememberDeletedWord(const std::string &word);
     static bool compactUserEntries(std::vector<UserEntry> &entries, size_t limit);
@@ -189,6 +194,7 @@ private:
     bool _deleteMode = false;
     bool _vMode = false;
     std::vector<std::pair<std::string, std::string>> _recentSingleCommits;
+    std::vector<std::pair<std::string, std::string>> _recentCommittedWords;
     std::vector<std::string> _recentDeletedWords;
     int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
     bool _englishCompose = false;
@@ -224,6 +230,7 @@ private:
     uint32_t _candidateHashes[MAX_CANDIDATES] = {};
     size_t _candidateHashCount = 0;
     std::vector<int> _candLen;  // code length per candidate in _all
+    std::vector<int> _candidateWidths;  // cached text width parallel to _all (-1=unknown)
     std::vector<std::string> _predictCandidateKeys;  // prediction key parallel to _all in predict mode
     std::vector<std::string> _page;
     int _pageStart = 0;

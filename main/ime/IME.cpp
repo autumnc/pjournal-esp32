@@ -1441,8 +1441,8 @@ void IME::addUserWord(const std::string &code, const std::string &word) {
     }
     _dynamicUserWords.push_back({code, word, 0, _trad, userInitialForCode(code)});
     markUserWordIndexesDirty();
-    _dynamicUserDirty = true;
-    saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
+    // The following bumpFrequency() call records the first real count and queues
+    // the deferred journal write, keeping commit latency off the SD card path.
 }
 
 void IME::removeUserWord(const std::string &code, const std::string &word) {
@@ -2079,6 +2079,57 @@ void IME::learnAutoPhraseFromSingle(const std::string &code, const std::string &
     }
 }
 
+void IME::rememberRecentCommit(const std::string &code, const std::string &word) {
+    if (word.empty() || code.empty() || recentlyDeletedWord(word)) return;
+    for (auto it = _recentCommittedWords.begin(); it != _recentCommittedWords.end(); ++it) {
+        if (it->first == code && it->second == word) {
+            _recentCommittedWords.erase(it);
+            break;
+        }
+    }
+    _recentCommittedWords.insert(_recentCommittedWords.begin(), {code, word});
+    if (_recentCommittedWords.size() > 32) _recentCommittedWords.pop_back();
+}
+
+int IME::recentCommitBoost(const std::string &code, const std::string &word) const {
+    if (code.empty() || word.empty()) return 0;
+    for (size_t i = 0; i < _recentCommittedWords.size(); i++) {
+        const auto &item = _recentCommittedWords[i];
+        if (item.second != word) continue;
+        int boost = 6000 - (int)i * 180;
+        if (boost <= 0) return 0;
+        if (item.first == code) return boost + 4000;
+        if (item.first.size() >= code.size() &&
+            strncmp(item.first.c_str(), code.c_str(), code.size()) == 0)
+            return boost;
+    }
+    return 0;
+}
+
+void IME::appendRecentCommitCandidates(const std::string &code,
+                                       const std::vector<std::string> &aliasCodes,
+                                       int typedLen) {
+    if (code.empty() || typedLen < 2 || _recentCommittedWords.empty()) return;
+    auto matchesInput = [&](const std::string &entryCode) -> bool {
+        if ((int)entryCode.size() >= typedLen &&
+            strncmp(entryCode.c_str(), code.c_str(), typedLen) == 0)
+            return true;
+        for (auto &aliasCode : aliasCodes) {
+            int aliasLen = (int)aliasCode.length();
+            if (aliasLen < 1) continue;
+            if ((int)entryCode.size() >= aliasLen &&
+                strncmp(entryCode.c_str(), aliasCode.c_str(), aliasLen) == 0)
+                return true;
+        }
+        return false;
+    };
+    for (auto &item : _recentCommittedWords) {
+        if (!matchesInput(item.first)) continue;
+        appendCandidate(item.second, (int)item.first.length());
+        if (_all.size() >= _candidateLimit) break;
+    }
+}
+
 bool IME::recentlyDeletedWord(const std::string &word) const {
     if (word.empty()) return false;
     for (auto &w : _recentDeletedWords) {
@@ -2153,6 +2204,7 @@ void IME::clearCandidates() {
     _all.clear();
     _candidateHashCount = 0;
     _candLen.clear();
+    _candidateWidths.clear();
     _predictCandidateKeys.clear();
     if (_all.capacity() > MAX_CANDIDATES * 2) _all.shrink_to_fit();
     else if (_all.capacity() < MAX_CANDIDATES / 3) _all.reserve(MAX_CANDIDATES / 3);
@@ -2176,6 +2228,7 @@ bool IME::appendCandidate(const std::string &text, int candLen) {
     else
         _candidateHashCount = 0;
     _candLen.push_back(candLen);
+    _candidateWidths.push_back(-1);
     _predictCandidateKeys.push_back("");
     return true;
 }
@@ -2299,6 +2352,8 @@ void IME::lookup() {
     if (pinyinLen == 0 && _code.length() > 0) {
         _all.push_back(_code.substr(0, 1));
         _candLen.push_back(0);
+        _candidateWidths.push_back(-1);
+        _predictCandidateKeys.push_back("");
         _partialStart = 0;
         _remainder = _code.substr(1);
         perf.setupUs += IME_PERF_NOW() - setupStartUs;
@@ -2309,13 +2364,24 @@ void IME::lookup() {
 
     q = pinyinCode.c_str();
     qlen = pinyinLen;
-    std::vector<std::string> aliasCodes = alternateInputCodes(pinyinCode);
+    static std::string cachedMetaCode;
+    static std::string cachedMetaFuzzy;
+    static std::vector<std::string> cachedAliasCodes;
+    static ime::PinyinSplit cachedPrimarySplit;
+    std::string fuzzyCfg = g_settings.imeFuzzy();
+    if (cachedMetaCode != pinyinCode || cachedMetaFuzzy != fuzzyCfg) {
+        cachedMetaCode = pinyinCode;
+        cachedMetaFuzzy = fuzzyCfg;
+        cachedAliasCodes = alternateInputCodes(pinyinCode);
+        cachedPrimarySplit = ime::PinyinEngine::primarySplit(pinyinCode, true);
+    }
+    const std::vector<std::string> &aliasCodes = cachedAliasCodes;
     rebuildUserWordIndexes();
     bool hasVowel = false;
     for (int i = 0; i < qlen; i++) {
         if (strchr("aeiouv", q[i])) { hasVowel = true; break; }
     }
-    ime::PinyinSplit primarySplit = ime::PinyinEngine::primarySplit(pinyinCode, true);
+    const ime::PinyinSplit &primarySplit = cachedPrimarySplit;
     bool incompletePinyinInput = false;
     if (!primarySplit.tokens.empty()) {
         incompletePinyinInput = primarySplit.tokens.back().partial;
@@ -2437,6 +2503,7 @@ void IME::lookup() {
             }
             if (!matched) continue;
             int score = userCandidateScore(matchedCode, p.count, qlen);
+            score += recentCommitBoost(matchedCode, p.word);
             bool exactCodeMatch = pinyinCodeEqualsAny(matchedCode, pinyinCode, aliasCodes);
             if (p.word.length() <= 3) {
                 // single char
@@ -2513,7 +2580,8 @@ void IME::lookup() {
                         if (wordVisible(_trad, w, wf)) {
                             int consumedLen = aliasScan ? qlen : scanLen;
                             int score = phraseCandidateScore(w, scanLen, scanLen,
-                                                             (int)primarySplit.tokens.size()) + 2000;
+                                                             (int)primarySplit.tokens.size()) + 2000
+                                      + recentCommitBoost(std::string(scanCode, scanLen), w);
                             addRankedCandidate(exactPhraseMatches, w, consumedLen, score, 15);
                         }
                     }
@@ -2534,6 +2602,9 @@ void IME::lookup() {
         perf.userPhraseUs += IME_PERF_NOW() - t;
         if (_all.size() >= _candidateLimit) { perf.exitName = "exact-phrase-limit"; buildPage(); return; }
     }
+
+    appendRecentCommitCandidates(pinyinCode, aliasCodes, qlen);
+    if (_all.size() >= _candidateLimit) { perf.exitName = "recent-limit"; buildPage(); return; }
 
     // Phase 2: single char prefix match (dictionary)
     {
@@ -2621,6 +2692,7 @@ void IME::lookup() {
             int entryCodeLen = (int)strlen(SEG_TABLE[i].code);
             if (!phraseMatureForTyped(entryCodeLen, matchedLen, chars)) continue;
             int score = phraseCandidateScore(w, entryCodeLen, matchedLen, SEG_TABLE[i].syllableCount);
+            score += recentCommitBoost(SEG_TABLE[i].code, w);
             addRankedCandidate(segMatches, w, entryCodeLen, score, 10);
         }
         sortRankedCandidates(segMatches);
@@ -2723,14 +2795,22 @@ void IME::lookup() {
                 });
             std::vector<std::string> sortedAll(_all.begin(), _all.begin() + p4Start);
             std::vector<int> sortedLen(_candLen.begin(), _candLen.begin() + p4Start);
+            std::vector<int> sortedWidths(_candidateWidths.begin(), _candidateWidths.begin() + p4Start);
+            std::vector<std::string> sortedKeys(_predictCandidateKeys.begin(), _predictCandidateKeys.begin() + p4Start);
             sortedAll.reserve(_all.size());
             sortedLen.reserve(_candLen.size());
+            sortedWidths.reserve(_candidateWidths.size());
+            sortedKeys.reserve(_predictCandidateKeys.size());
             for (int i : order) {
                 sortedAll.push_back(std::move(_all[i]));
                 sortedLen.push_back(_candLen[i]);
+                sortedWidths.push_back(i < (int)_candidateWidths.size() ? _candidateWidths[i] : -1);
+                sortedKeys.push_back(i < (int)_predictCandidateKeys.size() ? std::move(_predictCandidateKeys[i]) : "");
             }
             _all.swap(sortedAll);
             _candLen.swap(sortedLen);
+            _candidateWidths.swap(sortedWidths);
+            _predictCandidateKeys.swap(sortedKeys);
         }
         perf.phraseSortUs += IME_PERF_NOW() - t;
     }
@@ -2802,6 +2882,7 @@ void IME::lookup() {
             const std::string &init = p.initial;
             if ((int)init.length() >= qlen && strncmp(init.c_str(), q, qlen) == 0) {
                 int score = p.count * 8 + (((int)init.length() == qlen) ? 100000 : std::max(0, 64 - ((int)init.length() - qlen)));
+                score += recentCommitBoost(p.code, p.word);
                 bool found = false;
                 for (auto &uf : userInitFreq) {
                     if (uf.second == p.word) {
@@ -3058,6 +3139,8 @@ void IME::lookupEnglishMode() {
     if (!exact && !_code.empty()) {
         _all.insert(_all.begin(), q);
         _candLen.insert(_candLen.begin(), (int)q.length());
+        _candidateWidths.insert(_candidateWidths.begin(), -1);
+        _predictCandidateKeys.insert(_predictCandidateKeys.begin(), "");
         rebuildCandidateHashes();
     }
     buildPage();
@@ -3184,6 +3267,8 @@ void IME::lookupVMode() {
         if (!dup) {
             _all.insert(_all.begin(), body);
             _candLen.insert(_candLen.begin(), (int)_code.length());
+            _candidateWidths.insert(_candidateWidths.begin(), -1);
+            _predictCandidateKeys.insert(_predictCandidateKeys.begin(), "");
             rebuildCandidateHashes();
         }
     }
@@ -3460,17 +3545,23 @@ void IME::buildPage() {
         _pageStarts.clear();
         _pageStarts.push_back(0);
         int lineW = 0;
+        int numWidths[10] = {};
         for (int i = 0; i < (int)_all.size(); i++) {
             int pageCount = i - (int)_pageStarts.back();
             char num[16];
             snprintf(num, sizeof(num), " %d.", pageCount + 1);
-            std::string part = std::string(num) + _all[i];
-            int partW = _widthFn(part.c_str());
+            if (pageCount + 1 >= 1 && pageCount + 1 <= 9 && numWidths[pageCount + 1] == 0)
+                numWidths[pageCount + 1] = _widthFn(num);
+            if (i >= (int)_candidateWidths.size()) _candidateWidths.resize(_all.size(), -1);
+            if (_candidateWidths[i] < 0) _candidateWidths[i] = _widthFn(_all[i].c_str());
+            int partW = ((pageCount + 1 >= 1 && pageCount + 1 <= 9) ? numWidths[pageCount + 1] : _widthFn(num))
+                      + _candidateWidths[i];
             if (lineW > 0 && (pageCount >= 9 || lineW + partW > _displayWidth)) {
                 _pageStarts.push_back(i);
                 lineW = 0;
                 snprintf(num, sizeof(num), " 1.");
-                partW = _widthFn((std::string(num) + _all[i]).c_str());
+                if (numWidths[1] == 0) numWidths[1] = _widthFn(num);
+                partW = numWidths[1] + _candidateWidths[i];
             }
             lineW += partW;
         }
@@ -3598,22 +3689,26 @@ bool IME::commit(int idx, std::string &out) {
         return false;
     }
     if (_prefix.length() > 0) {
+        std::string learnCode = _codeOrig;
         _prefix += out;
         _recentSingleCommits.clear();
         if (hasUpperSuffix) _prefix += _code.substr(pLen);
         _displayCodeDirty = true;
         if (!hasUpperSuffix) {
-            addUserWord(_codeOrig, _prefix);
-            bumpFrequency(_codeOrig, _prefix, learnWeight);
-            for (auto &code : alternateLearningCodes(_codeOrig)) bumpFrequency(code, _prefix);
+            addUserWord(learnCode, _prefix);
+            bumpFrequency(learnCode, _prefix, learnWeight);
+            for (auto &code : alternateLearningCodes(learnCode)) bumpFrequency(code, _prefix);
+            rememberRecentCommit(learnCode, _prefix);
         }
         out = _prefix;
     } else {
+        std::string learnCode = _code;
         if (hasUpperSuffix) out += _code.substr(pLen);
         if (!hasUpperSuffix) {
-            bumpFrequency(_code, out, learnWeight);
-            for (auto &code : alternateLearningCodes(_code)) bumpFrequency(code, out);
-            learnAutoPhraseFromSingle(_code, out);
+            bumpFrequency(learnCode, out, learnWeight);
+            for (auto &code : alternateLearningCodes(learnCode)) bumpFrequency(code, out);
+            learnAutoPhraseFromSingle(learnCode, out);
+            rememberRecentCommit(learnCode, out);
         } else {
             _recentSingleCommits.clear();
         }
@@ -3842,6 +3937,7 @@ bool IME::handleKey(int key, std::string &out) {
                     if (_all[i] == word) {
                         _all.erase(_all.begin() + i);
                         if (i < (int)_candLen.size()) _candLen.erase(_candLen.begin() + i);
+                        if (i < (int)_candidateWidths.size()) _candidateWidths.erase(_candidateWidths.begin() + i);
                         if (i < (int)_predictCandidateKeys.size())
                             _predictCandidateKeys.erase(_predictCandidateKeys.begin() + i);
                     }
@@ -3856,6 +3952,27 @@ bool IME::handleKey(int key, std::string &out) {
         }
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
             _predicting = false;
+            char cl = (char)tolower(key);
+            if (!_deleteMode && !_lfMode && key >= 'A' && key <= 'Z') {
+                _englishCompose = true;
+                _code = (char)key;
+                _displayCodeDirty = true;
+                lookupEnglishMode();
+                return true;
+            }
+            if (!_deleteMode && !_lfMode && cl == 'v') {
+                _vMode = true;
+                _code = "v";
+                _displayCodeDirty = true;
+                lookupVMode();
+                return true;
+            }
+#if PJOURNAL_IME_ENABLE_LIANGFEN
+            if (!_deleteMode && !_lfMode && cl == 'u') {
+                loadLfDict();
+                if (_lfBlob) { _lfMode = true; _maxCode = 12; return true; }
+            }
+#endif
             _code = (char)key;
             _displayCodeDirty = true;
             lookup();

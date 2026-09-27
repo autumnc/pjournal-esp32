@@ -15,3 +15,11 @@ jintianxiangxie	今天想写	1
 jintianxiangjilu	今天想记录	1
 mingtianjixuchuli	明天继续处理	1
 wentiyijingjiejue	问题已经解决	1
+youhua	优化	1
+shurutiyan	输入体验	1
+lianxiang	联想	1
+houxuan	候选	1
+cipin	词频	2
+duanju	短句	1
+biaodianfuhao	标点符号	3
+lanyajianpan	蓝牙键盘	3
