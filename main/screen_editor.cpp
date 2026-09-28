@@ -544,6 +544,29 @@ static int utf8Count(const std::string &s) {
     return n;
 }
 
+// 喂给输入法的"文档上下文":光标之前的正文尾部约 200 字。从末行往前拼、拼够就停,
+// 免得为一个尾窗口把整篇正文复制一遍。只取光标之前的内容,后面还没写的不算上下文。
+static std::string editorImeContextText() {
+    const int kTargetChars = 200;
+    const size_t kMaxBytes = 640;  // 200 个 CJK 字的上限,超出按字节裁并回退到字边界
+    std::string tail;
+    int chars = 0;
+    for (int y = g_editor.cy; y >= 0; y--) {
+        const std::string &line = g_editor.lines[y];
+        tail.insert(0, line);
+        chars += utf8Count(line) + 1;  // +1 记行间换行
+        if (y > 0) tail.insert(0, "\n");
+        if (chars >= kTargetChars) break;
+    }
+    while (!tail.empty() && tail.front() == '\n') tail.erase(0, 1);
+    if (tail.size() > kMaxBytes) {
+        size_t start = tail.size() - kMaxBytes;
+        while (start < tail.size() && ((unsigned char)tail[start] & 0xC0) == 0x80) start++;
+        tail.erase(0, start);
+    }
+    return tail;
+}
+
 static void moveCursorVerticalInline(int step) {
     if (step < 0) {
         if (g_editor.cx > 0) {
@@ -947,6 +970,7 @@ static void searchClose() {
     sh.matches.clear();
     sh.cur = -1;
     g_ime.setActive(g_editor.imeActive);  // 恢复编辑器输入法状态
+    if (g_editor.imeActive) g_ime.setDocumentContext(editorImeContextText());
 }
 
 static void searchInsertFocused(const std::string &ins) {
@@ -1770,6 +1794,9 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
                 }
             }
             editorInsertText(imeOut);
+            // 刚上屏的词要立刻进文档上下文: 同一篇里再次输入同一个人名/术语时它就该
+            // 排在前面。空串(取消组合等)不必重扫。
+            if (!imeOut.empty()) g_ime.setDocumentContext(editorImeContextText());
             ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
         }
     }
@@ -2283,6 +2310,7 @@ bool app_ime_active() {
 void app_toggle_ime() {
     g_editor.imeActive = !g_editor.imeActive;
     g_ime.setActive(g_editor.imeActive);
+    if (g_editor.imeActive) g_ime.setDocumentContext(editorImeContextText());
 }
 
 bool app_ime_fullwidth() {
@@ -2332,6 +2360,7 @@ void app_editor_restore_stashed_session() {
     s_hasStashedEditor = false;
     g_editor.drawnOnce = false;
     g_ime.setActive(g_editor.imeActive);
+    if (g_editor.imeActive) g_ime.setDocumentContext(editorImeContextText());
     markDirty();
 }
 

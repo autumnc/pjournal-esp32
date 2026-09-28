@@ -37,6 +37,8 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_input_mode", "输入模式", false, true},
     {"_ime_fuzzy", "拼音模糊音", false, true},
     {"_ime_predict_mode", "联想候选", false, true},
+    {"ime_sentence", "整句候选", false, false},
+    {"ime_doc_context", "正文词优先", false, false},
     {"click_enabled", "打字音效", false, false},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -206,7 +208,8 @@ static bool isToggleField(const char *key) {
            strcmp(key, "sleep_screen") == 0 || strcmp(key, "md_render") == 0 ||
            strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0 ||
            strcmp(key, "recovery_draft") == 0 || strcmp(key, "vertical_ref_line") == 0 ||
-           strcmp(key, "click_enabled") == 0;
+           strcmp(key, "click_enabled") == 0 || strcmp(key, "ime_sentence") == 0 ||
+           strcmp(key, "ime_doc_context") == 0;
 }
 
 static bool toggleValue(const char *key) {
@@ -215,6 +218,8 @@ static bool toggleValue(const char *key) {
     if (strcmp(key, "md_render") == 0) return v != "0";   // 默认开
     if (strcmp(key, "recovery_draft") == 0) return v != "0";  // 默认开
     if (strcmp(key, "click_enabled") == 0) return v != "0";  // 默认开
+    if (strcmp(key, "ime_sentence") == 0) return v != "0";  // 默认开
+    if (strcmp(key, "ime_doc_context") == 0) return v != "0";  // 默认开
     return v == "1";  // auto_save: 默认关
 }
 

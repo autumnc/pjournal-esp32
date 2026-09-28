@@ -77,6 +77,44 @@ static const size_t IME_SHORTCUT_RESERVE = 3;
 // 学习就把常用字挤出首屏。
 static const int IME_SINGLE_PRIOR_STEP = 1000;
 static const int IME_SINGLE_CTX_BOOST_CAP = 3000;
+// 整句覆盖(词图 beam search)。长全拼串在词库里没有整串条目, 前面的相位只会给出首音节
+// 的单字(Phase 8 逐字匹配一定能把首字母那几个码填满), 所以整句候选不能是"兜底追加",
+// 必须排在所有相位之前才有机会出现在首屏。
+static const int IME_SENTENCE_MIN_LEN = 6;
+// 上限按"整句全拼"定, 典型的六到八字句子(shurufazhendehenhaoyong=23)要能覆盖到。
+// 再长也只是让总扫描预算先耗完、后续位置收不到弧, 落回一个候选都不出, 不会出错。
+static const int IME_SENTENCE_MAX_LEN = 24;
+static const int IME_SENTENCE_BEAM = 8;
+static const int IME_SENTENCE_RESULTS = 3;
+// 每个起点的桶扫描上限。sh/zh 这类桶有 3000+ 组, 要走到 "jintian…"/"shuru…" 这种
+// 靠后的前缀必须扫穿大半个桶, 截断太早会连一个词弧都收不到。
+static const int IME_SENTENCE_BUCKET_SCAN = 3600;
+// 整次 lookup 的组扫描总量上限, 兜住 16 个起点 × 大桶的最坏开销。
+static const int IME_SENTENCE_TOTAL_SCAN = 8000;
+static const int IME_SENTENCE_WORD_ARCS = 3;    // 每个词条取词频最高的几个词
+static const int IME_SENTENCE_SINGLE_ARCS = 2;  // 每个音节取最高频的几个单字
+// 至少要四个音节才拼句。三个音节的输入在词库里基本都有现成的词("xiexieni"→谢谢你,
+// "renminbi"→人民币), 而拼句在三个音节上经常切错("nihaoma"→你号码、"wanshanghao"→
+// 玩上好), 排在首位反而是负收益。四个音节以上词库就几乎不出候选了(实测
+// tahenhaokan/wodejiaxiang/nizaiganshenme 都没有词条), 追加只有好处。
+static const int IME_SENTENCE_MIN_TOKENS = 4;
+// 整句相位单独的低阈值探针: 它可能只有几毫秒, 达不到 12ms 的总阈值, 但那正是
+// 需要盯着看的数字。
+static const int IME_SENTENCE_PERF_LOG_US = 3000;
+// 弧打分。词弧按字数给正分, 单字给负分(等于每条弧的固定罚项), 这样 DP 才不会把
+// "xian" 拆成 "xi"+"an" 去多赚一条弧的分——没有弧罚项时它一定会这么拆。
+static const int IME_SENTENCE_WORD_UNIT = 4000;
+static const int IME_SENTENCE_ARC_PENALTY = 500;
+static const int IME_SENTENCE_SINGLE = -400;
+static const int IME_SENTENCE_RANK_WORD = 300;
+static const int IME_SENTENCE_RANK_SINGLE = 60;
+// 位置长度偏置。词库没有词频, 同分路径只能靠"尽量少切、长弧优先"来定序: Σcl 恒等于
+// 整串长度, 但按位置加权后 Σ cl*(len-pos) 在同样条数下偏爱靠前的长弧(等价于最大化
+// 最长匹配), 于是 "womenxianzaiqu" 选 我们+现在+去 而不是 我们+先+在+去。
+static const int IME_SENTENCE_LEN_BIAS = 1;
+// 只给整句首词的弧加搭配分(上文最该预测的就是下一句的起头), 且压得比单字那条更小:
+// 首词选错会带偏整句, 所以不让一次偶发学习压过词库本身的词频。
+static const int IME_SENTENCE_CTX_CAP = 1500;
 static inline std::string str_trim(const std::string &s);
 #if PJOURNAL_IME_FAST_LOOKUP
 static const int IME_SEG_TABLE_MIN_LEN = 2;
@@ -743,6 +781,7 @@ struct ImePerfTrace {
     int64_t shorthandUs = 0;
     int64_t partialUs = 0;
     int64_t recentUs = 0;
+    int64_t sentenceUs = 0;
     // Sub-timings already contained in setupUs/userUs above. Reported for
     // attribution only, deliberately NOT summed into trackedUs/otherUs.
     int64_t rebuildUs = 0;        // setupUs subset: full user-word index rebuild
@@ -780,18 +819,19 @@ struct ImePerfTrace {
             initialUs < IME_PERF_SLOW_US &&
             shorthandUs < IME_PERF_SLOW_US &&
             partialUs < IME_PERF_SLOW_US &&
-            recentUs < IME_PERF_SLOW_US)
+            recentUs < IME_PERF_SLOW_US &&
+            sentenceUs < IME_PERF_SLOW_US)
             return;
         int64_t trackedUs = setupUs + userUs + singleUs + segUs + userPhraseUs +
                             phraseUs + phraseSortUs + userInitialUs + initialUs +
-                            shorthandUs + partialUs + recentUs;
+                            shorthandUs + partialUs + recentUs + sentenceUs;
         int64_t otherUs = totalUs > trackedUs ? totalUs - trackedUs : 0;
         ESP_LOGW(IME_TAG,
                  "perf lookup code='%s' exit=%s total=%lldus cand=%u limit=%u hv=%d inc=%d fixed=%d "
                  "setup=%lld[rebuild=%lld r=%d meta=%lld] user=%lld[fixed=%lld dyn=%lld] "
                  "single=%lld seg=%lld[split=%lld match=%lld sort=%lld] userPhrase=%lld "
                  "phrase=%lld sort=%lld userInit=%lld[segInit=%lld dedup=%lld boost=%lld rest=%lld siSort=%lld uiSort=%lld] "
-                 "init=%lld shorthand=%lld partial=%lld recent=%lld other=%lld",
+                 "init=%lld shorthand=%lld partial=%lld recent=%lld sentence=%lld other=%lld",
                  code.c_str(), exitName, (long long)totalUs, (unsigned)candidates.size(),
                  (unsigned)limit, hasVowel ? 1 : 0, incomplete ? 1 : 0, fixedPaging ? 1 : 0,
                  (long long)setupUs, (long long)rebuildUs, rebuilt ? 1 : 0, (long long)metaUs,
@@ -804,7 +844,7 @@ struct ImePerfTrace {
                  (long long)segInitDedupUs, (long long)segInitBoostUs, (long long)segInitRestUs,
                  (long long)segInitSortUs, (long long)userInitSortUs,
                  (long long)initialUs, (long long)shorthandUs, (long long)partialUs,
-                 (long long)recentUs, (long long)otherUs);
+                 (long long)recentUs, (long long)sentenceUs, (long long)otherUs);
     }
 };
 
@@ -1240,6 +1280,8 @@ bool IME::begin() {
     }
     _loaded = true;
     _imeDebugLog = g_settings.imeDebug();
+    _sentenceMode = g_settings.imeSentence();
+    _docCtxMode = g_settings.imeDocContext();
     static const char *NAMES[] = {"Wubi", "Pinyin", "Shuangpin"};
     ESP_LOGI(IME_TAG, "ready: %s, %u records, codeLen %d",
              NAMES[_scheme <= SHUANGPIN ? _scheme : 0], (unsigned)_count, _codeLen);
@@ -2470,6 +2512,83 @@ void IME::rememberReplacementPreference(const std::string &code, const std::stri
     }
 }
 
+// 文档级上下文(#13)。与 contextCandidateBoost 的区别: 那个看的是"上一句结尾预测下一
+// 个词", 这个看的是"整篇正文里已经出现过的词"。只加分不压制, 且上限刻意压得很小,
+// 否则会变成"写什么就推什么"的自激——正文里写过的词被推到第一, 再上屏又加强它。
+static const int IME_DOC_CTX_UNIT = 100;       // 每出现一次加的分
+static const int IME_DOC_CTX_MAX_HITS = 4;     // 出现次数封顶, 即最高 400 分
+static const int IME_DOC_CTX_PROBE = 16;       // 线性探测步数上限
+
+uint32_t IME::docCtxHash(const char *p, size_t n) {
+    // FNV-1a。返回值避开 0, 因为 0 是空槽标记。
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) {
+        h ^= (unsigned char)p[i];
+        h *= 16777619u;
+    }
+    return h ? h : 1u;
+}
+
+void IME::rebuildDocumentContext(const std::string &text) {
+    memset(_docCtxHashes, 0, sizeof(_docCtxHashes));
+    memset(_docCtxCounts, 0, sizeof(_docCtxCounts));
+    if (!_docCtxMode || text.empty()) return;
+    auto addGram = [&](const char *p, size_t len) {
+        uint32_t h = docCtxHash(p, len);
+        int base = (int)(h & (uint32_t)(DOC_CTX_SLOTS - 1));
+        for (int probe = 0; probe < IME_DOC_CTX_PROBE; probe++) {
+            int s = (base + probe) & (DOC_CTX_SLOTS - 1);
+            if (_docCtxCounts[s] == 0) {
+                _docCtxHashes[s] = h;
+                _docCtxCounts[s] = 1;
+                return;
+            }
+            if (_docCtxHashes[s] == h) {
+                if (_docCtxCounts[s] < 255) _docCtxCounts[s]++;
+                return;
+            }
+        }
+    };
+    const size_t n = text.size();
+    size_t pos = 0;
+    while (pos < n) {
+        if (!isCjkCodepoint(utf8CodepointAt(text, pos))) {
+            pos = utf8CharEnd(text, pos);
+            continue;
+        }
+        // 片段必须是连续 CJK: 遇到标点/拉丁字母就停, 不跨过去凑字。
+        size_t end = pos;
+        for (int k = 1; k <= DOC_CTX_MAX_N; k++) {
+            end = utf8CharEnd(text, end);
+            if (end > n) break;
+            if (k >= 2) addGram(text.data() + pos, end - pos);
+            if (end < n && !isCjkCodepoint(utf8CodepointAt(text, end))) break;
+        }
+        pos = utf8CharEnd(text, pos);
+    }
+}
+
+int IME::documentContextBoost(const std::string &word) const {
+    int chars = utf8TextCharCount(word);
+    if (chars < 2 || chars > DOC_CTX_MAX_N) return 0;
+    uint32_t h = docCtxHash(word.data(), word.size());
+    int base = (int)(h & (uint32_t)(DOC_CTX_SLOTS - 1));
+    for (int probe = 0; probe < IME_DOC_CTX_PROBE; probe++) {
+        int s = (base + probe) & (DOC_CTX_SLOTS - 1);
+        if (_docCtxCounts[s] == 0) return 0;
+        if (_docCtxHashes[s] == h) {
+            int hits = _docCtxCounts[s];
+            if (hits > IME_DOC_CTX_MAX_HITS) hits = IME_DOC_CTX_MAX_HITS;
+            return hits * IME_DOC_CTX_UNIT;
+        }
+    }
+    return 0;
+}
+
+void IME::setDocumentContext(const std::string &text) {
+    rebuildDocumentContext(text);
+}
+
 void IME::rebuildContextBoostScores() {
     if (_contextBoostScoresContext == _lastCommitText) return;
 #if PJOURNAL_IME_PERF_LOG
@@ -2537,10 +2656,15 @@ void IME::rebuildContextBoostScores() {
 }
 
 int IME::contextCandidateBoost(const std::string &word) {
-    if (word.empty() || _lastCommitText.empty()) return 0;
+    if (word.empty()) return 0;
+    // 文档级小加分先算: 它在没有上文(_lastCommitText 为空)时也要生效, 所以不能放到
+    // 下面那个 early return 之后。取 max 而不是相加, 保证总分不超过原来那条路的量级。
+    const int docBoost = documentContextBoost(word);
+    if (_lastCommitText.empty()) return docBoost;
     rebuildContextBoostScores();
     auto it = _contextBoostScores.find(word);
-    if (it != _contextBoostScores.end()) return it->second;
+    if (it != _contextBoostScores.end())
+        return it->second > docBoost ? it->second : docBoost;
     // 逐前缀回退。用字节偏移判断 CJK, 避免给每个字分配临时 std::string——
     // 本函数在候选扫描循环里逐个调用, 短词命中时分配量很可观。
     int best = 0;
@@ -2554,7 +2678,7 @@ int IME::contextCandidateBoost(const std::string &word) {
         if (pit != _contextBoostScores.end())
             best = std::max(best, pit->second - 300);
     }
-    return best;
+    return best > docBoost ? best : docBoost;
 }
 
 // Compares candidate hashes rather than strings so this stays allocation-free on
@@ -2617,6 +2741,27 @@ void IME::appendEnglishInlineCandidates(const std::string &code) {
     for (; it != _englishWords.end() && added < 6 && _all.size() < _candidateLimit; ++it) {
         if (it->find(code) != 0) break;
         if (appendCandidate(*it, (int)code.length())) added++;
+    }
+}
+
+// 无前缀快捷符号表(#14), 由 lookup 的 Phase 0 按精确整码匹配取用。表里只放没有中文
+// 读法的短码, 所以"整码命中"不会劫持任何有拼音解释的码。
+struct ShortcutSymbol { const char *code; const char *text; };
+static const ShortcutSymbol K_SHORTCUT_SYMBOLS[] = {
+    {"rmb", "￥"}, {"cny", "￥"}, {"usd", "$"},   {"eur", "€"},
+    {"gbp", "£"}, {"jpy", "¥"},  {"hkd", "HK$"}, {"twd", "NT$"},
+    {"krw", "₩"}, {"sgd", "S$"}, {"aud", "A$"},  {"cad", "C$"},
+    {"chf", "CHF"}, {"inr", "₹"}, {"rub", "₽"}, {"thb", "฿"},
+    {"btc", "₿"}, {"copy", "©"}, {"sect", "§"}, {"para", "¶"},
+    {nullptr, nullptr},
+};
+
+void IME::appendShortcutSymbol(const char *code, int len) {
+    for (int i = 0; K_SHORTCUT_SYMBOLS[i].code; i++) {
+        if ((int)strlen(K_SHORTCUT_SYMBOLS[i].code) != len) continue;
+        if (strncmp(K_SHORTCUT_SYMBOLS[i].code, code, len) != 0) continue;
+        appendCandidate(K_SHORTCUT_SYMBOLS[i].text, len);
+        return;
     }
 }
 
@@ -2938,6 +3083,13 @@ void IME::lookup() {
 
 #if PJOURNAL_IME_ENABLE_LIANGFEN
     if (_lfMode && _lfBlob) {
+        // 'u' 是两分输入的前缀, 被 handleKey 吞掉而不进 _code, 所以快捷表里唯一以 u
+        // 开头的 usd 拿不到精确整码匹配。这里把那个 'u' 补回来再查一次。
+        if (qlen >= 2 && qlen <= 3) {
+            std::string fullCode = "u";
+            fullCode.append(q, qlen);
+            appendShortcutSymbol(fullCode.c_str(), (int)fullCode.length());
+        }
         uint32_t llo, lhi;
         searchLfWindow(q, qlen, llo, lhi);
         while (llo < lhi) {
@@ -3003,6 +3155,35 @@ void IME::lookup() {
         perf.exitName = "delete";
         buildPage();
         return;
+    }
+
+    // Phase 0: 无前缀快捷符号(#14), 精确整码匹配。表里全是没有拼音读法的短码, 所以
+    // "整码命中"本身就安全——不会被任何有拼音解释的码触发。必须排在各相位之前: 放在
+    // 最后追加时 Phase 8 的逐字匹配已经用首字母的单字占满首屏, 用户看不到符号。
+    if (qlen >= 3 && qlen <= 4) appendShortcutSymbol(q, qlen);
+
+    // Phase 0b: 整句覆盖。长全拼串前面的相位只会给出首音节单字, 这里把整句作为首选
+    // 候选放在最前, 后面的相位照常追加。
+    if (_sentenceMode && _scheme == PINYIN && hasVowel && !incompletePinyinInput &&
+        _dict.hasWords() && qlen >= IME_SENTENCE_MIN_LEN && qlen <= IME_SENTENCE_MAX_LEN &&
+        (int)primarySplit.tokens.size() >= IME_SENTENCE_MIN_TOKENS) {
+        int64_t t = IME_PERF_NOW();
+#if PJOURNAL_IME_PERF_LOG
+        size_t before = _all.size();
+#endif
+        appendSentenceCandidates(q, qlen);
+        perf.sentenceUs += IME_PERF_NOW() - t;
+#if PJOURNAL_IME_PERF_LOG
+        // 整句相位单独用低阈值探针: 三五毫秒不会触发 12ms 的总日志, 但那正是
+        // 需要盯着看的数字。
+        if (perf.sentenceUs >= IME_SENTENCE_PERF_LOG_US) {
+            ESP_LOGW(IME_TAG,
+                     "perf sentence code='%s' total=%lldus arcs=%u nodes=%u groups=%d added=%u",
+                     _code.c_str(), (long long)perf.sentenceUs,
+                     (unsigned)_sentenceArcs.size(), (unsigned)_sentenceNodes.size(),
+                     _sentenceGroupsScanned, (unsigned)(_all.size() - before));
+        }
+#endif
     }
 
     // Phase 1: user dict single chars — highest priority (phrases emitted in Phase 3)
@@ -3401,12 +3582,6 @@ void IME::lookup() {
     if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "user-prefix-phrase-limit"; buildPage(); return; }
     }
 
-    // Low-priority inline English candidates for technical mixed input. These
-    // stay behind Chinese phrase paths so common pinyin is not hijacked.
-    if (hasVowel && !incompletePinyinInput && _all.size() < _candidateLimit) {
-        appendEnglishInlineCandidates(pinyinCode);
-    }
-
     // Phase 4c: curated supplemental phrases for shorthand initials.
     bool curatedInitialFilled = false;
     if (!hasVowel && qlen >= 2 && _all.size() < _candidateLimit) {
@@ -3715,6 +3890,13 @@ void IME::lookup() {
         }
         perf.partialUs += IME_PERF_NOW() - t;
     }
+
+    // 低优先级的行内英文候选(中英混排用)。排在所有中文路径之后, 否则会埋掉 Phase 7
+    // 的简写/尾码匹配——这个相位对含元音的多音节码是有效的。
+    if (hasVowel && !incompletePinyinInput && _all.size() < _candidateLimit) {
+        appendEnglishInlineCandidates(pinyinCode);
+    }
+
     perf.exitName = "end";
     buildPage();
 }
@@ -4080,6 +4262,213 @@ void IME::appendSingleCharCandidates(const std::string &prefix, int candLen, siz
         IME_MAX_SHORT_CONSONANT_SINGLE_SCAN : IME_MAX_SINGLE_RECORD_SCAN;
     appendScoredSingleChars(prefix.c_str(), qlen, scanBudget,
                             /*codeLenFromRecord=*/false, candLen, cap);
+}
+
+// ── 整句覆盖(#12) ────────────────────────────────────────────────────────────
+// 长全拼串在词表里没有整串条目, 前面的相位只会给出首音节的单字(Phase 8 逐字匹配),
+// 所以这个相位排在 lookup 最前面, 整句候选取代那些单字坐上首屏。
+// 这里把编码切成一张词图, 用 beam search 找覆盖整串的若干条最优路径:
+//   词弧   词典词组, 其码恰好等于 [pos, pos+cl) 这一段
+//   单字弧 该段恰好是一个合法音节, 取单字表里最高频的几个字
+// 弧 = (lo, hi, word, score), 用 word 消费掉编码的 [lo, hi) 段。
+// 词弧按字数给正分, 单字弧给负分, 每条弧统一扣一个罚项: 少了罚项, DP 一定会把
+// "xian" 拆成 "xi"+"an" 去多赚一条弧的分。位次按桶内顺序当词频先验。
+void IME::collectSentenceArcs(int pos, const char *code, int len) {
+    const int remain = len - pos;
+    if (remain <= 0) return;
+    const int totalLeft = IME_SENTENCE_TOTAL_SCAN - _sentenceGroupsScanned;
+    if (totalLeft <= 0) return;
+    const int budget = totalLeft < IME_SENTENCE_BUCKET_SCAN ? totalLeft : IME_SENTENCE_BUCKET_SCAN;
+    // 搭配分只给整句首词: 上一次上屏预测的是下一句的起头, 句中词与它没有搭配关系。
+    auto ctxBoost = [&](const std::string &w) {
+        if (pos != 0) return 0;
+        int cb = contextCandidateBoost(w);
+        return cb > IME_SENTENCE_CTX_CAP ? IME_SENTENCE_CTX_CAP : cb;
+    };
+    auto pushWordArc = [&](const std::string &w, int cl, int rank) {
+        SentenceArc arc;
+        arc.lo = (uint8_t)pos;
+        arc.hi = (uint8_t)(pos + cl);
+        arc.score = IME_SENTENCE_WORD_UNIT * (utf8TextCharCount(w) - 1)
+                  - IME_SENTENCE_RANK_WORD * rank - IME_SENTENCE_ARC_PENALTY
+                  + IME_SENTENCE_LEN_BIAS * cl * (len - pos)
+                  + ctxBoost(w);
+        arc.word = w;
+        _sentenceArcs.push_back(std::move(arc));
+    };
+
+    // 1) 词典词弧。词表只按前两位分桶, 桶内按整码升序, 所以从桶首顺扫、遇到
+    //    比目标前缀大的组就停。大桶(sh/ji)要扫几千组才走到目标前缀, 靠总预算兜底。
+    if (_dict.hasWords()) {
+        size_t wlo = 0, whi = 0;
+        wordWindowCached(code + pos, remain >= 2 ? 2 : 1, wlo, whi);
+        const uint8_t *wordData = _dict.wordData();
+        size_t wpos = wlo;
+        int scanned = 0;
+        while (wpos < whi && scanned < budget) {
+            uint8_t cl = wordData[wpos];
+            if (cl == 0 || wpos + 1 + cl > whi) break;
+            const uint8_t *wc = wordData + wpos + 1;
+            size_t p = wpos + 1 + cl;
+            if (p >= whi) break;
+            uint8_t n = wordData[p++];
+            scanned++;
+            int cmp = memcmp(wc, code + pos, cl < remain ? cl : remain);
+            if (cmp > 0) break;
+            if (cmp == 0 && cl > remain) break;  // 组码比整串还长, 后面的组只会更大
+            const bool matched = (cl <= remain) && cmp == 0;
+            int taken = 0;
+            for (uint8_t j = 0; j < n; j++) {
+                if (p + 1 > whi) { p = whi; break; }
+                uint8_t wl = wordData[p];
+                if (wl == 0 || p + 1 + wl + 1 > whi) { p = whi; break; }
+                if (matched && taken < IME_SENTENCE_WORD_ARCS) {
+                    std::string w((const char *)wordData + p + 1, wl);
+                    if (wordVisible(_trad, w, wordData[p + 1 + wl])) {
+                        pushWordArc(w, cl, taken);
+                        taken++;
+                    }
+                }
+                p += 1 + wl + 1;
+            }
+            wpos = p;
+        }
+        _sentenceGroupsScanned += scanned;
+    }
+
+    // 2) 单字弧: 段必须恰好是一个合法音节, 否则 "xian" 会被当两个段各出一个字。
+    const int maxSyl = remain < MAX_CODE_LEN ? remain : MAX_CODE_LEN;
+    for (int cl = 1; cl <= maxSyl; cl++) {
+        char syl[MAX_CODE_LEN + 1];
+        memcpy(syl, code + pos, cl);
+        syl[cl] = '\0';
+        if (!ime::PinyinEngine::isValidSyllable(syl)) continue;
+        uint32_t slo = 0, shi = 0;
+        searchWindow(code + pos, cl, slo, shi);
+        uint32_t i = _dict.lowerBoundSingle(code + pos, cl, slo, shi);
+        int taken = 0;
+        for (; i < shi && taken < IME_SENTENCE_SINGLE_ARCS; i++) {
+            char rcode[MAX_CODE_LEN + 1];
+            if (!readCode(i, rcode)) break;
+            if (strncmp(rcode, code + pos, cl) != 0) break;
+            if (readRecordFlag(i) & (_trad ? 0x01 : 0x02)) continue;
+            char hz[HANZI_SIZE + 1];
+            if (!readHanzi(i, hz)) break;
+            SentenceArc arc;
+            arc.lo = (uint8_t)pos;
+            arc.hi = (uint8_t)(pos + cl);
+            arc.word = hz;
+            arc.score = IME_SENTENCE_SINGLE - IME_SENTENCE_RANK_SINGLE * taken
+                      + IME_SENTENCE_LEN_BIAS * cl * (len - pos) + ctxBoost(arc.word);
+            _sentenceArcs.push_back(std::move(arc));
+            taken++;
+        }
+    }
+
+    // 3) 用户词库词弧。桶按前两位分且桶很小, 直接扫桶比走词典便宜; 桶内已按使用
+    //    次数降序, 所以位次就是频率先验。
+    auto scanUserArcs = [&](const std::vector<UserEntry> &entries,
+                            const std::unordered_map<int, std::vector<uint16_t>> &index) {
+        auto it = index.find(segPrefixKey(code + pos, remain >= 2 ? 2 : 1));
+        if (it == index.end()) return;
+        int taken = 0;
+        for (uint16_t ei : it->second) {
+            if (taken >= IME_SENTENCE_WORD_ARCS) break;
+            if (ei >= entries.size()) continue;
+            const UserEntry &e = entries[ei];
+            if (e.trad != _trad) continue;
+            std::string ec = e.code;
+            if (ec.find('\'') != std::string::npos) ec = ime::PinyinEngine::removeSplit(ec);
+            int cl = (int)ec.length();
+            if (cl < 2 || cl > remain) continue;
+            if (memcmp(ec.c_str(), code + pos, cl) != 0) continue;
+            pushWordArc(e.word, cl, taken);
+            taken++;
+        }
+    };
+    scanUserArcs(_fixedUserWords, _fixedUserCodeIndex);
+    scanUserArcs(_dynamicUserWords, _dynamicUserCodeIndex);
+}
+
+void IME::appendSentenceCandidates(const char *code, int len) {
+    if (!code || len < IME_SENTENCE_MIN_LEN || len > IME_SENTENCE_MAX_LEN) return;
+    _sentenceArcs.clear();
+    _sentenceNodes.clear();
+    _sentenceCands.clear();
+    _sentenceByHi.clear();
+    _sentenceNodeOff.assign(len + 2, 0);
+    _sentenceByHiOff.assign(len + 2, 0);
+    _sentenceGroupsScanned = 0;
+
+    for (int pos = 0; pos < len; pos++) collectSentenceArcs(pos, code, len);
+    if (_sentenceArcs.empty()) return;
+
+    // 弧按终点分桶(计数排序), DP 就能按 hi 升序一次成型: 走到 hi 时所有 lo < hi
+    // 的 beam 都已经定型, 不必再维护每位置的待选表。
+    int hiCount[IME_SENTENCE_MAX_LEN + 2] = {};
+    for (const SentenceArc &arc : _sentenceArcs) {
+        if (arc.hi >= 1 && arc.hi <= len) hiCount[arc.hi]++;
+    }
+    int acc = 0;
+    for (int h = 1; h <= len; h++) {
+        _sentenceByHiOff[h] = acc;
+        acc += hiCount[h];
+    }
+    _sentenceByHiOff[len + 1] = acc;
+    _sentenceByHi.assign(acc, 0);
+    int cursor[IME_SENTENCE_MAX_LEN + 2];
+    for (int h = 1; h <= len + 1; h++) cursor[h] = _sentenceByHiOff[h];
+    for (int ai = 0; ai < (int)_sentenceArcs.size(); ai++) {
+        int h = _sentenceArcs[ai].hi;
+        if (h >= 1 && h <= len) _sentenceByHi[cursor[h]++] = (int16_t)ai;
+    }
+
+    _sentenceNodes.push_back({-1, -1, 0});  // 位置 0 的根
+    _sentenceNodeOff[0] = 0;
+    auto byScoreDesc = [](const SentenceCand &a, const SentenceCand &b) {
+        return a.score > b.score;
+    };
+    for (int hi = 1; hi <= len; hi++) {
+        _sentenceNodeOff[hi] = (int)_sentenceNodes.size();
+        _sentenceCands.clear();
+        for (int k = _sentenceByHiOff[hi]; k < _sentenceByHiOff[hi + 1]; k++) {
+            const SentenceArc &arc = _sentenceArcs[_sentenceByHi[k]];
+            int nStart = _sentenceNodeOff[arc.lo];
+            int nEnd = _sentenceNodeOff[arc.lo + 1];
+            for (int ni = nStart; ni < nEnd; ni++)
+                _sentenceCands.push_back({(int16_t)ni, _sentenceByHi[k],
+                                          _sentenceNodes[ni].score + arc.score});
+        }
+        if ((int)_sentenceCands.size() > IME_SENTENCE_BEAM) {
+            std::partial_sort(_sentenceCands.begin(),
+                              _sentenceCands.begin() + IME_SENTENCE_BEAM,
+                              _sentenceCands.end(), byScoreDesc);
+            _sentenceCands.resize(IME_SENTENCE_BEAM);
+        } else {
+            std::sort(_sentenceCands.begin(), _sentenceCands.end(), byScoreDesc);
+        }
+        for (const SentenceCand &c : _sentenceCands)
+            _sentenceNodes.push_back({c.parent, c.arc, c.score});
+        _sentenceNodeOff[hi + 1] = (int)_sentenceNodes.size();
+    }
+
+    // 位置 len 的节点已按分降序, 顺序回溯父链拼文本。重复(不同切分拼出同一句)
+    // 交给 hasCandidate 过滤, 所以多留几个节点凑够 IME_SENTENCE_RESULTS 条。
+    std::string text;
+    int emitted = 0;
+    for (int ni = _sentenceNodeOff[len];
+         ni < _sentenceNodeOff[len + 1] && emitted < IME_SENTENCE_RESULTS; ni++) {
+        text.clear();
+        for (int cur = ni; cur > 0;) {
+            const SentenceNode &nd = _sentenceNodes[cur];
+            if (nd.arc < 0) break;
+            text.insert(0, _sentenceArcs[nd.arc].word);
+            cur = nd.parent;
+        }
+        if (text.empty() || hasCandidate(text)) continue;
+        if (appendCandidate(text, len)) emitted++;
+        if (_all.size() >= _candidateLimit) break;
+    }
 }
 
 void IME::beginPredict(const std::string &text, bool afterSpaceCommit) {

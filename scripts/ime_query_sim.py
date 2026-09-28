@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import bisect
+import re
 import struct
 from pathlib import Path
 
@@ -8,8 +9,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TABLE = ROOT / "main" / "ime" / "ime_table_pinyin.bin"
 DEFAULT_SEG = ROOT / "main" / "ime" / "seg_table_source.txt"
+DEFAULT_PINYIN = ROOT / "main" / "ime" / "yong_pinyin.cpp"
 INDEX_ENTRIES = 26 * 26 + 1
 HEADER_SIZE = 12
+
+# 整句覆盖的打分常量, 与 IME.cpp 里的 IME_SENTENCE_* 保持一致。
+SENT_MIN_LEN = 6
+SENT_MAX_LEN = 24
+SENT_BEAM = 8
+SENT_RESULTS = 3
+SENT_BUCKET_SCAN = 3600
+SENT_TOTAL_SCAN = 8000
+SENT_WORD_ARCS = 3
+SENT_SINGLE_ARCS = 2
+SENT_WORD_UNIT = 4000
+SENT_ARC_PENALTY = 500
+SENT_SINGLE = -400
+SENT_RANK_WORD = 300
+SENT_RANK_SINGLE = 60
+SENT_LEN_BIAS = 1
 
 
 def u32(data, off):
@@ -121,6 +139,109 @@ class Ime3:
                 break
         return out
 
+    # 长全拼串的词图 beam search, 镜像 IME.cpp 的 collectSentenceArcs/appendSentenceCandidates。
+    # 用户词库弧与搭配分不在这里复现: 那是设备上的增量状态, 主机侧没有等价来源。
+    def sentence(self, code, syllables):
+        n = len(code)
+        if n < SENT_MIN_LEN or n > SENT_MAX_LEN:
+            return []
+        wd = self.word_data
+        groups = [0]
+
+        def collect(pos):
+            remain = n - pos
+            arcs = []
+            total_left = SENT_TOTAL_SCAN - groups[0]
+            if total_left <= 0:
+                return arcs
+            budget = min(SENT_BUCKET_SCAN, total_left)
+            # 位置长度偏置: 词库没有词频, 同分路径靠"长弧优先"定序。
+            bias = lambda cl: SENT_LEN_BIAS * cl * (n - pos)
+            wlo, whi = self.word_window(code[pos:pos + 2] if remain >= 2 else code[pos:pos + 1])
+            p = wlo
+            scanned = 0
+            while p < whi and scanned < budget:
+                cl = wd[p]
+                if cl == 0 or p + 1 + cl > whi:
+                    break
+                wc = wd[p + 1:p + 1 + cl]
+                q = p + 1 + cl
+                if q >= whi:
+                    break
+                cnt = wd[q]
+                q += 1
+                scanned += 1
+                cmplen = min(cl, remain)
+                tgt = code[pos:pos + cmplen].encode()
+                seg = wc[:cmplen]
+                if seg > tgt:
+                    break
+                if seg == tgt and cl > remain:
+                    break
+                matched = cl <= remain and seg == tgt
+                taken = 0
+                for _ in range(cnt):
+                    if q + 1 > whi:
+                        q = whi
+                        break
+                    wl = wd[q]
+                    if wl == 0 or q + 1 + wl + 1 > whi:
+                        q = whi
+                        break
+                    if matched and taken < SENT_WORD_ARCS:
+                        word = wd[q + 1:q + 1 + wl].decode()
+                        if not (wd[q + 1 + wl] & 0x02):
+                            arcs.append((pos, pos + cl, word,
+                                         SENT_WORD_UNIT * (len(word) - 1)
+                                         - SENT_RANK_WORD * taken - SENT_ARC_PENALTY + bias(cl)))
+                            taken += 1
+                    q += 1 + wl + 1
+                p = q
+            groups[0] += scanned
+            # 单字弧: 段必须恰好是一个合法音节, 否则 "xian" 会被拆成 "xi"+"an"。
+            for cl in range(1, min(6, remain) + 1):
+                syl = code[pos:pos + cl]
+                if syl not in syllables:
+                    continue
+                for r, txt in enumerate(self.singles(syl, SENT_SINGLE_ARCS)):
+                    arcs.append((pos, pos + cl, txt, SENT_SINGLE - SENT_RANK_SINGLE * r + bias(cl)))
+            return arcs
+
+        by_hi = [[] for _ in range(n + 1)]
+        for pos in range(n):
+            for arc in collect(pos):
+                by_hi[arc[1]].append(arc)
+        nodes = [(-1, None, 0)]  # (parent, arc, score); 索引 0 = 根
+        nstart = [0] * (n + 1)
+        nend = [0] * (n + 1)
+        nstart[0], nend[0] = 0, 1
+        for hi in range(1, n + 1):
+            cands = []
+            for arc in by_hi[hi]:
+                for ni in range(nstart[arc[0]], nend[arc[0]]):
+                    cands.append((ni, arc, nodes[ni][2] + arc[3]))
+            cands.sort(key=lambda c: -c[2])
+            cands = cands[:SENT_BEAM]
+            nstart[hi] = len(nodes)
+            nend[hi] = nstart[hi] + len(cands)
+            nodes = nodes + cands
+        out = []
+        for ni in range(nstart[n], nend[n]):
+            parts = []
+            cur = ni
+            while cur > 0:
+                nd = nodes[cur]
+                if nd[1] is None:
+                    break
+                parts.insert(0, nd[1][2])
+                cur = nd[0]
+            text = "".join(parts)
+            if text and text not in out:
+                out.append(text)
+            if len(out) >= SENT_RESULTS:
+                break
+        return out
+
 
 def load_seg(path):
     entries = []
@@ -173,15 +294,30 @@ def query(table, seg_entries, code, limit):
     return out[:limit]
 
 
+def load_syllables(path):
+    text = Path(path).read_text(encoding="utf-8")
+    block = text.split("kSyllables[] = {", 1)[1].split("};", 1)[0]
+    return set(re.findall(r'"([a-z]+)"', block))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Offline approximate IME candidate query.")
     ap.add_argument("codes", nargs="+", help="pinyin codes to inspect")
     ap.add_argument("--table", default=str(DEFAULT_TABLE))
     ap.add_argument("--seg", default=str(DEFAULT_SEG))
+    ap.add_argument("--pinyin", default=str(DEFAULT_PINYIN))
     ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--sentence", action="store_true",
+                    help="long-pinyin whole-sentence candidates (word-graph beam search)")
     args = ap.parse_args()
 
     table = Ime3(args.table)
+    if args.sentence:
+        syllables = load_syllables(args.pinyin)
+        for code in args.codes:
+            code = "".join(ch.lower() for ch in code if ch.isalpha())
+            print(f"{code}: {' '.join(table.sentence(code, syllables))}")
+        return
     seg_entries = load_seg(args.seg)
     for code in args.codes:
         cands = query(table, seg_entries, code, args.limit)

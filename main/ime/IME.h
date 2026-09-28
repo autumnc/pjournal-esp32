@@ -52,6 +52,8 @@ public:
     bool isDeleteMode() const { return _deleteMode; }
     std::string modeLabel() const;
     void clearLearningContext();
+    // 文档级上下文: 编辑器喂入正文尾部(约 200 字), 已出现在正文里的词在小范围加分
+    void setDocumentContext(const std::string &text);
     void toggleDeleteMode();
     void setDeleteMode(bool on);
     std::string takeStatusMessage() {
@@ -225,6 +227,7 @@ private:
     int contextCandidateBoost(const std::string &word);
     void rebuildContextBoostScores();
     void appendEnglishInlineCandidates(const std::string &code);
+    void appendShortcutSymbol(const char *code, int len);
     int stableCandidateBoost(const std::string &word) const;
     void rememberCandidateStability();
     void rebuildRecentBoostIndex();
@@ -264,6 +267,9 @@ private:
     // first call otherwise paid three stat() plus a failed fopen on the SD card).
     // Enabling the setting therefore requires a reboot.
     bool _imeDebugLog = false;
+    // Snapshot of the ime_sentence toggle, taken in begin() for the same reason as
+    // _imeDebugLog: the phase runs inside the hot lookup path.
+    bool _sentenceMode = true;
 #if PJOURNAL_IME_ENABLE_LIANGFEN
     bool _lfMode = false;
     const uint8_t *_lfBlob = nullptr;
@@ -324,6 +330,33 @@ private:
     std::string _contextBoostScoresContext;
     std::unordered_map<std::string, int> _contextBoostScores;
 
+    // 文档级上下文(#13): 只保留正文里 2-3 字 CJK 片段的出现次数, 用固定槽位哈希表
+    // (线性探测)存。候选打分循环里按候选调用, 所以查找必须是零分配的——冲突只意味着
+    // 某个无关词多拿一点小加分, 与 _stableBoostHashes 的处理同理。
+    // 槽位数按 200 字正文最坏 ~400 个片段(2 字 + 3 字各一遍)取 512, 装载因子 0.78,
+    // 16 步探测足够(平均成功探测 ~2 步)。只收 2-3 字: 中文词绝大多数是这两个长度。
+    static const int DOC_CTX_SLOTS = 512;   // 2 的幂, 掩码即取模
+    static const int DOC_CTX_MAX_N = 3;
+    uint32_t _docCtxHashes[DOC_CTX_SLOTS] = {};
+    uint8_t _docCtxCounts[DOC_CTX_SLOTS] = {};
+    bool _docCtxMode = true;  // begin() 快照的 ime_doc_context; 改设置要重启才生效
+    void rebuildDocumentContext(const std::string &text);
+    int documentContextBoost(const std::string &word) const;
+    static uint32_t docCtxHash(const char *p, size_t n);
+
+    // 整句覆盖词图的暂存区。全部做成长期成员, 容量在多次 lookup 间复用, 整句路径
+    // 本身就不再产生查找期堆分配(除每条弧的候选文本字符串)。
+    struct SentenceArc { uint8_t lo = 0; uint8_t hi = 0; int32_t score = 0; std::string word; };
+    struct SentenceNode { int16_t parent = -1; int16_t arc = -1; int32_t score = 0; };
+    struct SentenceCand { int16_t parent = -1; int16_t arc = -1; int32_t score = 0; };
+    std::vector<SentenceArc> _sentenceArcs;    // 按 lo 升序(每个起点收集一遍); DP 另按 hi 分桶
+    std::vector<SentenceNode> _sentenceNodes;  // 已定型的 beam 节点, 按位置切分
+    std::vector<int> _sentenceNodeOff;
+    std::vector<SentenceCand> _sentenceCands;  // 单个位置收候选时的临时表
+    std::vector<int16_t> _sentenceByHi;        // 弧下标按终点分桶(计数排序)
+    std::vector<int> _sentenceByHiOff;
+    int _sentenceGroupsScanned = 0;
+
     mutable std::string _displayCodeCache;
     mutable bool _displayCodeDirty = true;
 
@@ -348,6 +381,8 @@ private:
                                  bool codeLenFromRecord, int fixedCandLen, size_t cap);
     void appendSingleCharCandidates(const std::string &prefix, int candLen,
                                     size_t cap = 0);  // cap=0 用 _candidateLimit
+    void collectSentenceArcs(int pos, const char *code, int len);
+    void appendSentenceCandidates(const char *code, int len);
     void buildPage();
     bool pagePrev();
     bool pageNext();
