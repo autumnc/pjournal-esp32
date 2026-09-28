@@ -79,7 +79,10 @@ static void enumerateSplits(const std::string &code, size_t pos, bool allowParti
         out.push_back(cur);
         return;
     }
+    // 两处循环都要判 exact, 但 isValidSyllable 是对 409 条 kSyllables(flash rodata)的二分,
+    // 每键要以千次计; 第一轮算出来就得存住, 别在第二轮重算一遍。
     int bestLens[8];
+    bool bestExact[8];
     int bestCount = 0;
     int maxLen = std::min<int>(6, (int)code.size() - (int)pos);
     for (int len = maxLen; len >= 1; len--) {
@@ -88,13 +91,14 @@ static void enumerateSplits(const std::string &code, size_t pos, bool allowParti
         bool partial = !exact && allowPartial && (pos + len == code.size()) &&
                        PinyinEngine::isSyllablePrefix(part);
         if (!exact && !partial) continue;
+        bestExact[bestCount] = exact;
         bestLens[bestCount++] = len;
         if (bestCount >= (int)(sizeof(bestLens) / sizeof(bestLens[0]))) break;
     }
     for (int i = 0; i < bestCount; i++) {
         int len = bestLens[i];
+        bool exact = bestExact[i];
         std::string part = code.substr(pos, len);
-        bool exact = PinyinEngine::isValidSyllable(part);
         cur.tokens.push_back({part, !exact});
         cur.score += exact ? (len * 8 + (len >= 2 ? 2 : -4)) : len;
         enumerateSplits(code, pos + len, allowPartial, cur, out, maxVariants);

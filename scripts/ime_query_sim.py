@@ -211,6 +211,113 @@ class Ime3:
                 out += [self.group_code(p) for p in self._group_offsets(lo, hi)]
         return out
 
+    # 词相位的桶内定位镜像。C++ 侧原来从桶首逐组顺扫到目标前缀(最坏 ~3300 组/100KB),
+    # 改用 wordGroupSeek 直接跳段首。这里 seek 版与桶首顺扫参照物对比, 断言两者候选
+    # 逐字一致, 且新实现不会再被组的扫描预算截断而漏词。
+    def phrase_seek(self, code, exact, budget, limit):
+        """新实现: seek 到首个 >= code 的组, 精确版只可能命中该组, 前缀版取连续前缀组。"""
+        lo, hi = self.word_window(code)
+        out, seen = [], set()
+        if lo >= hi:
+            return out
+        target = code.encode()
+        reads = [0]
+        p = self.seek_group(lo, hi, target, reads)
+        groups = 0
+        wd = self.word_data
+        while p < hi and groups < budget:
+            wc = self.group_code(p)
+            if exact:
+                if wc != target:
+                    break
+            elif not wc.startswith(target):
+                break
+            q = p + 1 + len(wc)
+            n = wd[q]
+            q += 1
+            groups += 1
+            for _ in range(n):
+                wl = wd[q]
+                q += 1
+                word = wd[q:q + wl].decode()
+                flag = wd[q + wl]
+                q += wl + 1
+                if not (flag & 0x02) and word not in seen:
+                    seen.add(word)
+                    out.append(word)
+                    if len(out) >= limit:
+                        return out
+            p = q
+        return out
+
+    # 桶首顺扫参照物: 与 seek 版同构, 但从 lo 起逐组推进, 且每处理一组吃掉一次预算。
+    def phrase_walk(self, code, exact, budget, limit):
+        lo, hi = self.word_window(code)
+        out, seen = [], set()
+        target = code.encode()
+        wd = self.word_data
+        p, groups = lo, 0
+        while p < hi and groups < budget:
+            wc = self.group_code(p)
+            cmplen = min(len(wc), len(target))
+            if wc[:cmplen] > target[:cmplen]:
+                break
+            match = (wc == target) if exact else wc.startswith(target)
+            q = p + 1 + len(wc)
+            n = wd[q]
+            q += 1
+            groups += 1
+            for _ in range(n):
+                wl = wd[q]
+                q += 1
+                word = wd[q:q + wl].decode()
+                flag = wd[q + wl]
+                q += wl + 1
+                if match and not (flag & 0x02) and word not in seen:
+                    seen.add(word)
+                    out.append(word)
+                    if len(out) >= limit:
+                        return out
+            p = q
+        return out
+
+    def phrase_index_failures(self, per_bucket=12, budget=900, limit=100000):
+        """词相位 seek 版 vs 桶首顺扫参照。三层:
+        ① 无限预算下精确/前缀两条路径候选逐字一致(证明 seek 落在正确的组);
+        ② 带 900 组预算时新实现必须是旧实现的超集(旧实现在大桶会截断丢词);
+        ③ 至少存在一处旧实现丢词——否则这个改动没有意义, 说明测试没覆盖到。
+        参照物是 O(桶字节数) 的桶首顺扫, 每桶只抽 per_bucket 个组码, 否则整个检查要跑分钟级。"""
+        bad = []
+        improved = 0
+        for i in range(INDEX_ENTRIES - 1):
+            lo, hi = self.word_index[i], self.word_index[i + 1]
+            if hi <= lo:
+                continue
+            codes = [self.group_code(p).decode() for p in self._group_offsets(lo, hi)]
+            stride = max(1, len(codes) // per_bucket)
+            for k in range(0, len(codes), stride):
+                code = codes[k]
+                variants = [code]
+                if len(code) < 6 and k % (stride * 4) == 0:
+                    variants.append(code + "z")
+                for c in variants:
+                    if len(c) < 2:
+                        continue
+                    for exact in (True, False):
+                        s = self.phrase_seek(c, exact, 10 ** 9, limit)
+                        w = self.phrase_walk(c, exact, 10 ** 9, limit)
+                        if s != w:
+                            bad.append(f"phrase seek {c} exact={exact}: {s[:4]} != {w[:4]}")
+                    old = self.phrase_walk(c, False, budget, limit)
+                    new = self.phrase_seek(c, False, 10 ** 9, limit)
+                    if not set(old) <= set(new):
+                        bad.append(f"phrase budget {c}: {sorted(set(old) - set(new))}")
+                    if len(old) < len(new):
+                        improved += 1
+        if not improved and not bad:
+            bad.append("phrase seek: no coverage improvement detected")
+        return bad
+
     def sentence_index_failures(self, codes, syllables):
         """校验整句的词桶组偏移索引, 返回失败描述(空 = 通过)。
         两层: ① seek_group 对每个桶的每一组(及两个扩展变体)穷举比对线性参照;

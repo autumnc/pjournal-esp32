@@ -3341,28 +3341,20 @@ void IME::lookup() {
             if (!scanCode || scanLen < 4) return;
             size_t wlo = 0, whi = _dict.wordDataSize();
             wordWindowCached(scanCode, scanLen, wlo, whi);
-            size_t wpos = wlo;
-            int safety = 0;
-            while (wpos < whi && safety++ < IME_MAX_PHRASE_GROUP_SCAN) {
+            // 精确匹配最多只可能命中一组: seek 到首个 >= scanCode 的组, 不相等就说明不存在。
+            int ignored = 0;
+            size_t wpos = _dict.wordGroupSeek(wlo, whi, scanCode, scanLen, ignored);
+            if (wpos < whi) {
                 uint8_t cl = wordData[wpos];
-                if (cl == 0 || wpos + 1 + cl > whi) break;
                 const char *wc = (const char *)wordData + wpos + 1;
                 size_t next = wpos + 1 + cl;
-                if (next >= whi) break;
-                uint8_t n = wordData[next++];
-                int cmpLen = std::min((int)cl, scanLen);
-                int cmp = strncmp(wc, scanCode, cmpLen);
-                if (cmp > 0) break;
-                bool groupMatch = ((int)cl == scanLen &&
-                                   strncmp(wc, scanCode, scanLen) == 0);
-                for (uint8_t j = 0; j < n && next < whi; j++) {
-                    uint8_t wl = wordData[next++];
-                    if (wl == 0 || next + wl + 1 > whi) {
-                        next = whi;
-                        break;
-                    }
-                    uint8_t wf = wordData[next + wl];
-                    if (groupMatch) {
+                if (cl != 0 && wpos + 1 + cl <= whi && next < whi &&
+                    (int)cl == scanLen && memcmp(wc, scanCode, (size_t)scanLen) == 0) {
+                    uint8_t n = wordData[next++];
+                    for (uint8_t j = 0; j < n && next < whi; j++) {
+                        uint8_t wl = wordData[next++];
+                        if (wl == 0 || next + wl + 1 > whi) break;
+                        uint8_t wf = wordData[next + wl];
                         std::string w((const char *)wordData + next, wl);
                         if (wordVisible(_trad, w, wf)) {
                             int consumedLen = aliasScan ? qlen : scanLen;
@@ -3375,10 +3367,9 @@ void IME::lookup() {
                             logCandidateDebug("exact-phrase", w, score, ctxBoost, stableBoost);
                             exactPhraseMatches.add(w, consumedLen, score, 15);
                         }
+                        next += wl + 1;
                     }
-                    next += wl + 1;
                 }
-                wpos = next;
             }
         };
         collectExactPhrase(q, qlen, false);
@@ -3512,7 +3503,12 @@ void IME::lookup() {
             if (!scanCode || scanLen < IME_PHRASE_PREFIX_MIN_LEN) return;
             size_t wlo = 0, whi = _dict.wordDataSize();
             wordWindowCached(scanCode, scanLen, wlo, whi);
-            size_t wpos = wlo;
+            // 命中组是从首个 >= scanCode 的组开始的一段连续前缀组, seek 直接跳到段首。
+            // scanLen==1 时窗口横跨 26 个桶, 建检查点索引不划算, 退回桶首顺扫。
+            int ignored = 0;
+            size_t wpos = (scanLen >= 2)
+                              ? _dict.wordGroupSeek(wlo, whi, scanCode, scanLen, ignored)
+                              : wlo;
             int safety = 0;
             int scanBudget = IME_MAX_PHRASE_GROUP_SCAN;
             if (scanLen >= 10) scanBudget = 20000;
@@ -4193,33 +4189,29 @@ void IME::lookupSegmented() {
             if (scanCode.length() < 2) return;
             size_t wlo = 0, whi = _dict.wordDataSize();
             wordWindowCached(scanCode.c_str(), (int)scanCode.length(), wlo, whi);
-            size_t wpos = wlo;
-            int safety = 0;
             int scanLen = (int)scanCode.length();
-            while (wpos < whi && _all.size() < IME_FAST_CANDIDATE_LIMIT &&
-                   safety++ < IME_MAX_PHRASE_GROUP_SCAN) {
-                uint8_t cl = wordData[wpos];
-                if (cl == 0 || wpos + 1 + cl > whi) break;
-                const char *wc = (const char *)wordData + wpos + 1;
-                size_t next = wpos + 1 + cl;
-                if (next >= whi) break;
-                uint8_t n = wordData[next++];
-                bool groupMatch = ((int)cl == scanLen && strncmp(wc, scanCode.c_str(), scanCode.length()) == 0);
-                for (uint8_t j = 0; j < n && next < whi; j++) {
-                    uint8_t wl = wordData[next++];
-                    if (wl == 0 || next + wl + 1 > whi) {
-                        next = whi;
-                        break;
-                    }
-                    uint8_t wf = wordData[next + wl];
-                    if (groupMatch && (int)wl == wordTextLen) {
-                        std::string w((const char *)wordData + next, wl);
-                        if (wordVisible(_trad, w, wf)) appendCandidate(w, fullLen);
-                        if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
-                    }
-                    next += wl + 1;
+            // 精确匹配最多只可能命中一组: seek 到首个 >= scanCode 的组, 不相等就说明不存在。
+            int ignored = 0;
+            size_t wpos = _dict.wordGroupSeek(wlo, whi, scanCode.c_str(), scanLen, ignored);
+            if (wpos >= whi) return;
+            uint8_t cl = wordData[wpos];
+            const char *wc = (const char *)wordData + wpos + 1;
+            size_t next = wpos + 1 + cl;
+            if (cl == 0 || wpos + 1 + cl > whi || next >= whi ||
+                (int)cl != scanLen || memcmp(wc, scanCode.c_str(), (size_t)scanLen) != 0) {
+                return;
+            }
+            uint8_t n = wordData[next++];
+            for (uint8_t j = 0; j < n && next < whi; j++) {
+                uint8_t wl = wordData[next++];
+                if (wl == 0 || next + wl + 1 > whi) break;
+                uint8_t wf = wordData[next + wl];
+                if ((int)wl == wordTextLen) {
+                    std::string w((const char *)wordData + next, wl);
+                    if (wordVisible(_trad, w, wf)) appendCandidate(w, fullLen);
+                    if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
                 }
-                wpos = next;
+                next += wl + 1;
             }
         };
         scanExactPhrase(q);

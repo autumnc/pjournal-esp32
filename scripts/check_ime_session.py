@@ -174,6 +174,20 @@ def main():
     bad = table.sentence_index_failures(probe_codes, syllables)
     require("sentence bucket index" + (f" ({bad[0]})" if bad else ""), not bad)
 
+    # 词相位(精确/前缀)改 seek 后不再从桶首顺扫: 与桶首顺扫参照逐字一致, 且大桶深处
+    # 的目标不再被 900 组扫描预算截断。
+    bad = table.phrase_index_failures()
+    require("phrase bucket index" + (f" ({bad[0]})" if bad else ""), not bad)
+
+    # 切分 DFS 的 exact 标记必须复用: isValidSyllable 是对 kSyllables 的二分, 在 409 条
+    # flash rodata 上每键要跑上千次, 第二轮重算纯属浪费(主机基准 0.84x, 3 万随机码等价)。
+    pinyin_cpp = (ROOT / "main" / "ime" / "yong_pinyin.cpp").read_text(encoding="utf-8")
+    require("split dfs caches exact flag", "bestExact[bestCount] = exact;" in pinyin_cpp)
+    require("split dfs reuses exact flag", "bool exact = bestExact[i];" in pinyin_cpp)
+    # isValidSyllable(part) 只该剩两处: splitExplicit 一处 + enumerateSplits 第一轮一处。
+    require("split dfs no exact recompute",
+            pinyin_cpp.count("PinyinEngine::isValidSyllable(part)") == 2)
+
     # 文档级上下文(#13): IME 侧固定槽位计数表 + 编辑器喂入钩子。
     require("doc context api", "setDocumentContext" in ime_h)
     require("doc context table", "documentContextBoost" in ime_cpp)
