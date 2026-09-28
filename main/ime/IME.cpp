@@ -848,6 +848,24 @@ struct ImePerfTrace {
     }
 };
 
+#if PJOURNAL_IME_PERF_LOG
+// 整句相位的子计时/计数。`perf sentence` 只报一个总数, 而这一相位要在每个 pos 上做
+// 三件不同的事(词典词弧 seek、单字表查表解码、用户词弧扫桶), 不拆开就只能靠猜。
+// 只在 perflog 固件里存在, shipping 编译出来一个字节都没有。
+struct SentencePerfSub {
+    int64_t wordArcUs = 0;   // 词弧 seek + 组内取词
+    int64_t singleArcUs = 0; // 单字弧: isValidSyllable + 查表 + 逐条解码
+    int64_t userArcUs = 0;   // 用户词库扫桶(固定 + 动态)
+    int64_t dpUs = 0;        // 计数排序 + beam DP
+    int64_t emitUs = 0;      // 回溯父链 + appendCandidate
+    int seekCalls = 0;       // wordGroupSeek 调用次数 = 探过的前缀长度数
+    int sylProbes = 0;       // 通过 isValidSyllable 的 (pos,cl) 数
+    int singleRecords = 0;   // 单字表里实际取到的记录数
+    int userBucketHits = 0;  // 用户词库命中的 (pos, 桶) 数
+};
+static SentencePerfSub g_sentencePerf;
+#endif
+
 static void appendUtf8(uint32_t cp, std::string &out) {
     if (cp < 0x80) {
         out += (char)cp;
@@ -3215,11 +3233,22 @@ void IME::lookup() {
         // 整句相位单独用低阈值探针: 三五毫秒不会触发 12ms 的总日志, 但那正是
         // 需要盯着看的数字。
         if (perf.sentenceUs >= IME_SENTENCE_PERF_LOG_US) {
+            // collect = total - dp - emit(sentenceUs 里的其余部分: 逐 pos 调 collectSentenceArcs
+            // 的函数开销 + 整句/词弧以外的杂项)。
             ESP_LOGW(IME_TAG,
-                     "perf sentence code='%s' total=%lldus arcs=%u nodes=%u groups=%d added=%u",
+                     "perf sentence code='%s' total=%lldus arcs=%u nodes=%u groups=%d added=%u "
+                     "word=%lld single=%lld user=%lld dp=%lld emit=%lld "
+                     "seek=%d syl=%d rec=%d ub=%d",
                      _code.c_str(), (long long)perf.sentenceUs,
                      (unsigned)_sentenceArcs.size(), (unsigned)_sentenceNodes.size(),
-                     _sentenceGroupsScanned, (unsigned)(_all.size() - before));
+                     _sentenceGroupsScanned, (unsigned)(_all.size() - before),
+                     (long long)g_sentencePerf.wordArcUs,
+                     (long long)g_sentencePerf.singleArcUs,
+                     (long long)g_sentencePerf.userArcUs,
+                     (long long)g_sentencePerf.dpUs,
+                     (long long)g_sentencePerf.emitUs,
+                     g_sentencePerf.seekCalls, g_sentencePerf.sylProbes,
+                     g_sentencePerf.singleRecords, g_sentencePerf.userBucketHits);
         }
 #endif
     }
@@ -4334,12 +4363,18 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
     //    内就分歧", 更长的前缀必然也不匹配(否则它会是第一个 ≥ 该前缀的组), 直接停。词弧的
     //    顺序、rank 与顺扫逐条一致, 且完全不扫不匹配的组。
     if (_dict.hasWords()) {
+#if PJOURNAL_IME_PERF_LOG
+        int64_t tWord = IME_PERF_NOW();
+#endif
         size_t wlo = 0, whi = 0;
         wordWindowCached(code + pos, remain >= 2 ? 2 : 1, wlo, whi);
         const uint8_t *wordData = _dict.wordData();
         int scanned = 0;
         if (wlo < whi) {
             for (int L = 1; L <= remain && scanned < budget; L++) {
+#if PJOURNAL_IME_PERF_LOG
+                g_sentencePerf.seekCalls++;
+#endif
                 const size_t off = _dict.wordGroupSeek(wlo, whi, code + pos, L, scanned);
                 if (off >= whi) break;  // 桶里没有 ≥ 该前缀的组, 更长前缀也不会有
                 int cl = 0;
@@ -4371,20 +4406,32 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
             }
         }
         _sentenceGroupsScanned += scanned;
+#if PJOURNAL_IME_PERF_LOG
+        g_sentencePerf.wordArcUs += IME_PERF_NOW() - tWord;
+#endif
     }
 
     // 2) 单字弧: 段必须恰好是一个合法音节, 否则 "xian" 会被当两个段各出一个字。
+#if PJOURNAL_IME_PERF_LOG
+    int64_t tSingle = IME_PERF_NOW();
+#endif
     const int maxSyl = remain < MAX_CODE_LEN ? remain : MAX_CODE_LEN;
     for (int cl = 1; cl <= maxSyl; cl++) {
         char syl[MAX_CODE_LEN + 1];
         memcpy(syl, code + pos, cl);
         syl[cl] = '\0';
         if (!ime::PinyinEngine::isValidSyllable(syl)) continue;
+#if PJOURNAL_IME_PERF_LOG
+        g_sentencePerf.sylProbes++;
+#endif
         uint32_t slo = 0, shi = 0;
         searchWindow(code + pos, cl, slo, shi);
         uint32_t i = _dict.lowerBoundSingle(code + pos, cl, slo, shi);
         int taken = 0;
         for (; i < shi && taken < IME_SENTENCE_SINGLE_ARCS; i++) {
+#if PJOURNAL_IME_PERF_LOG
+            g_sentencePerf.singleRecords++;
+#endif
             char rcode[MAX_CODE_LEN + 1];
             if (!readCode(i, rcode)) break;
             if (strncmp(rcode, code + pos, cl) != 0) break;
@@ -4401,6 +4448,10 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
             taken++;
         }
     }
+#if PJOURNAL_IME_PERF_LOG
+    g_sentencePerf.singleArcUs += IME_PERF_NOW() - tSingle;
+    int64_t tUser = IME_PERF_NOW();
+#endif
 
     // 3) 用户词库词弧。桶按前两位分且桶很小, 直接扫桶比走词典便宜; 桶内已按使用
     //    次数降序, 所以位次就是频率先验。
@@ -4408,6 +4459,9 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
                             const std::unordered_map<int, std::vector<uint16_t>> &index) {
         auto it = index.find(segPrefixKey(code + pos, remain >= 2 ? 2 : 1));
         if (it == index.end()) return;
+#if PJOURNAL_IME_PERF_LOG
+        g_sentencePerf.userBucketHits++;
+#endif
         int taken = 0;
         for (uint16_t ei : it->second) {
             if (taken >= IME_SENTENCE_WORD_ARCS) break;
@@ -4425,10 +4479,16 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
     };
     scanUserArcs(_fixedUserWords, _fixedUserCodeIndex);
     scanUserArcs(_dynamicUserWords, _dynamicUserCodeIndex);
+#if PJOURNAL_IME_PERF_LOG
+    g_sentencePerf.userArcUs += IME_PERF_NOW() - tUser;
+#endif
 }
 
 void IME::appendSentenceCandidates(const char *code, int len) {
     if (!code || len < IME_SENTENCE_MIN_LEN || len > IME_SENTENCE_MAX_LEN) return;
+#if PJOURNAL_IME_PERF_LOG
+    g_sentencePerf = SentencePerfSub();
+#endif
     _sentenceArcs.clear();
     _sentenceNodes.clear();
     _sentenceCands.clear();
@@ -4442,6 +4502,9 @@ void IME::appendSentenceCandidates(const char *code, int len) {
 
     // 弧按终点分桶(计数排序), DP 就能按 hi 升序一次成型: 走到 hi 时所有 lo < hi
     // 的 beam 都已经定型, 不必再维护每位置的待选表。
+#if PJOURNAL_IME_PERF_LOG
+    int64_t tDp = IME_PERF_NOW();
+#endif
     int hiCount[IME_SENTENCE_MAX_LEN + 2] = {};
     for (const SentenceArc &arc : _sentenceArcs) {
         if (arc.hi >= 1 && arc.hi <= len) hiCount[arc.hi]++;
@@ -4488,6 +4551,10 @@ void IME::appendSentenceCandidates(const char *code, int len) {
             _sentenceNodes.push_back({c.parent, c.arc, c.score});
         _sentenceNodeOff[hi + 1] = (int)_sentenceNodes.size();
     }
+#if PJOURNAL_IME_PERF_LOG
+    g_sentencePerf.dpUs = IME_PERF_NOW() - tDp;
+    int64_t tEmit = IME_PERF_NOW();
+#endif
 
     // 位置 len 的节点已按分降序, 顺序回溯父链拼文本。重复(不同切分拼出同一句)
     // 交给 hasCandidate 过滤, 所以多留几个节点凑够 IME_SENTENCE_RESULTS 条。
@@ -4506,6 +4573,9 @@ void IME::appendSentenceCandidates(const char *code, int len) {
         if (appendCandidate(text, len)) emitted++;
         if (_all.size() >= _candidateLimit) break;
     }
+#if PJOURNAL_IME_PERF_LOG
+    g_sentencePerf.emitUs = IME_PERF_NOW() - tEmit;
+#endif
 }
 
 void IME::beginPredict(const std::string &text, bool afterSpaceCommit) {
