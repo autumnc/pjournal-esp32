@@ -2207,24 +2207,62 @@ void IME::bumpFrequency(const std::string &code, const std::string &word, int we
     }
 }
 
+// 删掉动态词库下标 i 的条目: 末尾条目顶上(swap-and-pop), 并把索引里指向末尾那条的下标
+// 就地改写成 i。penalize 删词原来走 erase + markUserWordIndexesDirty, 动态词到 470 条时
+// 整表重建要 40ms(实测 perf rebuild by=penalize insert=22ms sort=12ms), 而退格撤销刚上屏
+// 学到的词必然触发它。
+// 索引桶不重排: 桶按 count 降序, 从一个有序序列里删掉一个元素、再把另一个元素改个下标
+// (它的 count 没变, 原来占的位次本来就正确), 剩下的序列依然有序。
+void IME::removeDynamicUserWordAt(size_t i) {
+    const size_t last = _dynamicUserWords.size() - 1;
+    if (i > last) return;
+    // 索引已经过期时不动它: 下标已经整体错位, 局部改写无从下手, 保持 dirty 让下次 lookup
+    // 整表重建。USERDICT_DYNAMIC_LIMIT(5000) 小于 UINT16_MAX, 所以有效条目都在索引里。
+    if (!_userWordIndexesDirty) {
+        const uint16_t dead = (uint16_t)i;
+        const uint16_t tail = (uint16_t)last;
+        const bool move = (i != last);
+        auto fix = [&](auto &map) {
+            for (auto it = map.begin(); it != map.end(); ) {
+                std::vector<uint16_t> &bucket = it->second;
+                bucket.erase(std::remove(bucket.begin(), bucket.end(), dead), bucket.end());
+                if (move) {
+                    for (uint16_t &v : bucket) {
+                        if (v == tail) v = dead;
+                    }
+                }
+                if (bucket.empty()) it = map.erase(it);
+                else ++it;
+            }
+        };
+        fix(_dynamicUserCodeIndex);
+        fix(_dynamicUserInitialIndex);
+        fix(_dynamicUserCodePrefixIndex);
+        fix(_dynamicUserInitialPrefixIndex);
+    }
+    if (i != last) _dynamicUserWords[i] = std::move(_dynamicUserWords[last]);
+    _dynamicUserWords.pop_back();
+}
+
 bool IME::penalizeUserWord(const std::string &code, const std::string &word, int weight) {
     ensureUserDictLoaded();
     if (word.empty()) return false;
     if (weight < 1) weight = 1;
     bool changed = false;
-    for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ) {
-        if (it->word == word && it->trad == _trad &&
-            (code.empty() || it->code == code)) {
-            if (it->count <= weight) {
-                it = _dynamicUserWords.erase(it);
-                markUserWordIndexesDirty("penalize");
+    size_t i = 0;
+    while (i < _dynamicUserWords.size()) {
+        UserEntry &e = _dynamicUserWords[i];
+        if (e.word == word && e.trad == _trad && (code.empty() || e.code == code)) {
+            if (e.count <= weight) {
+                // 末尾条目顶到 i, 那一条这个循环还没看过, 下标不能前进。
+                removeDynamicUserWordAt(i);
             } else {
-                it->count -= weight;
-                ++it;
+                e.count -= weight;
+                i++;
             }
             changed = true;
         } else {
-            ++it;
+            i++;
         }
     }
     if (changed) {
@@ -4297,14 +4335,27 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
         _sentenceArcs.push_back(std::move(arc));
     };
 
-    // 1) 词典词弧。词表只按前两位分桶, 桶内按整码升序, 所以从桶首顺扫、遇到
-    //    比目标前缀大的组就停。大桶(sh/ji)要扫几千组才走到目标前缀, 靠总预算兜底。
+    // 1) 词典词弧。词表只按前两位分桶, 桶内按整码升序; 组记录变长且没有长度字段, 从桶首
+    //    顺扫要跨过每组的每条词, 大桶(sh/ji)几千组才走到目标前缀, 靠总预算兜底。这里先用
+    //    桶内组偏移检查点(每 kWordGroupStride 组一个)二分到"最短的匹配前缀组", 再从那里
+    //    顺扫; 一个前缀都没命中就连桶都不走。
     if (_dict.hasWords()) {
         size_t wlo = 0, whi = 0;
         wordWindowCached(code + pos, remain >= 2 ? 2 : 1, wlo, whi);
         const uint8_t *wordData = _dict.wordData();
-        size_t wpos = wlo;
+        size_t wpos = whi;
         int scanned = 0;
+        if (wlo < whi) {
+            for (int L = 1; L <= remain && scanned < budget; L++) {
+                size_t off = _dict.wordGroupSeek(wlo, whi, code + pos, L, scanned);
+                int cl = 0;
+                const uint8_t *wc = (off < whi) ? _dict.wordGroupCode(off, cl) : nullptr;
+                if (wc && cl == L && memcmp(wc, code + pos, (size_t)L) == 0) {
+                    wpos = off;
+                    break;
+                }
+            }
+        }
         while (wpos < whi && scanned < budget) {
             uint8_t cl = wordData[wpos];
             if (cl == 0 || wpos + 1 + cl > whi) break;
@@ -4652,11 +4703,11 @@ bool IME::commit(int idx, std::string &out, bool bySpace) {
     if (_deleteMode) {
         bool deleted = false;
         auto eraseMatch = [&](bool requireCode) -> bool {
-            for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
-                if (it->word == out && it->trad == _trad &&
-                    (!requireCode || it->code == _code)) {
-                    _dynamicUserWords.erase(it);
-                    markUserWordIndexesDirty("commitDelete");
+            for (size_t i = 0; i < _dynamicUserWords.size(); i++) {
+                const UserEntry &e = _dynamicUserWords[i];
+                if (e.word == out && e.trad == _trad &&
+                    (!requireCode || e.code == _code)) {
+                    removeDynamicUserWordAt(i);
                     _dynamicUserDirty = true;
                     flushUserDictSaves(false);
                     penalizePredictWord(out, 3);

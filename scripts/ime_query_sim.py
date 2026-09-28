@@ -28,6 +28,7 @@ SENT_SINGLE = -400
 SENT_RANK_WORD = 300
 SENT_RANK_SINGLE = 60
 SENT_LEN_BIAS = 1
+SENT_GROUP_STRIDE = 16
 
 
 def u32(data, off):
@@ -69,6 +70,7 @@ class Ime3:
         self.word_base = word_index_base + INDEX_ENTRIES * 4
         self.word_size = self.word_index[-1]
         self.word_data = self.blob[self.word_base:self.word_base + self.word_size]
+        self._group_offsets_cache = {}
 
     def single_window(self, code):
         k = prefix_key(code)
@@ -139,9 +141,115 @@ class Ime3:
                 break
         return out
 
+    # 桶内所有组的字节偏移。只在主机侧用: 设备上没有这个数组, 靠按组解析前进(等价偏移)。
+    def _group_offsets(self, lo, hi):
+        key = (lo, hi)
+        cached = self._group_offsets_cache.get(key)
+        if cached is not None:
+            return cached
+        wd = self.word_data
+        offs = []
+        p = lo
+        while p < hi:
+            cl = wd[p]
+            if cl == 0 or p + 1 + cl > hi:
+                break
+            offs.append(p)
+            p += 1 + cl
+            if p >= hi:
+                break
+            n = wd[p]
+            p += 1
+            for _ in range(n):
+                if p + 1 > hi:
+                    p = hi
+                    break
+                wl = wd[p]
+                if wl == 0 or p + 1 + wl + 1 > hi:
+                    p = hi
+                    break
+                p += 1 + wl + 1
+        self._group_offsets_cache[key] = offs
+        return offs
+
+    def group_code(self, p):
+        cl = self.word_data[p]
+        return self.word_data[p + 1:p + 1 + cl]
+
+    # 桶内第一个码 >= target(strcmp 序)的组偏移; 没有则 hi。词表只有 2 字前缀粒度的桶索引,
+    # 桶内组记录变长(没有长度字段), 定位只能从桶首逐组走过去, 而每个组还要跨过它自己的
+    # 每一条词, 所以代价正比于桶的字节数(实测最坏的 sh 桶 113KB)。整句相位每个 pos 都要
+    # 定位一次, 长全拼串每敲一键就重扫一遍。这里每 SENT_GROUP_STRIDE 组记一个检查点,
+    # 二分到目标所在区间后只线性走至多 STRIDE 组。
+    def seek_group(self, lo, hi, target, reads):
+        offs = self._group_offsets(lo, hi)
+        if not offs:
+            return hi
+        ck = offs[::SENT_GROUP_STRIDE] + [None]  # None 当 +inf 哨兵
+        a, b = 0, len(ck)
+        while a < b:
+            mid = (a + b) // 2
+            cp = ck[mid]
+            if cp is None or self.group_code(cp) >= target:
+                b = mid
+            else:
+                a = mid + 1
+        idx = max(0, a - 1) * SENT_GROUP_STRIDE
+        while idx < len(offs):
+            reads[0] += 1
+            if self.group_code(offs[idx]) >= target:
+                return offs[idx]
+            idx += 1
+        return hi
+
+    def word_group_codes(self):
+        """真实词库里所有组码。"""
+        out = []
+        for i in range(INDEX_ENTRIES - 1):
+            lo, hi = self.word_index[i], self.word_index[i + 1]
+            if hi > lo:
+                out += [self.group_code(p) for p in self._group_offsets(lo, hi)]
+        return out
+
+    def sentence_index_failures(self, codes, syllables):
+        """校验整句的词桶组偏移索引, 返回失败描述(空 = 通过)。
+        两层: ① seek_group 对每个桶的每一组(及两个扩展变体)穷举比对线性参照;
+              ② 整串候选 indexed 路径必须与桶首顺扫路径完全一致。"""
+        bad = []
+        for i in range(INDEX_ENTRIES - 1):
+            lo, hi = self.word_index[i], self.word_index[i + 1]
+            if hi <= lo:
+                continue
+            offs = self._group_offsets(lo, hi)
+            ref_codes = [self.group_code(x) for x in offs]
+            for k, p in enumerate(offs):
+                # 精确命中每一组都验; 两个扩展变体抽样, 覆盖"落在组与组之间"的定位。
+                targets = [ref_codes[k]]
+                if k % 8 == 0:
+                    targets += [ref_codes[k] + b"0", ref_codes[k] + b"z"]
+                for target in targets:
+                    reads = [0]
+                    got = self.seek_group(lo, hi, target, reads)
+                    ref = bisect.bisect_left(ref_codes, target)
+                    want = offs[ref] if ref < len(offs) else hi
+                    if got != want:
+                        return [f"seek {target!r} bucket {lo}: {got} != {want}"]
+        for code in codes:
+            a, b = self.sentence(code, syllables), self.sentence_indexed(code, syllables)
+            if a != b:
+                bad.append(f"sentence {code}: {a} != {b}")
+        return bad
+
     # 长全拼串的词图 beam search, 镜像 IME.cpp 的 collectSentenceArcs/appendSentenceCandidates。
     # 用户词库弧与搭配分不在这里复现: 那是设备上的增量状态, 主机侧没有等价来源。
+    # indexed=True 走词桶组偏移索引, False 走原来的桶首顺扫; 预算没吃满时两者必须同弧。
     def sentence(self, code, syllables):
+        return self._sentence(code, syllables, False)
+
+    def sentence_indexed(self, code, syllables):
+        return self._sentence(code, syllables, True)
+
+    def _sentence(self, code, syllables, indexed):
         n = len(code)
         if n < SENT_MIN_LEN or n > SENT_MAX_LEN:
             return []
@@ -158,8 +266,23 @@ class Ime3:
             # 位置长度偏置: 词库没有词频, 同分路径靠"长弧优先"定序。
             bias = lambda cl: SENT_LEN_BIAS * cl * (n - pos)
             wlo, whi = self.word_window(code[pos:pos + 2] if remain >= 2 else code[pos:pos + 1])
+            reads = [0]
             p = wlo
-            scanned = 0
+            if indexed:
+                # 匹配的组就是"码恰好是 T 前缀"的词条, 组按码升序即按长度升序, 所以按长度
+                # 递增探测, 第一个命中的就是词条顺序里的第一个匹配。一个都没命中说明桶里
+                # 没有词弧, 连桶都不用走。
+                start = None
+                for ln in range(1, remain + 1):
+                    if reads[0] >= budget:
+                        break
+                    cand = code[pos:pos + ln].encode()
+                    off = self.seek_group(wlo, whi, cand, reads)
+                    if off < whi and self.group_code(off) == cand:
+                        start = off
+                        break
+                p = start if start is not None else whi
+            scanned = reads[0]
             while p < whi and scanned < budget:
                 cl = wd[p]
                 if cl == 0 or p + 1 + cl > whi:

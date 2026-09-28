@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check higher-level IME session invariants that query-only tests miss."""
 
+import random
 import sys
 from pathlib import Path
 
@@ -79,6 +80,52 @@ def main():
     require("predict mode setting", "_ime_predict_mode" in settings_cpp)
     require("space-only prediction gate", 'mode == "space"' in ime_cpp)
 
+    # #9: 删词改 swap-and-pop + 索引下标就地改写, 不再整表重建。penalize 在退格撤销刚上屏
+    # 学到的词时必然触发, 动态词到 470 条时整表重建要 40ms(实测 perf rebuild by=penalize)。
+    require("penalize swap-and-pop", "removeDynamicUserWordAt" in ime_h)
+    require("penalize uses swap-and-pop",
+            ime_cpp.count("removeDynamicUserWordAt(") >= 3)  # 定义 + penalize + delete
+    require("penalize no full rebuild",
+            'markUserWordIndexesDirty("penalize")' not in ime_cpp)
+    require("delete no full rebuild",
+            'markUserWordIndexesDirty("commitDelete")' not in ime_cpp)
+
+    # 上面那两条只证明"没走整表重建"; 算法本身在这里复现一遍, 以"从头重建"为参照物。
+    # 桶按 count 降序, 去掉一个元素、再把末尾那条的下标就地改写成 i(它的 count 没变,
+    # 原来占的位次本来就正确), 剩下的序列仍应有序——所以不需要重排任何桶。
+    def bucket_build(entries):
+        buckets = {}
+        for idx, entry in enumerate(entries):
+            buckets.setdefault(entry[0][:2], []).append(idx)
+        for bucket in buckets.values():
+            bucket.sort(key=lambda i: -entries[i][1])
+        return {k: v for k, v in buckets.items() if v}
+
+    def swap_remove(entries, buckets, i):
+        last = len(entries) - 1
+        for bucket in buckets.values():
+            bucket[:] = [i if v == last else v for v in bucket if v != i]
+        if i != last:
+            entries[i] = entries[last]
+        entries.pop()
+
+    rng = random.Random(7)
+    pool = ["ji", "jin", "jint", "jinx", "sh", "shi", "shur", "a", "ab", "abz", "zh"]
+    for _ in range(300):
+        entries = [(rng.choice(pool), rng.randint(0, 3))
+                   for _ in range(rng.randint(1, 14))]
+        buckets = bucket_build(entries)
+        while entries:
+            swap_remove(entries, buckets, rng.randrange(len(entries)))
+            ref = bucket_build(entries)
+            require("swap_remove membership",
+                    {k: sorted(v) for k, v in buckets.items() if v} ==
+                    {k: sorted(v) for k, v in ref.items()})
+            for bucket in buckets.values():
+                counts = [entries[v][1] for v in bucket]
+                require("swap_remove keeps buckets ordered",
+                        counts == sorted(counts, reverse=True))
+
     # 整句覆盖(词图 beam search): C++ 侧接线 + 主机镜像的行为回归。
     require("sentence snapshot in begin", "_sentenceMode = g_settings.imeSentence()" in ime_cpp)
     require("sentence arc collection", "collectSentenceArcs" in ime_cpp)
@@ -110,6 +157,22 @@ def main():
     for code in ("nihaoma", "renminbi", "wanshanghao"):
         require(f"sentence gate excludes {code}",
                 len(syllable_tokens(code, syllables) or []) == 3)
+
+    # 整句的词桶组偏移索引: seek_group 对真实词典每个桶的每一组(及两个扩展变体)穷举
+    # 比对线性参照, 且 indexed 路径与桶首顺扫路径的整串候选必须逐字一致。
+    all_codes = table.word_group_codes()
+    sample = []
+    rng2 = random.Random(11)
+    for _ in range(60):
+        base = b"".join(rng2.sample(all_codes, rng2.randint(1, 3))).decode()
+        for cut in (len(base), max(6, len(base) - rng2.randint(1, 4))):
+            cand = base[:cut]
+            if 6 <= len(cand) <= 24 and syllable_tokens(cand, syllables):
+                sample.append(cand)
+    probe_codes = ["womenxianzaiqu", "jintiantianqihenhao", "zhongguorenmin",
+                   "shurufazhendehenhaoyong", "shengrikuaile", "wanshangyiqichifan"] + sample
+    bad = table.sentence_index_failures(probe_codes, syllables)
+    require("sentence bucket index" + (f" ({bad[0]})" if bad else ""), not bad)
 
     # 文档级上下文(#13): IME 侧固定槽位计数表 + 编辑器喂入钩子。
     require("doc context api", "setDocumentContext" in ime_h)

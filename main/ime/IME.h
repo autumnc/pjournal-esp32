@@ -208,6 +208,9 @@ private:
     void appendUserWordIndexEntry(size_t entryIdx);
     void bumpFrequency(const std::string &code, const std::string &word, int weight = 1);
     bool penalizeUserWord(const std::string &code, const std::string &word, int weight = 2);
+    // 删掉动态词库下标 i 的条目: 末尾条目顶上来(swap-and-pop)并把索引里的下标就地改写,
+    // 不做整表重建。penalize 与 delete 模式删词都走这里。
+    void removeDynamicUserWordAt(size_t i);
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
     bool penalizePredictWord(const std::string &word, int weight = 2);
     bool rejectedPredictWord(const std::string &key, const std::string &word) const;

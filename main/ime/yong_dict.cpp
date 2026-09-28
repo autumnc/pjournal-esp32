@@ -51,6 +51,7 @@ bool Im3Dictionary::parse(const uint8_t *blob, size_t size) {
     _wordIndex.clear();
     _wordData = nullptr;
     _wordDataSize = 0;
+    _wordBucketIdx.clear();
     _predictCount = 0;
     _predictData = nullptr;
     _predictDataSize = 0;
@@ -226,6 +227,92 @@ bool Im3Dictionary::nextWordGroup(size_t &pos, size_t end, WordGroup &out) const
         pos += wl + 1;
     }
     return true;
+}
+
+// 按字节字典序比较组的码与目标串, 与桶内排序(strcmp)一致: 长度不等而短者是前缀时短者小。
+static int wordGroupCompare(const uint8_t *code, int codeLen,
+                            const uint8_t *target, int targetLen) {
+    int n = codeLen < targetLen ? codeLen : targetLen;
+    int c = n > 0 ? std::memcmp(code, target, (size_t)n) : 0;
+    return c != 0 ? c : (codeLen - targetLen);
+}
+
+// 跳过 off 处的那一组, 返回下一组偏移; 解析坏则返回 end。推进方式必须与
+// IME::collectSentenceArcs 走桶时完全一致, 否则检查点会指到组的中间。
+size_t Im3Dictionary::wordGroupAt(size_t off, size_t end) const {
+    if (!_wordData || off >= end || end > _wordDataSize) return end;
+    uint8_t cl = _wordData[off];
+    if (cl == 0 || off + 1 + cl > end) return end;
+    size_t p = off + 1 + cl;
+    if (p >= end) return end;
+    uint8_t n = _wordData[p++];
+    for (uint8_t j = 0; j < n; j++) {
+        if (p + 1 > end) return end;
+        uint8_t wl = _wordData[p];
+        if (wl == 0 || p + 1 + wl + 1 > end) return end;
+        p += 1 + wl + 1;
+    }
+    return p;
+}
+
+const uint8_t *Im3Dictionary::wordGroupCode(size_t off, int &len) const {
+    len = 0;
+    if (!_wordData || off >= _wordDataSize) return nullptr;
+    int cl = _wordData[off];
+    if (cl == 0) return nullptr;
+    len = cl;
+    return _wordData + off + 1;
+}
+
+// 桶内每 kWordGroupStride 组记一个偏移检查点, 惰性建立、按 lo 缓存(桶由 lo 唯一标识)。
+const Im3Dictionary::WordBucketIndex *Im3Dictionary::wordBucketIndex(size_t lo, size_t hi) {
+    if (!_wordData || lo >= hi || hi > _wordDataSize) return nullptr;
+    for (const WordBucketIndex &bucket : _wordBucketIdx) {
+        if (bucket.lo == lo) return &bucket;
+    }
+    WordBucketIndex bucket;
+    bucket.lo = lo;
+    size_t p = lo;
+    int since = 0;
+    while (p < hi) {
+        if (since == 0) bucket.ckpt.push_back((uint32_t)p);
+        size_t next = wordGroupAt(p, hi);
+        if (next <= p || next > hi) break;
+        p = next;
+        if (++since >= kWordGroupStride) since = 0;
+    }
+    if (bucket.ckpt.empty()) return nullptr;
+    _wordBucketIdx.push_back(std::move(bucket));
+    return &_wordBucketIdx.back();
+}
+
+size_t Im3Dictionary::wordGroupSeek(size_t lo, size_t hi, const char *target, int targetLen,
+                                    int &groupsRead) {
+    const WordBucketIndex *bucket = wordBucketIndex(lo, hi);
+    if (!bucket || bucket->ckpt.empty()) return hi;
+    const uint8_t *tb = (const uint8_t *)target;
+    const std::vector<uint32_t> &ck = bucket->ckpt;
+    // 二分到第一个 >= target 的检查点(检查点本身也是一个组)。
+    size_t a = 0, b = ck.size();
+    while (a < b) {
+        size_t mid = a + (b - a) / 2;
+        int cl = 0;
+        const uint8_t *code = wordGroupCode(ck[mid], cl);
+        if (!code || wordGroupCompare(code, cl, tb, targetLen) < 0) a = mid + 1;
+        else b = mid;
+    }
+    size_t off = ck[a > 0 ? a - 1 : 0];
+    while (off < hi) {
+        int cl = 0;
+        const uint8_t *code = wordGroupCode(off, cl);
+        if (!code) break;
+        groupsRead++;
+        if (wordGroupCompare(code, cl, tb, targetLen) >= 0) return off;
+        size_t next = wordGroupAt(off, hi);
+        if (next <= off) break;
+        off = next;
+    }
+    return hi;
 }
 
 bool Im3Dictionary::nextPredictGroup(size_t &pos, PredictGroup &out) const {
