@@ -16,5 +16,6 @@ build-*/
 !/main/fontlibrary18.fnt
 *.pre-fill
 *.pre-fill[0-9]*
+*.pre-trim
 managed_components/
 __pycache__/
