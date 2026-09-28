@@ -48,10 +48,6 @@ static const char *const kSyllables[] = {
 
 static const size_t kSyllableCount = sizeof(kSyllables) / sizeof(kSyllables[0]);
 
-static bool startsWith(const char *s, const std::string &prefix) {
-    return std::strncmp(s, prefix.c_str(), prefix.size()) == 0;
-}
-
 static bool hasExplicitSplit(const std::string &code) {
     return code.find('\'') != std::string::npos;
 }
@@ -153,20 +149,32 @@ std::string PinyinEngine::removeSplit(const std::string &code) {
     return out;
 }
 
+// kSyllables is strcmp-sorted (keep it that way when editing the table); both
+// probes below binary-search it instead of scanning all 409 entries, which was
+// the dominant cost of the split DFS on every keystroke.
+static const char *const *lowerSyllable(const char *key) {
+    const char *const *begin = kSyllables;
+    const char *const *end = kSyllables + kSyllableCount;
+    return std::lower_bound(begin, end, key,
+                            [](const char *entry, const char *k) {
+                                return std::strcmp(entry, k) < 0;
+                            });
+}
+
 bool PinyinEngine::isValidSyllable(const std::string &s) {
     if (s.empty()) return false;
-    for (size_t i = 0; i < kSyllableCount; i++) {
-        if (s == kSyllables[i]) return true;
-    }
-    return false;
+    const char *const *end = kSyllables + kSyllableCount;
+    const char *const *it = lowerSyllable(s.c_str());
+    return it != end && std::strcmp(*it, s.c_str()) == 0;
 }
 
 bool PinyinEngine::isSyllablePrefix(const std::string &s) {
     if (s.empty()) return false;
-    for (size_t i = 0; i < kSyllableCount; i++) {
-        if (startsWith(kSyllables[i], s)) return true;
-    }
-    return false;
+    const char *const *end = kSyllables + kSyllableCount;
+    const char *const *it = lowerSyllable(s.c_str());
+    // Every syllable starting with s sorts at or after s, so the first entry >= s
+    // is a prefix match iff any match at all exists.
+    return it != end && std::strncmp(*it, s.c_str(), s.size()) == 0;
 }
 
 bool PinyinEngine::isValidCode(const std::string &code) {
@@ -189,9 +197,32 @@ PinyinSplit PinyinEngine::primarySplit(const std::string &raw, bool allowPartial
 std::vector<PinyinSplit> PinyinEngine::splitVariants(const std::string &raw,
                                                      bool allowPartial,
                                                      int maxVariants) {
-    std::string code = normalize(raw);
     std::vector<PinyinSplit> out;
-    if (code.empty() || maxVariants <= 0) return out;
+    if (raw.empty() || maxVariants <= 0) return out;
+    // Ring cache keyed on the raw code. A single keystroke re-requests the same code
+    // several times (seg phase, then the fuzzy-alias phase) with identical
+    // (allowPartial, maxVariants), and the DFS below dominates the keystroke cost.
+    // The function is pure, so a hit is exact. Keys are compared against the raw
+    // argument, so a hit also skips the normalize() allocation.
+    struct CacheEntry {
+        std::string code;
+        bool allowPartial = false;
+        int maxVariants = 0;
+        bool valid = false;
+        std::vector<PinyinSplit> result;
+    };
+    static const int kSlots = 8;
+    static CacheEntry cache[kSlots];
+    static int nextSlot = 0;
+    for (int i = 0; i < kSlots; i++) {
+        const CacheEntry &e = cache[i];
+        if (e.valid && e.maxVariants == maxVariants && e.allowPartial == allowPartial &&
+            e.code == raw) {
+            return e.result;
+        }
+    }
+    std::string code = normalize(raw);
+    if (code.empty()) return out;
     if (hasExplicitSplit(code)) {
         PinyinSplit split;
         if (splitExplicit(code, allowPartial, split)) out.push_back(split);
@@ -203,6 +234,13 @@ std::vector<PinyinSplit> PinyinEngine::splitVariants(const std::string &raw,
         if (a.score != b.score) return a.score > b.score;
         return a.tokens.size() < b.tokens.size();
     });
+    CacheEntry &slot = cache[nextSlot];
+    nextSlot = (nextSlot + 1) % kSlots;
+    slot.code = raw;
+    slot.allowPartial = allowPartial;
+    slot.maxVariants = maxVariants;
+    slot.result = out;
+    slot.valid = true;
     return out;
 }
 

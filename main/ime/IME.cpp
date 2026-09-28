@@ -72,6 +72,11 @@ static const int IME_KEY_RIGHT = 0x83;
 // 短码(2 字母纯辅音)预算只有 12, 单字展开一旦填满就没有槽位留给精选简码词组
 // (Phase 4c)和词典简码(Phase 6)。给这两个阶段预留几个槽位, 保证简码可达。
 static const size_t IME_SHORTCUT_RESERVE = 3;
+// 单字候选的搭配加分。词典按词频存储, 所以用扫描位置当词频先验(每位置 1000 分),
+// 让加分表现为"前移几个位次"而不是"直接翻盘"; 上限压到 3 个位次, 避免一次偶然
+// 学习就把常用字挤出首屏。
+static const int IME_SINGLE_PRIOR_STEP = 1000;
+static const int IME_SINGLE_CTX_BOOST_CAP = 3000;
 static inline std::string str_trim(const std::string &s);
 #if PJOURNAL_IME_FAST_LOOKUP
 static const int IME_SEG_TABLE_MIN_LEN = 2;
@@ -738,6 +743,22 @@ struct ImePerfTrace {
     int64_t shorthandUs = 0;
     int64_t partialUs = 0;
     int64_t recentUs = 0;
+    // Sub-timings already contained in setupUs/userUs above. Reported for
+    // attribution only, deliberately NOT summed into trackedUs/otherUs.
+    int64_t rebuildUs = 0;        // setupUs subset: full user-word index rebuild
+    int64_t metaUs = 0;           // setupUs subset: alias/primarySplit recompute
+    int64_t userScanFixedUs = 0;  // userUs subset: fixed user-dict scan
+    int64_t userScanDynUs = 0;    // userUs subset: dynamic user-dict scan
+    int64_t segSplitUs = 0;       // segUs subset: splitVariants (incl. aliases)
+    int64_t segMatchUs = 0;       // segUs subset: index lookup + match/score loop
+    int64_t segSortUs = 0;        // segUs subset: segMatches sort + append
+    int64_t segInitUs = 0;        // userInitUs subset: Phase 4c scan (index + score loop)
+    int64_t segInitDedupUs = 0;   // segInitUs subset: addSegPrefixCandidates x2 (dedup)
+    int64_t segInitBoostUs = 0;   // segInitUs subset: context/stable boost calls
+    int64_t segInitRestUs = 0;    // segInitUs subset: remainder (maturity/score/RankedList)
+    int64_t segInitSortUs = 0;    // userInitUs subset: Phase 4c sort + append (disjoint from segInitUs)
+    int64_t userInitSortUs = 0;   // userInitUs subset: Phase 5 sort + append
+    bool rebuilt = false;
     bool hasVowel = false;
     bool incomplete = false;
     bool fixedPaging = false;
@@ -755,6 +776,7 @@ struct ImePerfTrace {
             singleUs < IME_PERF_SLOW_US &&
             segUs < IME_PERF_SLOW_US &&
             phraseUs < IME_PERF_SLOW_US &&
+            userInitialUs < IME_PERF_SLOW_US &&
             initialUs < IME_PERF_SLOW_US &&
             shorthandUs < IME_PERF_SLOW_US &&
             partialUs < IME_PERF_SLOW_US &&
@@ -766,13 +788,21 @@ struct ImePerfTrace {
         int64_t otherUs = totalUs > trackedUs ? totalUs - trackedUs : 0;
         ESP_LOGW(IME_TAG,
                  "perf lookup code='%s' exit=%s total=%lldus cand=%u limit=%u hv=%d inc=%d fixed=%d "
-                 "setup=%lld user=%lld single=%lld seg=%lld userPhrase=%lld phrase=%lld sort=%lld "
-                 "userInit=%lld init=%lld shorthand=%lld partial=%lld recent=%lld other=%lld",
+                 "setup=%lld[rebuild=%lld r=%d meta=%lld] user=%lld[fixed=%lld dyn=%lld] "
+                 "single=%lld seg=%lld[split=%lld match=%lld sort=%lld] userPhrase=%lld "
+                 "phrase=%lld sort=%lld userInit=%lld[segInit=%lld dedup=%lld boost=%lld rest=%lld siSort=%lld uiSort=%lld] "
+                 "init=%lld shorthand=%lld partial=%lld recent=%lld other=%lld",
                  code.c_str(), exitName, (long long)totalUs, (unsigned)candidates.size(),
                  (unsigned)limit, hasVowel ? 1 : 0, incomplete ? 1 : 0, fixedPaging ? 1 : 0,
-                 (long long)setupUs, (long long)userUs, (long long)singleUs,
-                 (long long)segUs, (long long)userPhraseUs, (long long)phraseUs,
-                 (long long)phraseSortUs, (long long)userInitialUs,
+                 (long long)setupUs, (long long)rebuildUs, rebuilt ? 1 : 0, (long long)metaUs,
+                 (long long)userUs, (long long)userScanFixedUs, (long long)userScanDynUs,
+                 (long long)singleUs,
+                 (long long)segUs, (long long)segSplitUs, (long long)segMatchUs, (long long)segSortUs,
+                 (long long)userPhraseUs,
+                 (long long)phraseUs, (long long)phraseSortUs,
+                 (long long)userInitialUs, (long long)segInitUs,
+                 (long long)segInitDedupUs, (long long)segInitBoostUs, (long long)segInitRestUs,
+                 (long long)segInitSortUs, (long long)userInitSortUs,
                  (long long)initialUs, (long long)shorthandUs, (long long)partialUs,
                  (long long)recentUs, (long long)otherUs);
     }
@@ -1209,6 +1239,7 @@ bool IME::begin() {
         return false;
     }
     _loaded = true;
+    _imeDebugLog = g_settings.imeDebug();
     static const char *NAMES[] = {"Wubi", "Pinyin", "Shuangpin"};
     ESP_LOGI(IME_TAG, "ready: %s, %u records, codeLen %d",
              NAMES[_scheme <= SHUANGPIN ? _scheme : 0], (unsigned)_count, _codeLen);
@@ -1304,7 +1335,7 @@ void IME::loadUserDict() {
     }
     if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
     if (_userPredictRejectDirty) saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
-    markUserWordIndexesDirty();
+    markUserWordIndexesDirty("load");
     _userPredictIndexDirty = true;
     _userDictLoaded = true;
 }
@@ -1328,7 +1359,6 @@ bool IME::compactUserEntries(std::vector<UserEntry> &entries, size_t limit) {
 
 void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty) {
     if (!dirty) return;
-    compactUserEntries(entries, entries.size());
     mkdir("/sdcard/settings", 0777);
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -1336,7 +1366,17 @@ void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bo
         return;
     }
 
-    for (auto &p : entries) {
+    // Write in descending-count order, but leave `entries` untouched: the lookup
+    // indexes store positional indices, so reordering the vector here would
+    // invalidate them and force a full rebuild on the next keystroke. Sort a
+    // permutation of indices and walk that instead.
+    std::vector<uint32_t> order(entries.size());
+    for (uint32_t i = 0; i < (uint32_t)order.size(); i++) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+        return entries[a].count > entries[b].count;
+    });
+    for (uint32_t i : order) {
+        const UserEntry &p = entries[i];
         std::string line = p.code + " " + p.word + " " + std::to_string(p.count)
                          + (p.trad ? " 1" : "") + "\n";
         fwrite(line.data(), 1, line.size(), f);
@@ -1347,7 +1387,6 @@ void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bo
         return;
     }
     clearUserDictJournal(path);
-    markUserWordIndexesDirty();
     dirty = false;
 }
 
@@ -1491,63 +1530,145 @@ void IME::flushUserDictSaves(bool force) {
         _deferredUserDictSinceUs = 0;
 }
 
-void IME::markUserWordIndexesDirty() {
+void IME::markUserWordIndexesDirty(const char *reason) {
     _userWordIndexesDirty = true;
+    _indexDirtyReason = reason;
+}
+
+void IME::indexUserWordEntry(uint16_t idx, const UserEntry &p,
+                             std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
+                             std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                             std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                             std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+    int codeKey = segPrefixKey(p.code.c_str(), (int)p.code.length());
+    if (codeKey < 26 * 26) codeIndex[codeKey].push_back(idx);
+    std::string codePrefixKey = userPrefixKeyString(p.code.c_str(), (int)p.code.length());
+    if (!codePrefixKey.empty()) codePrefixIndex[codePrefixKey].push_back(idx);
+    if (!p.initial.empty()) {
+        int initialKey = segPrefixKey(p.initial.c_str(), (int)p.initial.length());
+        if (initialKey < 26 * 26) initialIndex[initialKey].push_back(idx);
+        std::string initialPrefixKey = userPrefixKeyString(p.initial.c_str(), (int)p.initial.length());
+        if (!initialPrefixKey.empty()) initialPrefixIndex[initialPrefixKey].push_back(idx);
+    }
+    if (p.code.find('\'') != std::string::npos) {
+        std::string compact = ime::PinyinEngine::removeSplit(p.code);
+        int compactKey = segPrefixKey(compact.c_str(), (int)compact.length());
+        if (compactKey < 26 * 26 && compactKey != codeKey)
+            codeIndex[compactKey].push_back(idx);
+        std::string compactPrefixKey = userPrefixKeyString(compact.c_str(), (int)compact.length());
+        if (!compactPrefixKey.empty() && compactPrefixKey != codePrefixKey)
+            codePrefixIndex[compactPrefixKey].push_back(idx);
+    }
+}
+
+void IME::sortUserIndexMaps(const std::vector<UserEntry> &entries,
+                            std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
+                            std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                            std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                            std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+    auto sortByCount = [&](auto &map) {
+        for (auto &kv : map) {
+            std::stable_sort(kv.second.begin(), kv.second.end(),
+                [&](uint16_t a, uint16_t b) {
+                    int ca = a < entries.size() ? entries[a].count : 0;
+                    int cb = b < entries.size() ? entries[b].count : 0;
+                    return ca > cb;
+                });
+        }
+    };
+    sortByCount(codeIndex);
+    sortByCount(initialIndex);
+    sortByCount(codePrefixIndex);
+    sortByCount(initialPrefixIndex);
+}
+
+void IME::sortUserIndexMapsAfterAppend(const std::vector<UserEntry> &entries,
+                                       std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
+                                       std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                                       std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                                       std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+    auto countOf = [&entries](uint16_t i) {
+        return i < entries.size() ? entries[i].count : 0;
+    };
+    auto repairIfNeeded = [&](std::vector<uint16_t> &bucket) {
+        size_t n = bucket.size();
+        if (n < 2) return;
+        if (countOf(bucket[n - 2]) >= countOf(bucket[n - 1])) return;
+        std::stable_sort(bucket.begin(), bucket.end(),
+                         [&](uint16_t a, uint16_t b) { return countOf(a) > countOf(b); });
+    };
+    auto sweep = [&](auto &map) {
+        for (auto &kv : map) repairIfNeeded(kv.second);
+    };
+    sweep(codeIndex);
+    sweep(initialIndex);
+    sweep(codePrefixIndex);
+    sweep(initialPrefixIndex);
 }
 
 void IME::rebuildUserWordIndexes() {
     if (!_userWordIndexesDirty) return;
+#if PJOURNAL_IME_PERF_LOG
+    int64_t perfStartUs = esp_timer_get_time();
+#endif
     auto build = [](const std::vector<UserEntry> &entries,
                     std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
                     std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
                     std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                    std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+                    std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex,
+                    int64_t &insertUs, int64_t &sortUs) {
         codeIndex.clear();
         initialIndex.clear();
         codePrefixIndex.clear();
         initialPrefixIndex.clear();
-        for (size_t i = 0; i < entries.size() && i <= UINT16_MAX; i++) {
-            const UserEntry &p = entries[i];
-            int codeKey = segPrefixKey(p.code.c_str(), (int)p.code.length());
-            if (codeKey < 26 * 26) codeIndex[codeKey].push_back((uint16_t)i);
-            std::string codePrefixKey = userPrefixKeyString(p.code.c_str(), (int)p.code.length());
-            if (!codePrefixKey.empty()) codePrefixIndex[codePrefixKey].push_back((uint16_t)i);
-            if (!p.initial.empty()) {
-                int initialKey = segPrefixKey(p.initial.c_str(), (int)p.initial.length());
-                if (initialKey < 26 * 26) initialIndex[initialKey].push_back((uint16_t)i);
-                std::string initialPrefixKey = userPrefixKeyString(p.initial.c_str(), (int)p.initial.length());
-                if (!initialPrefixKey.empty()) initialPrefixIndex[initialPrefixKey].push_back((uint16_t)i);
-            }
-            if (p.code.find('\'') != std::string::npos) {
-                std::string compact = ime::PinyinEngine::removeSplit(p.code);
-                int compactKey = segPrefixKey(compact.c_str(), (int)compact.length());
-                if (compactKey < 26 * 26 && compactKey != codeKey)
-                    codeIndex[compactKey].push_back((uint16_t)i);
-                std::string compactPrefixKey = userPrefixKeyString(compact.c_str(), (int)compact.length());
-                if (!compactPrefixKey.empty() && compactPrefixKey != codePrefixKey)
-                    codePrefixIndex[compactPrefixKey].push_back((uint16_t)i);
-            }
-        }
-        auto sortByCount = [&](auto &map) {
-            for (auto &kv : map) {
-                std::stable_sort(kv.second.begin(), kv.second.end(),
-                    [&](uint16_t a, uint16_t b) {
-                        int ca = a < entries.size() ? entries[a].count : 0;
-                        int cb = b < entries.size() ? entries[b].count : 0;
-                        return ca > cb;
-                    });
-            }
-        };
-        sortByCount(codeIndex);
-        sortByCount(initialIndex);
-        sortByCount(codePrefixIndex);
-        sortByCount(initialPrefixIndex);
+        int64_t insertStartUs = IME_PERF_NOW();
+        for (size_t i = 0; i < entries.size() && i <= UINT16_MAX; i++)
+            indexUserWordEntry((uint16_t)i, entries[i], codeIndex, initialIndex,
+                               codePrefixIndex, initialPrefixIndex);
+        int64_t sortStartUs = IME_PERF_NOW();
+        insertUs += sortStartUs - insertStartUs;
+        sortUserIndexMaps(entries, codeIndex, initialIndex, codePrefixIndex, initialPrefixIndex);
+        sortUs += IME_PERF_NOW() - sortStartUs;
     };
+    int64_t insertUs = 0, sortUs = 0;
     build(_fixedUserWords, _fixedUserCodeIndex, _fixedUserInitialIndex,
-          _fixedUserCodePrefixIndex, _fixedUserInitialPrefixIndex);
+          _fixedUserCodePrefixIndex, _fixedUserInitialPrefixIndex, insertUs, sortUs);
     build(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserInitialIndex,
-          _dynamicUserCodePrefixIndex, _dynamicUserInitialPrefixIndex);
+          _dynamicUserCodePrefixIndex, _dynamicUserInitialPrefixIndex, insertUs, sortUs);
     _userWordIndexesDirty = false;
+#if PJOURNAL_IME_PERF_LOG
+    // Logged unconditionally (not behind the slow-lookup threshold): rebuilds are
+    // rare -- one per newly learned word -- and the point is to watch this cost as
+    // the user dictionary grows, even when the surrounding lookup stays fast.
+    ESP_LOGW(IME_TAG, "perf rebuild fixed=%u dyn=%u by=%s insert=%lld sort=%lld total=%lldus",
+             (unsigned)_fixedUserWords.size(), (unsigned)_dynamicUserWords.size(),
+             _indexDirtyReason ? _indexDirtyReason : "-",
+             (long long)insertUs, (long long)sortUs,
+             (long long)(esp_timer_get_time() - perfStartUs));
+#endif
+}
+
+void IME::appendUserWordIndexEntry(size_t entryIdx) {
+    // A pending rebuild means the maps are stale (an erase or compaction shifted
+    // indices), so appending on top would leave a partial index. Keep the dirty flag
+    // set and let the next lookup rebuild everything.
+    if (_userWordIndexesDirty || entryIdx > UINT16_MAX) {
+        markUserWordIndexesDirty("append-stale");
+        return;
+    }
+#if PJOURNAL_IME_PERF_LOG
+    int64_t perfStartUs = esp_timer_get_time();
+#endif
+    indexUserWordEntry((uint16_t)entryIdx, _dynamicUserWords[entryIdx],
+                       _dynamicUserCodeIndex, _dynamicUserInitialIndex,
+                       _dynamicUserCodePrefixIndex, _dynamicUserInitialPrefixIndex);
+    sortUserIndexMapsAfterAppend(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserInitialIndex,
+                                _dynamicUserCodePrefixIndex, _dynamicUserInitialPrefixIndex);
+#if PJOURNAL_IME_PERF_LOG
+    ESP_LOGW(IME_TAG, "perf index-append dyn=%u idx=%u total=%lldus",
+             (unsigned)_dynamicUserWords.size(), (unsigned)entryIdx,
+             (long long)(esp_timer_get_time() - perfStartUs));
+#endif
 }
 
 void IME::rebuildUserPredictIndex() {
@@ -1564,7 +1685,7 @@ void IME::removeUserWord(const std::string &code, const std::string &word) {
     for (auto it = _dynamicUserWords.begin(); it != _dynamicUserWords.end(); ++it) {
         if (it->code == code && it->word == word && it->trad == _trad) {
             _dynamicUserWords.erase(it);
-            markUserWordIndexesDirty();
+            markUserWordIndexesDirty("removeWord");
             _dynamicUserDirty = true;
             saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
             return;
@@ -1576,7 +1697,7 @@ void IME::clearUserDict() {
     ensureUserDictLoaded();
     if (_dynamicUserWords.empty()) return;
     _dynamicUserWords.clear();
-    markUserWordIndexesDirty();
+    markUserWordIndexesDirty("clearAll");
     _dynamicUserDirty = true;
     saveUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty);
 }
@@ -1587,7 +1708,7 @@ void IME::pruneUserDict(int minCount) {
     while (it != _dynamicUserWords.end()) {
         if (it->count < minCount) {
             it = _dynamicUserWords.erase(it);
-            markUserWordIndexesDirty();
+            markUserWordIndexesDirty("prune");
             _dynamicUserDirty = true;
         } else ++it;
     }
@@ -1631,7 +1752,7 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
             p.count += count;
             dirty = true;
             if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
-            else markUserWordIndexesDirty();
+            else markUserWordIndexesDirty("addEntry");
             saveUserDictFile(path, entries, dirty);
             return true;
         }
@@ -1641,11 +1762,11 @@ bool IME::addUserDictEntry(UserDictKind kind, const std::string &code, const std
         compactUserEntries(entries, limit);
         if (entries.size() >= limit) entries.pop_back();
         if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
-        else markUserWordIndexesDirty();
+        else markUserWordIndexesDirty("addEntry-compact");
     }
     entries.push_back({code, word, count, trad, userInitialForCode(code)});
     if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
-    else markUserWordIndexesDirty();
+    else markUserWordIndexesDirty("addEntry-new");
     dirty = true;
     saveUserDictFile(path, entries, dirty);
     return true;
@@ -1714,7 +1835,7 @@ int IME::addUserDictEntries(UserDictKind kind, const std::vector<UserEntryView> 
 
     if (changed) {
         if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
-        else markUserWordIndexesDirty();
+        else markUserWordIndexesDirty("addEntries");
         dirty = true;
         saveUserDictFile(path, entries, dirty);
     }
@@ -1738,7 +1859,7 @@ void IME::removeUserDictEntries(UserDictKind kind, const std::vector<int> &indic
             entries.erase(entries.begin() + n);
             dirty = true;
             if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
-            else markUserWordIndexesDirty();
+            else markUserWordIndexesDirty("removeEntries");
         }
     }
     if (dirty) saveUserDictFile(path, entries, dirty);
@@ -1758,7 +1879,7 @@ void IME::clearUserDict(UserDictKind kind) {
     if (entries.empty()) return;
     entries.clear();
     if (kind == PREDICT_DICT) _userPredictIndexDirty = true;
-    else markUserWordIndexesDirty();
+    else markUserWordIndexesDirty("clearKind");
     dirty = true;
     saveUserDictFile(path, entries, dirty);
 }
@@ -2033,10 +2154,12 @@ void IME::bumpFrequency(const std::string &code, const std::string &word, int we
         if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) {
             compactUserEntries(_dynamicUserWords, USERDICT_DYNAMIC_LIMIT);
             if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) _dynamicUserWords.pop_back();
-            markUserWordIndexesDirty();
+            // Compaction drops entries and shifts every following index, so the maps
+            // must be rebuilt; leaving the dirty flag set makes the append below a no-op.
+            markUserWordIndexesDirty("compact");
         }
         _dynamicUserWords.push_back({code, word, weight, _trad, userInitialForCode(code)});
-        markUserWordIndexesDirty();
+        appendUserWordIndexEntry(_dynamicUserWords.size() - 1);
         markUserDictDirty(_dynamicUserDirty, USERDICT_DYNAMIC_PATH, &_dynamicUserWords.back());
         flushUserDictSaves(false);
     }
@@ -2052,7 +2175,7 @@ bool IME::penalizeUserWord(const std::string &code, const std::string &word, int
             (code.empty() || it->code == code)) {
             if (it->count <= weight) {
                 it = _dynamicUserWords.erase(it);
-                markUserWordIndexesDirty();
+                markUserWordIndexesDirty("penalize");
             } else {
                 it->count -= weight;
                 ++it;
@@ -2074,26 +2197,40 @@ void IME::bumpPredictFrequency(const std::string &key, const std::string &word, 
     if (key.empty() || word.empty()) return;
     if (!validPredictEntry(key, word)) return;
     if (weight < 1) weight = 1;
-    for (auto &p : _userPredictWords) {
-        if (p.code == key && p.word == word && p.trad == _trad) {
-            p.count += weight;
-            if (saveNow) {
-                _userPredictDirty = true;
-                saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
-            } else {
-                markUserDictDirty(_userPredictDirty, USERPREDICT_PATH, &p);
-                flushUserDictSaves(false);
+    // learnPredictPairs() calls this up to 12 times per commit, and the old scan
+    // walked up to USERPREDICT_LIMIT (2000) entries on every one of them. The
+    // key -> entry-index map is kept valid on the append path below, so a repeat is
+    // one hash lookup instead of a full-table scan.
+    rebuildUserPredictIndex();
+    auto bucketIt = _userPredictIndex.find(key);
+    if (bucketIt != _userPredictIndex.end()) {
+        for (uint16_t entryIdx : bucketIt->second) {
+            if (entryIdx >= _userPredictWords.size()) continue;
+            auto &p = _userPredictWords[entryIdx];
+            if (p.word == word && p.trad == _trad) {
+                p.count += weight;
+                if (saveNow) {
+                    _userPredictDirty = true;
+                    saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
+                } else {
+                    markUserDictDirty(_userPredictDirty, USERPREDICT_PATH, &p);
+                    flushUserDictSaves(false);
+                }
+                return;
             }
-            return;
         }
     }
     if (_userPredictWords.size() >= USERPREDICT_LIMIT) {
         compactUserEntries(_userPredictWords, USERPREDICT_LIMIT);
         if (_userPredictWords.size() >= USERPREDICT_LIMIT) _userPredictWords.pop_back();
+        // Compaction reorders and drops entries, shifting every positional index, so
+        // the map cannot be repaired incrementally. Rebuilding here (rather than
+        // leaving the dirty flag set) keeps the append below on the fast path.
         _userPredictIndexDirty = true;
+        rebuildUserPredictIndex();
     }
     _userPredictWords.push_back({key, word, weight, _trad, ""});
-    _userPredictIndexDirty = true;
+    _userPredictIndex[key].push_back((uint16_t)(_userPredictWords.size() - 1));
     if (saveNow) {
         _userPredictDirty = true;
         saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
@@ -2335,11 +2472,20 @@ void IME::rememberReplacementPreference(const std::string &code, const std::stri
 
 void IME::rebuildContextBoostScores() {
     if (_contextBoostScoresContext == _lastCommitText) return;
+#if PJOURNAL_IME_PERF_LOG
+    int64_t perfStartUs = IME_PERF_NOW();
+#endif
     _contextBoostScoresContext = _lastCommitText;
     _contextBoostScores.clear();
     if (_lastCommitText.empty()) return;
     ensureUserDictLoaded();
+#if PJOURNAL_IME_PERF_LOG
+    int64_t perfEnsureEndUs = IME_PERF_NOW();
+#endif
     rebuildUserPredictIndex();
+#if PJOURNAL_IME_PERF_LOG
+    int64_t perfIdxEndUs = IME_PERF_NOW();
+#endif
     std::vector<std::string> keys;
     addContextTailKeys(keys, _lastCommitText);
     auto addScore = [&](const std::string &word, int score) {
@@ -2376,6 +2522,18 @@ void IME::rebuildContextBoostScores() {
             break;
         }
     }
+#if PJOURNAL_IME_PERF_LOG
+    int64_t perfTotalUs = IME_PERF_NOW() - perfStartUs;
+    if (perfTotalUs >= IME_PERF_SLOW_US)
+        ESP_LOGW(IME_TAG,
+                 "perf ctx-rebuild predict=%u keys=%u scores=%u ensure=%lld idx=%lld loop=%lld total=%lldus ctx='%s'",
+                 (unsigned)_userPredictWords.size(), (unsigned)keys.size(),
+                 (unsigned)_contextBoostScores.size(),
+                 (long long)(perfEnsureEndUs - perfStartUs),
+                 (long long)(perfIdxEndUs - perfEnsureEndUs),
+                 (long long)(IME_PERF_NOW() - perfIdxEndUs),
+                 (long long)perfTotalUs, _lastCommitText.c_str());
+#endif
 }
 
 int IME::contextCandidateBoost(const std::string &word) {
@@ -2429,7 +2587,7 @@ void IME::rememberCandidateStability() {
 
 void IME::logCandidateDebug(const char *stage, const std::string &word,
                             int score, int context, int stable) const {
-    if (!g_settings.imeDebug()) return;
+    if (!_imeDebugLog) return;
     ESP_LOGI(IME_TAG, "rank %s code='%s' word='%s' score=%d context=%d stable=%d recent=%d",
              stage ? stage : "?", _code.c_str(), word.c_str(), score, context, stable,
              recentCommitBoost(_code, word));
@@ -2740,6 +2898,7 @@ void IME::lookup() {
         _fuzzyConfigCacheUs = nowUs;
     }
     const std::string &fuzzyCfg = _fuzzyConfigCache;
+    int64_t metaStartUs = IME_PERF_NOW();
     if (cachedMetaCode != pinyinCode || cachedMetaFuzzy != fuzzyCfg) {
         cachedMetaCode = pinyinCode;
         cachedMetaFuzzy = fuzzyCfg;
@@ -2747,7 +2906,13 @@ void IME::lookup() {
         cachedPrimarySplit = ime::PinyinEngine::primarySplit(pinyinCode, true);
     }
     const std::vector<std::string> &aliasCodes = cachedAliasCodes;
+    perf.metaUs += IME_PERF_NOW() - metaStartUs;
+    // Sample the dirty flag before the call: it is rebuildUserWordIndexes()'s own
+    // entry condition, so it records whether this keystroke actually paid a rebuild.
+    perf.rebuilt = _userWordIndexesDirty;
+    int64_t rebuildStartUs = IME_PERF_NOW();
     rebuildUserWordIndexes();
+    perf.rebuildUs += IME_PERF_NOW() - rebuildStartUs;
     bool hasVowel = false;
     for (int i = 0; i < qlen; i++) {
         if (strchr("aeiouv", q[i])) { hasVowel = true; break; }
@@ -2884,7 +3049,10 @@ void IME::lookup() {
             if (!matched) continue;
             int score = userCandidateScore(matchedCode, p.count, qlen);
             score += recentCommitBoost(matchedCode, p.word);
-            int ctxBoost = singleWord ? 0 : contextCandidateBoost(p.word);
+            // Single chars get the context boost too: "type a word, then its first
+            // letter" is where a learned collocation should re-rank the first page,
+            // and the dictionary phases for the same code (Phase 4c) already do.
+            int ctxBoost = contextCandidateBoost(p.word);
             int stableBoost = stableCandidateBoost(p.word);
             score += ctxBoost + stableBoost;
             logCandidateDebug("user", p.word, score, ctxBoost, stableBoost);
@@ -2911,8 +3079,12 @@ void IME::lookup() {
         }
         };
         if (!skipBroadConsonantUserScan && !skipSingleSyllableUserScan) {
+            int64_t scanT = IME_PERF_NOW();
             scanUserWords(_fixedUserWords, _fixedUserCodeIndex, _fixedUserCodePrefixIndex, 30);
+            perf.userScanFixedUs += IME_PERF_NOW() - scanT;
+            scanT = IME_PERF_NOW();
             scanUserWords(_dynamicUserWords, _dynamicUserCodeIndex, _dynamicUserCodePrefixIndex, 20);
+            perf.userScanDynUs += IME_PERF_NOW() - scanT;
             userSingleFreq.sort();
             for (auto &f : userSingleFreq.items) {
                 appendCandidate(f.word, f.candLen);
@@ -3014,31 +3186,8 @@ void IME::lookup() {
     {
     int64_t t = IME_PERF_NOW();
     if (hasVowel) {
-        uint32_t lo, hi;
-        searchWindow(q, qlen, lo, hi);
-        uint32_t scanEnd = hi;
-        while (lo < hi) {
-            uint32_t mid = lo + (hi - lo) / 2;
-            char code[7];
-            if (!readCode(mid, code)) break;
-            if (strncmp(code, q, qlen) < 0) lo = mid + 1;
-            else hi = mid;
-        }
-        int singleScanned = 0;
-        for (uint32_t i = lo; i < scanEnd && _all.size() < _candidateLimit &&
-                              singleScanned++ < IME_MAX_SINGLE_RECORD_SCAN; i++) {
-            char code[7];
-            if (!readCode(i, code)) break;
-            if (strncmp(code, q, qlen) != 0) break;
-            uint8_t f = readRecordFlag(i);
-            if (f & (_trad ? 0x01 : 0x02)) continue;
-            char hz[4];
-            if (!readHanzi(i, hz)) break;
-            int codeLen = (int)strlen(code);
-            if (appendCandidate(std::string(hz), codeLen)) {
-                if ((int)strlen(code) > _maxMatchLen) _maxMatchLen = (int)strlen(code);
-            }
-        }
+        appendScoredSingleChars(q, qlen, IME_MAX_SINGLE_RECORD_SCAN,
+                                /*codeLenFromRecord=*/true, 0, _candidateLimit);
     }
     if (!hasVowel && _all.size() < _candidateLimit) {
         std::string fallback = ime::PinyinEngine::singleKeyFallbackSyllable(pinyinCode);
@@ -3071,6 +3220,8 @@ void IME::lookup() {
             std::vector<ime::PinyinSplit> moreSplits = ime::PinyinEngine::splitVariants(aliasCode, true, 4);
             aliasSplits.insert(aliasSplits.end(), moreSplits.begin(), moreSplits.end());
         }
+        perf.segSplitUs += IME_PERF_NOW() - t;
+        int64_t matchStartUs = IME_PERF_NOW();
         std::vector<uint16_t> segIndices;
         addSegPrefixCandidates(segIndices, SEG_CODE_ORDER, SEG_CODE_INDEX, q, qlen);
         for (auto &aliasCode : aliasCodes) {
@@ -3108,12 +3259,15 @@ void IME::lookup() {
             logCandidateDebug("seg", w, score, ctxBoost, stableBoost);
             segMatches.add(w, entryCodeLen, score, 10);
         }
+        perf.segMatchUs += IME_PERF_NOW() - matchStartUs;
+        int64_t sortStartUs = IME_PERF_NOW();
         segMatches.sort();
         for (auto &m : segMatches.items) {
             if (appendCandidate(m.word, m.candLen) && m.candLen > _maxMatchLen)
                 _maxMatchLen = m.candLen;
             if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) break;
         }
+        perf.segSortUs += IME_PERF_NOW() - sortStartUs;
         perf.segUs += IME_PERF_NOW() - t;
     }
     if (_all.size() >= IME_FAST_CANDIDATE_LIMIT) { perf.exitName = "seg-limit"; buildPage(); return; }
@@ -3261,6 +3415,8 @@ void IME::lookup() {
         std::vector<uint16_t> segIndices;
         addSegPrefixCandidates(segIndices, SEG_INITIAL_ORDER, SEG_INITIAL_INDEX, q, qlen);
         addSegPrefixCandidates(segIndices, SEG_COMPACT_INITIAL_ORDER, SEG_COMPACT_INITIAL_INDEX, q, qlen);
+        int64_t dedupEndUs = IME_PERF_NOW();
+        int64_t boostUs = 0;
         for (uint16_t segIdx : segIndices) {
             int i = segIdx;
             const char *init = SEG_TABLE[i].initial;
@@ -3278,17 +3434,26 @@ void IME::lookup() {
             if (compactMatch) score += 500;
             if (chars >= 2) score += chars;
             if (matchedInitLen > qlen) score -= std::min(6000, (matchedInitLen - qlen) * 900);
+            int64_t boostStartUs = IME_PERF_NOW();
             int ctxBoost = contextCandidateBoost(SEG_TABLE[i].word);
             int stableBoost = stableCandidateBoost(SEG_TABLE[i].word);
+            boostUs += IME_PERF_NOW() - boostStartUs;
             score += ctxBoost + stableBoost;
             logCandidateDebug("seg-initial", SEG_TABLE[i].word, score, ctxBoost, stableBoost);
             segInitFreq.add(SEG_TABLE[i].word, qlen, score, compactMatch ? 11 : 10);
         }
+        int64_t scanEndUs = IME_PERF_NOW();  // Phase 4c scan ends here; sort follows
+        perf.segInitDedupUs += dedupEndUs - t;
+        perf.segInitBoostUs += boostUs;
+        perf.segInitRestUs += (scanEndUs - dedupEndUs) - boostUs;
+        perf.segInitUs += scanEndUs - t;
+        int64_t sortStartUs = IME_PERF_NOW();
         segInitFreq.sort();
         for (auto &f : segInitFreq.items) {
             if (appendCandidate(f.word, f.candLen)) curatedInitialFilled = true;
             if (_all.size() >= _candidateLimit) break;
         }
+        perf.segInitSortUs += IME_PERF_NOW() - sortStartUs;
         perf.userInitialUs += IME_PERF_NOW() - t;
         if (_all.size() >= _candidateLimit) { perf.exitName = "seg-initial-limit"; buildPage(); return; }
     }
@@ -3322,11 +3487,13 @@ void IME::lookup() {
         };
         scanInitialWords(_fixedUserWords, _fixedUserInitialIndex, _fixedUserInitialPrefixIndex);
         scanInitialWords(_dynamicUserWords, _dynamicUserInitialIndex, _dynamicUserInitialPrefixIndex);
+        int64_t sortStartUs = IME_PERF_NOW();
         userInitFreq.sort();
         for (auto &f : userInitFreq.items) {
             appendCandidate(f.word, 0);
             if (_all.size() >= _candidateLimit) break;
         }
+        perf.userInitSortUs += IME_PERF_NOW() - sortStartUs;
         perf.userInitialUs += IME_PERF_NOW() - t;
         if (_all.size() >= _candidateLimit) { perf.exitName = "user-initial-limit"; buildPage(); return; }
     }
@@ -3391,8 +3558,11 @@ void IME::lookup() {
                     std::string w((const char *)wordData + next, wl);
                     if (wordVisible(_trad, w, wf)) {
                         int score = initialPhraseCandidateScoreFromLength((int)groupInit.length(), qlen, w);
-                        int ctxBoost = _fixedCandidatePaging ? 0 : contextCandidateBoost(w);
-                        int stableBoost = _fixedCandidatePaging ? 0 : stableCandidateBoost(w);
+                        // _fixedCandidatePaging only picks how the page is sliced, not
+                        // how candidates rank; Phase 4c already boosts the same scores
+                        // for these codes, so gate on nothing here either.
+                        int ctxBoost = contextCandidateBoost(w);
+                        int stableBoost = stableCandidateBoost(w);
                         score += ctxBoost + stableBoost;
                         logCandidateDebug("initial", w, score, ctxBoost, stableBoost);
                         if (score >= 0) addInitialCandidate(w, cl, score);
@@ -3851,34 +4021,65 @@ void IME::lookupSegmented() {
 
 // 主词典单字前缀匹配: 与 lookup() Phase 2 相同扫描, 但消费长度由调用方指定
 // (分词逐字续拼时是跳到下一段的字节偏移, 而非词典码长)。
-void IME::appendSingleCharCandidates(const std::string &prefix, int candLen, size_t cap) {
-    int qlen = (int)prefix.length();
+void IME::appendScoredSingleChars(const char *prefix, int qlen, int scanBudget,
+                                  bool codeLenFromRecord, int fixedCandLen, size_t cap) {
+    if (!prefix || qlen < 1) return;
     if (cap == 0) cap = _candidateLimit;
-    if (qlen < 1 || _all.size() >= cap) return;
+    if (_all.size() >= cap) return;
     uint32_t lo, hi;
-    searchWindow(prefix.c_str(), qlen, lo, hi);
+    searchWindow(prefix, qlen, lo, hi);
     uint32_t scanEnd = hi;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
         char code[7];
         if (!readCode(mid, code)) break;
-        if (strncmp(code, prefix.c_str(), qlen) < 0) lo = mid + 1;
+        if (strncmp(code, prefix, qlen) < 0) lo = mid + 1;
         else hi = mid;
     }
-    int scanBudget = (candLen > 0 && candLen <= 2) ?
-        IME_MAX_SHORT_CONSONANT_SINGLE_SCAN : IME_MAX_SINGLE_RECORD_SCAN;
+    _singleScratch.clear();
     int scanned = 0;
-    for (uint32_t i = lo; i < scanEnd && _all.size() < cap &&
-                          scanned++ < scanBudget; i++) {
+    // Scoring is deferred to a sort after the scan, so _all does not grow here and
+    // the scan is bounded by scanBudget alone. Duplicates of rows already in _all
+    // are dropped later by appendCandidate, so a low-scoring dupe never shadows a
+    // higher-scoring row that has not been scanned yet.
+    for (uint32_t i = lo; i < scanEnd && scanned++ < scanBudget; i++) {
         char code[7];
         if (!readCode(i, code)) break;
-        if (strncmp(code, prefix.c_str(), qlen) != 0) break;
+        if (strncmp(code, prefix, qlen) != 0) break;
         uint8_t f = readRecordFlag(i);
         if (f & (_trad ? 0x01 : 0x02)) continue;
         char hz[4];
         if (!readHanzi(i, hz)) break;
-        appendCandidate(std::string(hz), candLen);
+        std::string word(hz);
+        int score = -(int)_singleScratch.size() * IME_SINGLE_PRIOR_STEP;
+        int ctxBoost = contextCandidateBoost(word);
+        if (ctxBoost > IME_SINGLE_CTX_BOOST_CAP) ctxBoost = IME_SINGLE_CTX_BOOST_CAP;
+        int stableBoost = stableCandidateBoost(word);
+        score += ctxBoost + stableBoost;
+        logCandidateDebug("single", word, score, ctxBoost, stableBoost);
+        _singleScratch.push_back({word, codeLenFromRecord ? (int)strlen(code) : fixedCandLen, score});
     }
+    if (_singleScratch.size() > 1) {
+        std::stable_sort(_singleScratch.begin(), _singleScratch.end(),
+            [](const SingleScratchEntry &a, const SingleScratchEntry &b) {
+                return a.score > b.score;
+        });
+    }
+    for (auto &e : _singleScratch) {
+        if (_all.size() >= cap) break;
+        if (appendCandidate(e.word, e.codeLen) && codeLenFromRecord &&
+            e.codeLen > _maxMatchLen)
+            _maxMatchLen = e.codeLen;
+    }
+}
+
+void IME::appendSingleCharCandidates(const std::string &prefix, int candLen, size_t cap) {
+    int qlen = (int)prefix.length();
+    if (cap == 0) cap = _candidateLimit;
+    int scanBudget = (candLen > 0 && candLen <= 2) ?
+        IME_MAX_SHORT_CONSONANT_SINGLE_SCAN : IME_MAX_SINGLE_RECORD_SCAN;
+    appendScoredSingleChars(prefix.c_str(), qlen, scanBudget,
+                            /*codeLenFromRecord=*/false, candLen, cap);
 }
 
 void IME::beginPredict(const std::string &text, bool afterSpaceCommit) {
@@ -4066,7 +4267,7 @@ bool IME::commit(int idx, std::string &out, bool bySpace) {
                 if (it->word == out && it->trad == _trad &&
                     (!requireCode || it->code == _code)) {
                     _dynamicUserWords.erase(it);
-                    markUserWordIndexesDirty();
+                    markUserWordIndexesDirty("commitDelete");
                     _dynamicUserDirty = true;
                     flushUserDictSaves(false);
                     penalizePredictWord(out, 3);

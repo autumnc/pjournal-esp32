@@ -156,6 +156,9 @@ private:
     std::unordered_map<std::string, std::vector<uint16_t>> _dynamicUserInitialPrefixIndex;
     std::unordered_map<std::string, std::vector<uint16_t>> _userPredictIndex;
     bool _userWordIndexesDirty = true;
+    // Last caller to invalidate the positional lookup indexes; reported by the
+    // "perf rebuild" log so a stray invalidation is attributable. PERF_LOG only.
+    const char *_indexDirtyReason = nullptr;
     bool _userPredictIndexDirty = true;
     bool _fixedUserDirty = false;
     bool _dynamicUserDirty = false;
@@ -175,9 +178,32 @@ private:
     void clearUserDictJournal(const char *path);
     void markUserDictDirty(bool &dirty, const char *path = nullptr, const UserEntry *entry = nullptr);
     void flushUserDictSaves(bool force);
-    void markUserWordIndexesDirty();
+    void markUserWordIndexesDirty(const char *reason = nullptr);
     void rebuildUserWordIndexes();
     void rebuildUserPredictIndex();
+    // Push one entry's keys into the four lookup maps (push-only, no sort/clear).
+    static void indexUserWordEntry(uint16_t idx, const UserEntry &entry,
+                                   std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
+                                   std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                                   std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                                   std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex);
+    static void sortUserIndexMaps(const std::vector<UserEntry> &entries,
+                                  std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
+                                  std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                                  std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                                  std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex);
+    // Append-path variant of the above. A bucket is count-sorted after the last full
+    // rebuild and appends only ever push onto its tail, so the only possible disorder
+    // is that tail pair. Re-sorting just those buckets skips a std::stable_sort (which
+    // allocates a temporary buffer even for 2-element buckets) on every other bucket.
+    static void sortUserIndexMapsAfterAppend(const std::vector<UserEntry> &entries,
+                                             std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
+                                             std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
+                                             std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
+                                             std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex);
+    // Index one already-appended dynamic entry without a full rebuild. Falls back to
+    // a full rebuild (leaving the dirty flag set) if the maps are stale.
+    void appendUserWordIndexEntry(size_t entryIdx);
     void bumpFrequency(const std::string &code, const std::string &word, int weight = 1);
     bool penalizeUserWord(const std::string &code, const std::string &word, int weight = 2);
     void bumpPredictFrequency(const std::string &key, const std::string &word, bool saveNow = true, int weight = 1);
@@ -232,6 +258,12 @@ private:
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
     std::vector<std::string> _englishWords;
+    // Snapshot of the hidden ime_debug setting, taken once in begin() while the SD
+    // card is already mounted. logCandidateDebug() runs per candidate inside the
+    // hottest scan loops, where a settings mutex + map lookup is measurable (and its
+    // first call otherwise paid three stat() plus a failed fopen on the SD card).
+    // Enabling the setting therefore requires a reboot.
+    bool _imeDebugLog = false;
 #if PJOURNAL_IME_ENABLE_LIANGFEN
     bool _lfMode = false;
     const uint8_t *_lfBlob = nullptr;
@@ -265,6 +297,10 @@ private:
     std::vector<int> _candLen;  // code length per candidate in _all
     std::vector<int> _candidateWidths;  // cached text width parallel to _all (-1=unknown)
     std::vector<std::string> _predictCandidateKeys;  // prediction key parallel to _all in predict mode
+    // Scratch for scoring dictionary single chars before they are appended. Held as
+    // a member so the pass adds no per-lookup heap traffic (capacity survives clear).
+    struct SingleScratchEntry { std::string word; int codeLen = 0; int score = 0; };
+    std::vector<SingleScratchEntry> _singleScratch;
     std::vector<std::string> _page;
     int _pageStart = 0;
     int _pageSize = 9;
@@ -308,6 +344,8 @@ private:
     void clearCandidates();
     void rebuildCandidateHashes();
     bool appendCandidate(const std::string &text, int candLen);
+    void appendScoredSingleChars(const char *prefix, int qlen, int scanBudget,
+                                 bool codeLenFromRecord, int fixedCandLen, size_t cap);
     void appendSingleCharCandidates(const std::string &prefix, int candLen,
                                     size_t cap = 0);  // cap=0 用 _candidateLimit
     void buildPage();
