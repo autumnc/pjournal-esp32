@@ -4335,54 +4335,48 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
         _sentenceArcs.push_back(std::move(arc));
     };
 
-    // 1) 词典词弧。词表只按前两位分桶, 桶内按整码升序; 组记录变长且没有长度字段, 从桶首
-    //    顺扫要跨过每组的每条词, 大桶(sh/ji)几千组才走到目标前缀, 靠总预算兜底。这里先用
-    //    桶内组偏移检查点(每 kWordGroupStride 组一个)二分到"最短的匹配前缀组", 再从那里
-    //    顺扫; 一个前缀都没命中就连桶都不走。
+    // 1) 词典词弧。词表只按前两位分桶, 桶内组记录变长且没有长度字段; 从桶首顺扫时, 要找的
+    //    匹配前缀之间还夹着大量不匹配的组(实测 pos 0 就要跨 2314 组, 占整个整句相位七成),
+    //    检查点索引也救不了——它只省掉"桶首→首个匹配前缀"这一小段。这里改成对每个前缀长度
+    //    各 seek 一次: 命中就取该组的词弧, 再探更长前缀; 一旦"第一个 ≥ 该前缀的组在前 L 字节
+    //    内就分歧", 更长的前缀必然也不匹配(否则它会是第一个 ≥ 该前缀的组), 直接停。词弧的
+    //    顺序、rank 与顺扫逐条一致, 且完全不扫不匹配的组。
     if (_dict.hasWords()) {
         size_t wlo = 0, whi = 0;
         wordWindowCached(code + pos, remain >= 2 ? 2 : 1, wlo, whi);
         const uint8_t *wordData = _dict.wordData();
-        size_t wpos = whi;
         int scanned = 0;
         if (wlo < whi) {
             for (int L = 1; L <= remain && scanned < budget; L++) {
-                size_t off = _dict.wordGroupSeek(wlo, whi, code + pos, L, scanned);
+                const size_t off = _dict.wordGroupSeek(wlo, whi, code + pos, L, scanned);
+                if (off >= whi) break;  // 桶里没有 ≥ 该前缀的组, 更长前缀也不会有
                 int cl = 0;
-                const uint8_t *wc = (off < whi) ? _dict.wordGroupCode(off, cl) : nullptr;
-                if (wc && cl == L && memcmp(wc, code + pos, (size_t)L) == 0) {
-                    wpos = off;
-                    break;
-                }
-            }
-        }
-        while (wpos < whi && scanned < budget) {
-            uint8_t cl = wordData[wpos];
-            if (cl == 0 || wpos + 1 + cl > whi) break;
-            const uint8_t *wc = wordData + wpos + 1;
-            size_t p = wpos + 1 + cl;
-            if (p >= whi) break;
-            uint8_t n = wordData[p++];
-            scanned++;
-            int cmp = memcmp(wc, code + pos, cl < remain ? cl : remain);
-            if (cmp > 0) break;
-            if (cmp == 0 && cl > remain) break;  // 组码比整串还长, 后面的组只会更大
-            const bool matched = (cl <= remain) && cmp == 0;
-            int taken = 0;
-            for (uint8_t j = 0; j < n; j++) {
-                if (p + 1 > whi) { p = whi; break; }
-                uint8_t wl = wordData[p];
-                if (wl == 0 || p + 1 + wl + 1 > whi) { p = whi; break; }
-                if (matched && taken < IME_SENTENCE_WORD_ARCS) {
-                    std::string w((const char *)wordData + p + 1, wl);
-                    if (wordVisible(_trad, w, wordData[p + 1 + wl])) {
-                        pushWordArc(w, cl, taken);
-                        taken++;
+                const uint8_t *wc = _dict.wordGroupCode(off, cl);
+                if (!wc) break;
+                if (cl == L && memcmp(wc, code + pos, (size_t)L) == 0) {
+                    size_t p = off + 1 + cl;
+                    if (p < whi) {
+                        uint8_t n = wordData[p++];
+                        int taken = 0;
+                        for (uint8_t j = 0; j < n; j++) {
+                            if (p + 1 > whi) break;
+                            uint8_t wl = wordData[p];
+                            if (wl == 0 || p + 1 + wl + 1 > whi) break;
+                            if (taken < IME_SENTENCE_WORD_ARCS) {
+                                std::string w((const char *)wordData + p + 1, wl);
+                                if (wordVisible(_trad, w, wordData[p + 1 + wl])) {
+                                    pushWordArc(w, cl, taken);
+                                    taken++;
+                                }
+                            }
+                            p += 1 + wl + 1;
+                        }
                     }
+                    continue;  // 命中, 继续探更长前缀
                 }
-                p += 1 + wl + 1;
+                if (cl <= L || memcmp(wc, code + pos, (size_t)L) != 0) break;
+                // 否则 wc 比该前缀长且以它开头, 继续探更长前缀
             }
-            wpos = p;
         }
         _sentenceGroupsScanned += scanned;
     }

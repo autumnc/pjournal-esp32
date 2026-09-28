@@ -267,60 +267,85 @@ class Ime3:
             bias = lambda cl: SENT_LEN_BIAS * cl * (n - pos)
             wlo, whi = self.word_window(code[pos:pos + 2] if remain >= 2 else code[pos:pos + 1])
             reads = [0]
-            p = wlo
             if indexed:
-                # 匹配的组就是"码恰好是 T 前缀"的词条, 组按码升序即按长度升序, 所以按长度
-                # 递增探测, 第一个命中的就是词条顺序里的第一个匹配。一个都没命中说明桶里
-                # 没有词弧, 连桶都不用走。
-                start = None
-                for ln in range(1, remain + 1):
-                    if reads[0] >= budget:
+                # 每个前缀长度 seek 一次直接跳到对应组, 命中就取该组的词弧; 一旦"首个 ≥ 该前缀
+                # 的组在前 L 字节内分歧"就停——更长的前缀必然也不匹配。与桶首顺扫逐条同弧, 但
+                # 不扫描匹配前缀之间那些不匹配的组(那才是顺扫的主要开销)。
+                if wlo < whi:
+                    for ln in range(1, remain + 1):
+                        if reads[0] >= budget:
+                            break
+                        cand = code[pos:pos + ln].encode()
+                        off = self.seek_group(wlo, whi, cand, reads)
+                        if off >= whi:
+                            break
+                        gcode = self.group_code(off)
+                        if gcode == cand:
+                            cl = len(gcode)
+                            q = off + 1 + cl
+                            cnt = wd[q]
+                            q += 1
+                            taken = 0
+                            for _ in range(cnt):
+                                if q + 1 > whi:
+                                    break
+                                wl = wd[q]
+                                if wl == 0 or q + 1 + wl + 1 > whi:
+                                    break
+                                if taken < SENT_WORD_ARCS:
+                                    word = wd[q + 1:q + 1 + wl].decode()
+                                    if not (wd[q + 1 + wl] & 0x02):
+                                        arcs.append((pos, pos + cl, word,
+                                                     SENT_WORD_UNIT * (len(word) - 1)
+                                                     - SENT_RANK_WORD * taken
+                                                     - SENT_ARC_PENALTY + bias(cl)))
+                                        taken += 1
+                                q += 1 + wl + 1
+                            continue
+                        if len(gcode) <= ln or gcode[:ln] != cand:
+                            break
+                groups[0] += reads[0]
+            else:
+                p = wlo
+                scanned = 0
+                while p < whi and scanned < budget:
+                    cl = wd[p]
+                    if cl == 0 or p + 1 + cl > whi:
                         break
-                    cand = code[pos:pos + ln].encode()
-                    off = self.seek_group(wlo, whi, cand, reads)
-                    if off < whi and self.group_code(off) == cand:
-                        start = off
+                    wc = wd[p + 1:p + 1 + cl]
+                    q = p + 1 + cl
+                    if q >= whi:
                         break
-                p = start if start is not None else whi
-            scanned = reads[0]
-            while p < whi and scanned < budget:
-                cl = wd[p]
-                if cl == 0 or p + 1 + cl > whi:
-                    break
-                wc = wd[p + 1:p + 1 + cl]
-                q = p + 1 + cl
-                if q >= whi:
-                    break
-                cnt = wd[q]
-                q += 1
-                scanned += 1
-                cmplen = min(cl, remain)
-                tgt = code[pos:pos + cmplen].encode()
-                seg = wc[:cmplen]
-                if seg > tgt:
-                    break
-                if seg == tgt and cl > remain:
-                    break
-                matched = cl <= remain and seg == tgt
-                taken = 0
-                for _ in range(cnt):
-                    if q + 1 > whi:
-                        q = whi
+                    cnt = wd[q]
+                    q += 1
+                    scanned += 1
+                    cmplen = min(cl, remain)
+                    tgt = code[pos:pos + cmplen].encode()
+                    seg = wc[:cmplen]
+                    if seg > tgt:
                         break
-                    wl = wd[q]
-                    if wl == 0 or q + 1 + wl + 1 > whi:
-                        q = whi
+                    if seg == tgt and cl > remain:
                         break
-                    if matched and taken < SENT_WORD_ARCS:
-                        word = wd[q + 1:q + 1 + wl].decode()
-                        if not (wd[q + 1 + wl] & 0x02):
-                            arcs.append((pos, pos + cl, word,
-                                         SENT_WORD_UNIT * (len(word) - 1)
-                                         - SENT_RANK_WORD * taken - SENT_ARC_PENALTY + bias(cl)))
-                            taken += 1
-                    q += 1 + wl + 1
-                p = q
-            groups[0] += scanned
+                    matched = cl <= remain and seg == tgt
+                    taken = 0
+                    for _ in range(cnt):
+                        if q + 1 > whi:
+                            q = whi
+                            break
+                        wl = wd[q]
+                        if wl == 0 or q + 1 + wl + 1 > whi:
+                            q = whi
+                            break
+                        if matched and taken < SENT_WORD_ARCS:
+                            word = wd[q + 1:q + 1 + wl].decode()
+                            if not (wd[q + 1 + wl] & 0x02):
+                                arcs.append((pos, pos + cl, word,
+                                             SENT_WORD_UNIT * (len(word) - 1)
+                                             - SENT_RANK_WORD * taken - SENT_ARC_PENALTY + bias(cl)))
+                                taken += 1
+                        q += 1 + wl + 1
+                    p = q
+                groups[0] += scanned
             # 单字弧: 段必须恰好是一个合法音节, 否则 "xian" 会被拆成 "xi"+"an"。
             for cl in range(1, min(6, remain) + 1):
                 syl = code[pos:pos + cl]
