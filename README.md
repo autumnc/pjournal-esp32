@@ -19,7 +19,7 @@ ESP32-S3 上的个人日记工具，配备 4.2 寸 RLCD 黑白全反射屏，支
 ## 功能特性
 
 - **自由写作** / **提示写作**：新建日记条目
-- **拼音输入法**：中文输入、词库联想、用户词典（单字优先），`Ctrl+Space` 中/英切换，`Shift+Space` 全角/半角，`Ctrl+Shift+F` 繁/简切换，`Ctrl+D` 删除动态用户词，左Shift单击临时英文模式
+- **拼音输入法**：中文输入、词库联想、用户词典（单字优先），联想态下回车/退格透传编辑器，候选高亮选择可在设置中开启，`Ctrl+Space` 中/英切换，`Shift+Space` 全角/半角，`Ctrl+Shift+F` 繁/简切换，`Ctrl+D` 删除动态用户词，左Shift单击临时英文模式
 - **v 模式快捷输入**：裸 `v` 出常用文字表情（颜文字）候选；`v/编码` 按拼音/声母搜索文字表情（如 `v/kaixin`、`v/kx` 匹配开心相关的表情，支持渐进过滤，闭合 `v/kaixin/` 或任意字母编码时数字键 1-9 直选）；`v/bd` 搜中文标点；`v/t/` 时间、`v/d/` 日期、`v/w/` 星期，以 `/` 闭合后出候选（时间/日期各 3 种格式，星期为英文/中文）；方向键移动反白高亮后空格/回车确认。词库来自万象拼音颜文字词库，按 16/22pt 字形覆盖过滤后内嵌（`scripts/kaomoji_convert.py` 生成）
 - **英文单词输入**：英文模式下输入字母出单词联想（内置万词词库），输入首字母大写时候选自动首字母大写；连续上屏两个单词且中间无空格时自动补空格分隔
 - **词库管理**：「设置」→「词库管理」，固定/动态/联想词库的查看、搜索、多选删除、添加词条，`i/e` 按约定文件导入/导出
@@ -250,6 +250,38 @@ esptool.py --chip esp32s3 merge_bin -o build/pjournal-merged.bin \
   0x10000 build/pjournal.bin
 ```
 
+### 开发检查与发布
+
+```bash
+# 输入法回归检查
+python3 scripts/check_ime_all.py
+
+# 发布辅助：更新版本、跑 IME 检查、构建并生成 merged 固件
+python3 scripts/release.py X.Y.Z --build-dir build-yong-ime
+```
+
+发布脚本默认只生成本地产物；加 `--commit --push --github-release` 后才会提交、推送 tag 并创建 GitHub Release。
+
+### IME 性能基准
+
+输入法延迟基准使用单独的 perflog 构建；正常固件中 `PJOURNAL_IME_PERF_LOG` 为关闭状态，相关计时代码与日志不会进入运行热路径。
+
+```bash
+# 加载 ESP-IDF 环境
+. /home/ywz/esp/esp-idf/export.sh
+
+# 构建带 IME perflog 的固件
+idf.py -B build-yong-ime-perflog -DPJOURNAL_IME_PERF_LOG=ON build
+
+# 烧录并保存 monitor 日志
+idf.py -B build-yong-ime-perflog -p /dev/ttyUSB0 flash monitor | tee ime-perf.log
+
+# 汇总每个输入码的 avg / p95 / max
+python3 scripts/ime_perf_report.py ime-perf.log
+```
+
+建议每次按固定输入序列录制，如 `shuru`、`shurufa`、`sr`、`srf`、`womenxianzaiqu`、`jintiantianqihenhao`；对比优化前后时保持同一词库、同一设置、同一输入顺序。
+
 ### 烧录
 
 ```bash
@@ -345,7 +377,7 @@ idf.py -p /dev/ttyUSB0 flash
 
 ## 版本
 
-当前版本: v4.9.1
+当前版本: v4.9.2
 
 ## License
 

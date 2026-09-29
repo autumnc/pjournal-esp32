@@ -225,6 +225,13 @@ static bool toggleValue(const char *key) {
     return v == "1";  // auto_save: 默认关
 }
 
+static bool restartRequiredField(const char *key) {
+    return strcmp(key, "_ime_fuzzy") == 0 ||
+           strcmp(key, "ime_sentence") == 0 ||
+           strcmp(key, "ime_doc_context") == 0 ||
+           strcmp(key, "ime_candidate_highlight") == 0;
+}
+
 enum SettingsScreenMode { SETTINGS_BROWSE, SETTINGS_DICT_CHOOSE, SETTINGS_DICT_LIST, SETTINGS_DICT_ADD };
 
 static struct {
@@ -1167,8 +1174,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.inputMode() == "typewriter" ? "打字机模式" : "正常模式");
             } else if (strcmp(f.key, "_ime_fuzzy") == 0) {
-                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
-                         IME_FUZZY_OPTS[imeFuzzyIndex(g_settings.imeFuzzy().c_str())].label);
+                snprintf(buf, sizeof(buf), "▶ %s: %s%s", f.label,
+                         IME_FUZZY_OPTS[imeFuzzyIndex(g_settings.imeFuzzy().c_str())].label,
+                         restartRequiredField(f.key) ? " 重启" : "");
             } else if (strcmp(f.key, "_ime_predict_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          IME_PREDICT_OPTS[imePredictIndex(g_settings.imePredictMode().c_str())].label);
@@ -1187,7 +1195,8 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 snprintf(buf, sizeof(buf), "▶ %s", f.label);
             }
         } else if (isToggleField(f.key)) {
-            snprintf(buf, sizeof(buf), "%s:%s", f.label, toggleValue(f.key) ? "开" : "关");
+            snprintf(buf, sizeof(buf), "%s:%s%s", f.label, toggleValue(f.key) ? "开" : "关",
+                     restartRequiredField(f.key) ? " 重启" : "");
         } else {
             std::string value = g_settings.getString(f.key);
             std::string display;

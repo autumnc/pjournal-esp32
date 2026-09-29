@@ -91,6 +91,7 @@ static const int IME_SENTENCE_RESULTS = 3;
 static const int IME_SENTENCE_BUCKET_SCAN = 3600;
 // 整次 lookup 的组扫描总量上限, 兜住 16 个起点 × 大桶的最坏开销。
 static const int IME_SENTENCE_TOTAL_SCAN = 8000;
+static const int IME_SENTENCE_MIN_WORD_CODE_LEN = 2;
 static const int IME_SENTENCE_WORD_ARCS = 3;    // 每个词条取词频最高的几个词
 static const int IME_SENTENCE_SINGLE_ARCS = 2;  // 每个音节取最高频的几个单字
 // 至少要四个音节才拼句。三个音节的输入在词库里基本都有现成的词("xiexieni"→谢谢你,
@@ -1301,6 +1302,8 @@ bool IME::begin() {
     _sentenceMode = g_settings.imeSentence();
     _docCtxMode = g_settings.imeDocContext();
     _highlightSelectMode = g_settings.imeCandidateHighlight();
+    _fuzzyConfigCache = g_settings.imeFuzzy();
+    _fuzzyConfigCacheUs = esp_timer_get_time();
     static const char *NAMES[] = {"Wubi", "Pinyin", "Shuangpin"};
     ESP_LOGI(IME_TAG, "ready: %s, %u records, codeLen %d",
              NAMES[_scheme <= SHUANGPIN ? _scheme : 0], (unsigned)_count, _codeLen);
@@ -3003,7 +3006,13 @@ uint8_t IME::readLfFlag(uint16_t i) {
 void IME::setActive(bool on) {
     if (!on) flushUserDictSaves(true);
     _active = on;
-    if (on) ensureUserDictLoaded();
+    if (on) {
+        ensureUserDictLoaded();
+        // Prewarm user lookup indexes before the first keystroke. Loading the user
+        // dictionaries marks these maps dirty; paying the rebuild here keeps the
+        // cold-start spike out of the input hot path.
+        rebuildUserWordIndexes();
+    }
     reset();
 }
 
@@ -3155,11 +3164,6 @@ void IME::lookup() {
     static std::string cachedMetaFuzzy;
     static std::vector<std::string> cachedAliasCodes;
     static ime::PinyinSplit cachedPrimarySplit;
-    int64_t nowUs = esp_timer_get_time();
-    if (_fuzzyConfigCacheUs == 0 || nowUs - _fuzzyConfigCacheUs > 2000000) {
-        _fuzzyConfigCache = g_settings.imeFuzzy();
-        _fuzzyConfigCacheUs = nowUs;
-    }
     const std::string &fuzzyCfg = _fuzzyConfigCache;
     int64_t metaStartUs = IME_PERF_NOW();
     if (cachedMetaCode != pinyinCode || cachedMetaFuzzy != fuzzyCfg) {
@@ -4197,7 +4201,7 @@ void IME::lookupSegmented() {
     if (segs.empty()) return;
     std::string q;
     for (auto &s : segs) q += s;
-    std::vector<std::string> aliasCodes = alternateInputCodes(q);
+    std::vector<std::string> aliasCodes = alternateInputCodes(q, _fuzzyConfigCache);
     int fullLen = (int)_code.length();
     rebuildUserWordIndexes();
 
@@ -4433,7 +4437,7 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
         const uint8_t *wordData = _dict.wordData();
         int scanned = 0;
         if (wlo < whi) {
-            for (int L = 1; L <= remain && scanned < budget; L++) {
+            for (int L = IME_SENTENCE_MIN_WORD_CODE_LEN; L <= remain && scanned < budget; L++) {
 #if PJOURNAL_IME_PERF_LOG
                 g_sentencePerf.seekCalls++;
 #endif
@@ -4559,7 +4563,28 @@ void IME::appendSentenceCandidates(const char *code, int len) {
     _sentenceByHiOff.assign(len + 2, 0);
     _sentenceGroupsScanned = 0;
 
-    for (int pos = 0; pos < len; pos++) collectSentenceArcs(pos, code, len);
+    // 词典词码仍由拼音音节拼成, 所以只有音节边界才可能成为整句路径起点。
+    // 先用单字音节做一个轻量 reachability 剪枝, 避免在 "womenxianza" 的 o/m/e/x/i...
+    // 这类音节内部位置反复 seek 词典组。单字弧仍在 collectSentenceArcs 里生成, 这里
+    // 只是跳过不可到达的起点, 不改变可行路径的打分或排序。
+    bool reachable[IME_SENTENCE_MAX_LEN + 1] = {};
+    reachable[0] = true;
+    for (int pos = 0; pos < len; pos++) {
+        if (!reachable[pos]) continue;
+        const int remain = len - pos;
+        const int maxSyl = remain < MAX_CODE_LEN ? remain : MAX_CODE_LEN;
+        for (int cl = 1; cl <= maxSyl; cl++) {
+            char syl[MAX_CODE_LEN + 1];
+            memcpy(syl, code + pos, cl);
+            syl[cl] = '\0';
+            if (ime::PinyinEngine::isValidSyllable(syl))
+                reachable[pos + cl] = true;
+        }
+    }
+
+    for (int pos = 0; pos < len; pos++) {
+        if (reachable[pos]) collectSentenceArcs(pos, code, len);
+    }
     if (_sentenceArcs.empty()) return;
 
     // 弧按终点分桶(计数排序), DP 就能按 hi 升序一次成型: 走到 hi 时所有 lo < hi

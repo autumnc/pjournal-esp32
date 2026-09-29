@@ -127,6 +127,11 @@ def require_source_contains(name, text, snippet):
         raise SystemExit(f"{name}: missing source snippet {snippet!r}")
 
 
+def require_source_not_contains(name, text, snippet):
+    if snippet in text:
+        raise SystemExit(f"{name}: unexpected source snippet {snippet!r}")
+
+
 def ime3_predict_count(path):
     blob = path.read_bytes()
     if len(blob) < 12 or blob[:4] != b"IME3":
@@ -358,6 +363,9 @@ def main():
     require_source_contains("dict import error export", (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8"), "dictImportErrorPath")
     require_source_contains("ime fuzzy setting", (ROOT / "main" / "settings_manager.h").read_text(encoding="utf-8"), "imeFuzzy")
     require_source_contains("ime fuzzy engine", ime_cpp, "fuzzyOptionEnabled")
+    lookup_body = ime_cpp.split("void IME::lookup() {", 1)[1].split("\nvoid IME::", 1)[0]
+    require_source_not_contains("ime lookup hot path fuzzy setting read", lookup_body, "g_settings.imeFuzzy()")
+    require_source_contains("ime fuzzy snapshot", ime_cpp, "_fuzzyConfigCache = g_settings.imeFuzzy()")
     require_source_contains("ime exact phrase promotion", ime_cpp, "exactPhraseMatches")
     require_source_contains("ime shorthand denoise", ime_cpp, "curatedInitialFilled")
     require_source_contains("ime offline simulator", (ROOT / "scripts" / "ime_query_sim.py").read_text(encoding="utf-8"), "Offline approximate IME candidate query")
