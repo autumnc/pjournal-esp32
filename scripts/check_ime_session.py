@@ -60,6 +60,64 @@ class RecentCommits:
         return out
 
 
+class CandidateSession:
+    """Small host-side model for interaction rules that must stay cheap on-device."""
+
+    def __init__(self, highlight=False):
+        self.highlight = highlight
+        self.code = ""
+        self.page = []
+        self.sel = 0
+        self.predicting = False
+
+    def compose(self, code, page):
+        self.code = code
+        self.page = list(page)
+        self.sel = 0
+        self.predicting = False
+
+    def predict(self, page):
+        self.code = ""
+        self.page = list(page)
+        self.sel = 0
+        self.predicting = True
+
+    def key(self, key):
+        if self.predicting:
+            if key in ("enter", "backspace"):
+                self.predicting = False
+                self.page = []
+                return "pass"
+            if key == "esc":
+                self.predicting = False
+                self.page = []
+                return "handled"
+            if key == "space" and self.page:
+                out = self.page[0]
+                self.predicting = False
+                return out
+            if len(key) == 1 and key.isalpha():
+                self.compose(key, [])
+                return "handled"
+            return "handled"
+
+        if key == "left" and self.highlight and self.page:
+            self.sel = (self.sel + len(self.page) - 1) % len(self.page)
+            return "handled"
+        if key == "right" and self.highlight and self.page:
+            self.sel = (self.sel + 1) % len(self.page)
+            return "handled"
+        if key == "space":
+            if self.page:
+                return self.page[self.sel if self.highlight else 0]
+            return self.code + " "
+        if key == "enter":
+            if self.highlight and self.page:
+                return self.page[self.sel]
+            return self.code
+        return "handled"
+
+
 def main():
     recent = RecentCommits()
     recent.remember("shurutiyan", "输入体验")
@@ -74,11 +132,49 @@ def main():
     ime_cpp = (ROOT / "main" / "ime" / "IME.cpp").read_text(encoding="utf-8")
     editor_cpp = (ROOT / "main" / "screen_editor.cpp").read_text(encoding="utf-8")
     settings_cpp = (ROOT / "main" / "screen_settings.cpp").read_text(encoding="utf-8")
+    settings_mgr = (ROOT / "main" / "settings_manager.cpp").read_text(encoding="utf-8")
     require("host backspace api", "handleHostBackspace" in ime_h)
     require("host backspace hook", "handleHostBackspace" in editor_cpp)
     require("recent boost engine", "recentCommitBoost" in ime_cpp)
     require("predict mode setting", "_ime_predict_mode" in settings_cpp)
     require("space-only prediction gate", 'mode == "space"' in ime_cpp)
+
+    # Host-side input session checks: these mirror the high-level key semantics
+    # without executing firmware code. They guard quiet typing behavior, not ranking.
+    sess = CandidateSession(highlight=False)
+    sess.compose("shuru", ["输入", "输入法"])
+    sess.key("right")
+    require("highlight off ignores right", sess.sel == 0)
+    require("highlight off space commits first", sess.key("space") == "输入")
+
+    sess = CandidateSession(highlight=True)
+    sess.compose("shuru", ["输入", "输入法", "输入体验"])
+    sess.key("right")
+    require("highlight right moves selection", sess.sel == 1)
+    require("highlight space commits selected", sess.key("space") == "输入法")
+    sess.compose("shuru", ["输入", "输入法"])
+    sess.key("left")
+    require("highlight left wraps", sess.sel == 1)
+    require("highlight enter commits selected", sess.key("enter") == "输入法")
+
+    sess = CandidateSession(highlight=False)
+    sess.compose("zzzz", [])
+    require("empty candidate space preserves code", sess.key("space") == "zzzz ")
+
+    sess = CandidateSession()
+    sess.predict(["们", "的"])
+    require("prediction enter passes through", sess.key("enter") == "pass")
+    sess.predict(["们", "的"])
+    require("prediction backspace passes through", sess.key("backspace") == "pass")
+    sess.predict(["们", "的"])
+    require("prediction space accepts first", sess.key("space") == "们")
+
+    require("candidate highlight setting", "imeCandidateHighlight" in settings_mgr)
+    require("candidate highlight snapshot", "_highlightSelectMode = g_settings.imeCandidateHighlight()" in ime_cpp)
+    require("candidate highlight not default", 'getString("ime_candidate_highlight", "0")' in settings_mgr)
+    require("candidate highlight left key", "key == IME_KEY_LEFT" in ime_cpp and "_sel =" in ime_cpp)
+    require("prediction enter pass-through", "key == '\\n'" in ime_cpp and "return false;" in ime_cpp)
+    require("empty candidate space source", 'out = _code + " "' in ime_cpp)
 
     # #9: 删词改 swap-and-pop + 索引下标就地改写, 不再整表重建。penalize 在退格撤销刚上屏
     # 学到的词时必然触发, 动态词到 470 条时整表重建要 40ms(实测 perf rebuild by=penalize)。

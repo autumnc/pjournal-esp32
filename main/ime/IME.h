@@ -44,8 +44,10 @@ public:
     }
     const std::string &composition() const { return _code; }
     const std::vector<std::string> &candidates() const { return _page; }
-    // 页内高亮候选下标(v 模式左右方向键选择,渲染反白用);仅 v 模式有高亮,其余模式返回 -1
-    int highlightIdx() const { return _vMode ? _vSel : -1; }
+    // 页内高亮候选下标(v 模式始终可用; 普通候选由设置控制)
+    int highlightIdx() const {
+        return (_vMode || (_highlightSelectMode && !_englishCompose && !_predicting)) ? _sel : -1;
+    }
     bool composing() const { return _code.length() > 0 || _predicting || _lfMode || _deleteMode || _vMode || _englishCompose; }
 
     bool isLfMode() const { return _lfMode; }
@@ -224,7 +226,9 @@ private:
                                       const std::vector<std::string> &aliasCodes,
                                       int typedLen);
     bool recentlyDeletedWord(const std::string &word) const;
+    bool recentlyDeletedWordHash(uint32_t hash) const;
     void rememberDeletedWord(const std::string &word);
+    bool confirmNewUserWordLearning(const std::string &code, const std::string &word, int weight);
     void rememberLastLearning(const std::string &code, const std::string &word);
     void rememberReplacementPreference(const std::string &code, const std::string &word);
     int contextCandidateBoost(const std::string &word);
@@ -239,12 +243,14 @@ private:
 
     bool _deleteMode = false;
     bool _vMode = false;
+    std::vector<std::pair<std::string, std::string>> _pendingUserWordLearns;
     std::vector<std::pair<std::string, std::string>> _recentSingleCommits;
     std::vector<std::pair<std::string, std::string>> _recentCommittedWords;
     // word -> indices into _recentCommittedWords, ascending. Rebuilt only when the
     // list changes (on commit), so recentCommitBoost() is an O(1) lookup per candidate.
     std::unordered_map<std::string, std::vector<uint8_t>> _recentBoostByWord;
     std::vector<std::string> _recentDeletedWords;
+    std::vector<uint32_t> _recentDeletedHashes;
     std::string _lastLearningCode;
     std::string _lastLearningWord;
     std::string _lastLearningContext;
@@ -260,7 +266,7 @@ private:
     int16_t _stableBoostValues[STABLE_BOOST_SLOTS] = {};
     int _stableBoostCount = 0;
     int64_t _lastAsciiCommitUs = 0;
-    int _vSel = 0;  // v 模式页内高亮候选(左右键移动)
+    int _sel = 0;  // 页内高亮候选(左右键移动)
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
     std::vector<std::string> _englishWords;
@@ -273,6 +279,7 @@ private:
     // Snapshot of the ime_sentence toggle, taken in begin() for the same reason as
     // _imeDebugLog: the phase runs inside the hot lookup path.
     bool _sentenceMode = true;
+    bool _highlightSelectMode = false;  // begin() 快照的 ime_candidate_highlight
 #if PJOURNAL_IME_ENABLE_LIANGFEN
     bool _lfMode = false;
     const uint8_t *_lfBlob = nullptr;
@@ -376,7 +383,7 @@ private:
     void lookupKaomoji(const std::string &query);  // v/编码 拼音/声母搜索文字表情
     void lookupEnglishMode();
     void loadEnglishDict();
-    bool hasCandidate(const std::string &text) const;
+    bool hasCandidate(const std::string &text, uint32_t hash) const;
     void clearCandidates();
     void rebuildCandidateHashes();
     bool appendCandidate(const std::string &text, int candLen);

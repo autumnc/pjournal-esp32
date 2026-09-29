@@ -45,6 +45,7 @@ public:
     std::string imePredictMode();  // "always" / "space" / "off"
     bool imeSentence();  // 长全拼串的整句候选
     bool imeDocContext();  // 正文已出现的词在小范围加分
+    bool imeCandidateHighlight();  // 候选页内左右键高亮选择
     bool imeDebug();  // hidden: log IME candidate scoring details
     std::string editorOrientation();  // "horizontal"(横排) 或 "vertical"(竖排)
     std::string verticalReferenceLineStyle();  // "solid"(实线) / "dash"(虚线) / "dot"(点状虚线)

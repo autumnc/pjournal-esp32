@@ -1300,6 +1300,7 @@ bool IME::begin() {
     _imeDebugLog = g_settings.imeDebug();
     _sentenceMode = g_settings.imeSentence();
     _docCtxMode = g_settings.imeDocContext();
+    _highlightSelectMode = g_settings.imeCandidateHighlight();
     static const char *NAMES[] = {"Wubi", "Pinyin", "Shuangpin"};
     ESP_LOGI(IME_TAG, "ready: %s, %u records, codeLen %d",
              NAMES[_scheme <= SHUANGPIN ? _scheme : 0], (unsigned)_count, _codeLen);
@@ -2211,6 +2212,7 @@ void IME::bumpFrequency(const std::string &code, const std::string &word, int we
         }
     }
     if (word.length() >= 3 && code.length() >= 1) {
+        if (!confirmNewUserWordLearning(code, word, weight)) return;
         if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) {
             compactUserEntries(_dynamicUserWords, USERDICT_DYNAMIC_LIMIT);
             if (_dynamicUserWords.size() >= USERDICT_DYNAMIC_LIMIT) _dynamicUserWords.pop_back();
@@ -2223,6 +2225,19 @@ void IME::bumpFrequency(const std::string &code, const std::string &word, int we
         markUserDictDirty(_dynamicUserDirty, USERDICT_DYNAMIC_PATH, &_dynamicUserWords.back());
         flushUserDictSaves(false);
     }
+}
+
+bool IME::confirmNewUserWordLearning(const std::string &code, const std::string &word, int weight) {
+    if (weight > 1) return true;
+    for (auto it = _pendingUserWordLearns.begin(); it != _pendingUserWordLearns.end(); ++it) {
+        if (it->first == code && it->second == word) {
+            _pendingUserWordLearns.erase(it);
+            return true;
+        }
+    }
+    _pendingUserWordLearns.insert(_pendingUserWordLearns.begin(), {code, word});
+    if (_pendingUserWordLearns.size() > 8) _pendingUserWordLearns.pop_back();
+    return false;
 }
 
 // 删掉动态词库下标 i 的条目: 末尾条目顶上(swap-and-pop), 并把索引里指向末尾那条的下标
@@ -2294,6 +2309,7 @@ void IME::bumpPredictFrequency(const std::string &key, const std::string &word, 
     ensureUserDictLoaded();
     if (key.empty() || word.empty()) return;
     if (!validPredictEntry(key, word)) return;
+    if (rejectedPredictWord(key, word) || recentlyDeletedWord(word)) return;
     if (weight < 1) weight = 1;
     // learnPredictPairs() calls this up to 12 times per commit, and the old scan
     // walked up to USERPREDICT_LIMIT (2000) entries on every one of them. The
@@ -2519,22 +2535,39 @@ void IME::appendRecentCommitCandidates(const std::string &code,
 
 bool IME::recentlyDeletedWord(const std::string &word) const {
     if (word.empty()) return false;
-    for (auto &w : _recentDeletedWords) {
-        if (w == word) return true;
+    uint32_t h = candidateHash(word);
+    for (size_t i = 0; i < _recentDeletedHashes.size(); i++) {
+        if (_recentDeletedHashes[i] == h && i < _recentDeletedWords.size() &&
+            _recentDeletedWords[i] == word)
+            return true;
+    }
+    return false;
+}
+
+bool IME::recentlyDeletedWordHash(uint32_t hash) const {
+    if (hash == 0) return false;
+    for (uint32_t h : _recentDeletedHashes) {
+        if (h == hash) return true;
     }
     return false;
 }
 
 void IME::rememberDeletedWord(const std::string &word) {
     if (word.empty()) return;
-    for (auto it = _recentDeletedWords.begin(); it != _recentDeletedWords.end(); ++it) {
-        if (*it == word) {
-            _recentDeletedWords.erase(it);
+    uint32_t h = candidateHash(word);
+    for (size_t i = 0; i < _recentDeletedWords.size(); i++) {
+        if (_recentDeletedHashes[i] == h && _recentDeletedWords[i] == word) {
+            _recentDeletedWords.erase(_recentDeletedWords.begin() + i);
+            _recentDeletedHashes.erase(_recentDeletedHashes.begin() + i);
             break;
         }
     }
     _recentDeletedWords.insert(_recentDeletedWords.begin(), word);
-    if (_recentDeletedWords.size() > 16) _recentDeletedWords.pop_back();
+    _recentDeletedHashes.insert(_recentDeletedHashes.begin(), h);
+    if (_recentDeletedWords.size() > 16) {
+        _recentDeletedWords.pop_back();
+        _recentDeletedHashes.pop_back();
+    }
 }
 
 void IME::rememberLastLearning(const std::string &code, const std::string &word) {
@@ -2678,6 +2711,7 @@ void IME::rebuildContextBoostScores() {
                 if (entryIdx >= _userPredictWords.size()) continue;
                 const UserEntry &p = _userPredictWords[entryIdx];
                 if (p.trad != _trad) continue;
+                if (rejectedPredictWord(key, p.word) || recentlyDeletedWord(p.word)) continue;
                 addScore(p.word, 9000 + keyChars * 900 + std::min(p.count, 1000) * 12);
             }
         }
@@ -2685,6 +2719,9 @@ void IME::rebuildContextBoostScores() {
             ime::Im3Dictionary::PredictGroup group;
             if (_dict.findPredictGroup(key, group)) {
                 for (size_t i = 0; i < group.candidates.size(); i++) {
+                    if (rejectedPredictWord(key, group.candidates[i]) ||
+                        recentlyDeletedWord(group.candidates[i]))
+                        continue;
                     addScore(group.candidates[i], 5200 + keyChars * 650 - (int)i * 80);
                 }
             }
@@ -2692,6 +2729,9 @@ void IME::rebuildContextBoostScores() {
         for (auto &entry : BUILTIN_PREDICT) {
             if (key != entry.key) continue;
             for (int i = 0; entry.candidates[i]; i++) {
+                if (rejectedPredictWord(key, entry.candidates[i]) ||
+                    recentlyDeletedWord(entry.candidates[i]))
+                    continue;
                 addScore(entry.candidates[i], 3600 + keyChars * 550 - i * 60);
             }
             break;
@@ -2751,7 +2791,7 @@ int IME::stableCandidateBoost(const std::string &word) const {
 
 void IME::rememberCandidateStability() {
     _stableBoostCount = 0;
-    size_t n = std::min(_all.size(), (size_t)STABLE_BOOST_SLOTS);
+    size_t n = std::min(_all.size(), (size_t)3);
     for (size_t i = 0; i < n; i++) {
         uint32_t h = candidateHash(_all[i]);
         bool seen = false;
@@ -2798,6 +2838,18 @@ void IME::appendEnglishInlineCandidates(const std::string &code) {
         if (it->find(code) != 0) break;
         if (appendCandidate(*it, (int)code.length())) added++;
     }
+}
+
+static bool likelyTechInlinePrefix(const std::string &code) {
+    if (code.length() < 2) return false;
+    for (char c : code) {
+        if (c < 'a' || c > 'z') return false;
+    }
+    for (int i = 0; TECH_INLINE_WORDS[i]; i++) {
+        std::string w = TECH_INLINE_WORDS[i];
+        if (w.find(code) == 0) return true;
+    }
+    return false;
 }
 
 // 无前缀快捷符号表(#14), 由 lookup 的 Phase 0 按精确整码匹配取用。表里只放没有中文
@@ -2884,8 +2936,7 @@ uint8_t IME::readRecordFlag(uint32_t i) {
     return _dict.readSingleFlag(i);
 }
 
-bool IME::hasCandidate(const std::string &text) const {
-    uint32_t h = candidateHash(text);
+bool IME::hasCandidate(const std::string &text, uint32_t h) const {
     if (_candidateHashCount == _all.size()) {
         for (size_t i = 0; i < _candidateHashCount; i++) {
             if (_candidateHashes[i] == h && _all[i] == text) return true;
@@ -2898,6 +2949,15 @@ bool IME::hasCandidate(const std::string &text) const {
     return false;
 }
 
+// IME hot-path guardrails:
+// - Do not read settings or SD files from lookup(), candidate scoring loops, or
+//   appendCandidate(); snapshot options in begin() instead.
+// - Do not add broad dictionary/user-dictionary scans without a bounded index,
+//   budget, or compile-time/perflog-only gate.
+// - Keep candidate filtering hash-first. String compares are only for confirming
+//   a hash hit; repeated linear string scans show up immediately on this hardware.
+// - Keep learning writes deferred/journaled. A keypress must not force a full SD
+//   save or a full user-index rebuild.
 void IME::clearCandidates() {
     _all.clear();
     _candidateHashCount = 0;
@@ -2918,11 +2978,13 @@ void IME::rebuildCandidateHashes() {
 
 bool IME::appendCandidate(const std::string &text, int candLen) {
     if (_all.size() >= _candidateLimit) return false;
+    uint32_t h = candidateHash(text);
+    if (recentlyDeletedWordHash(h) && recentlyDeletedWord(text)) return false;
     rebuildCandidateHashes();
-    if (hasCandidate(text)) return false;
+    if (hasCandidate(text, h)) return false;
     _all.push_back(text);
     if (_candidateHashCount < MAX_CANDIDATES)
-        _candidateHashes[_candidateHashCount++] = candidateHash(text);
+        _candidateHashes[_candidateHashCount++] = h;
     else
         _candidateHashCount = 0;
     _candLen.push_back(candLen);
@@ -2981,7 +3043,7 @@ void IME::reset() {
     }
     _deleteMode = false;
     _vMode = false;
-    _vSel = 0;
+    _sel = 0;
     _fixedCandidatePaging = false;
     _candidateLimit = MAX_CANDIDATES;
     _englishCompose = false;
@@ -4029,7 +4091,7 @@ void IME::lookupVMode() {
     clearCandidates();
     _pageStart = 0;
     _curPage = 0;
-    _vSel = 0;
+    _sel = 0;
     std::string body = _code.length() > 1 ? _code.substr(1) : "";
     if (body.empty()) {
         // 裸 v: 常用文字表情(原中文标点候选改由 v/bd/ 搜索)
@@ -4569,7 +4631,7 @@ void IME::appendSentenceCandidates(const char *code, int len) {
             text.insert(0, _sentenceArcs[nd.arc].word);
             cur = nd.parent;
         }
-        if (text.empty() || hasCandidate(text)) continue;
+        if (text.empty() || hasCandidate(text, candidateHash(text))) continue;
         if (appendCandidate(text, len)) emitted++;
         if (_all.size() >= _candidateLimit) break;
     }
@@ -4654,7 +4716,7 @@ void IME::beginPredict(const std::string &text, bool afterSpaceCommit) {
 void IME::buildPage() {
     int64_t pageStartUs = IME_PERF_NOW();
     _page.clear();
-    _vSel = 0;  // 换页/重新查词后高亮回到首个候选
+    _sel = 0;  // 换页/重新查词后高亮回到首个候选
     if (_all.empty()) {
         _pageStart = 0;
         _curPage = 0;
@@ -5031,20 +5093,20 @@ bool IME::handleKey(int key, std::string &out) {
             return true;
         }
         if (key == IME_KEY_LEFT) {
-            if (!_page.empty()) _vSel = (_vSel + (int)_page.size() - 1) % (int)_page.size();
+            if (!_page.empty()) _sel = (_sel + (int)_page.size() - 1) % (int)_page.size();
             return true;
         }
         if (key == IME_KEY_RIGHT) {
-            if (!_page.empty()) _vSel = (_vSel + 1) % (int)_page.size();
+            if (!_page.empty()) _sel = (_sel + 1) % (int)_page.size();
             return true;
         }
         if (key == ' ') {
-            if (_page.size() > 0) commit(_vSel, out);
+            if (_page.size() > 0) commit(_sel, out);
             else { out = _code.length() > 1 ? _code.substr(1) : ""; _lastCommitChar.clear(); _lastCommitText.clear(); reset(); }
             return true;
         }
         if (key == '\n') {
-            out = _page.size() > 0 ? _page[_vSel] : (_code.length() > 1 ? _code.substr(1) : "");
+            out = _page.size() > 0 ? _page[_sel] : (_code.length() > 1 ? _code.substr(1) : "");
             _lastCommitChar.clear();
             _lastCommitText.clear();
             reset();
@@ -5157,7 +5219,16 @@ bool IME::handleKey(int key, std::string &out) {
         }
         if (isPredictPagePrevKey(key)) { pagePrev(); return true; }
         if (isPredictPageNextKey(key)) { pageNext(); return true; }
-        if (key == '\b' || key == 27 || key == '\n') {
+        if (key == '\b' || key == 0x7F) {
+            reset();
+            return false;
+        }
+        if (key == '\n') {
+            reset();
+            clearLearningContext();
+            return false;
+        }
+        if (key == 27) {
             _predicting = false;
             clearLearningContext();
             return true;
@@ -5219,19 +5290,39 @@ bool IME::handleKey(int key, std::string &out) {
         }
         return true;
     }
+    if (!_deleteMode && !_lfMode &&
+        ((key >= '0' && key <= '9') || key == '.' || key == '-' || key == '_' || key == '/') &&
+        likelyTechInlinePrefix(_code)) {
+        _englishCompose = true;
+        _code += (char)key;
+        _displayCodeDirty = true;
+        lookupEnglishMode();
+        return true;
+    }
     if (key >= '1' && key <= '9') {
         commit(key - '1', out);
         return true;
     }
     if (key == ' ') {
-        if (_page.size() > 0) commit(0, out, true);
-        else reset();
+        if (_page.size() > 0) commit(_highlightSelectMode ? _sel : 0, out, true);
+        else if (!_deleteMode && !_lfMode) {
+            out = _code + " ";
+            clearLearningContext();
+            reset();
+        } else {
+            _statusMessage = "无候选:" + _code;
+            reset();
+        }
         return true;
     }
     if (key == '\n') {
-        out = _code;
-        clearLearningContext();
-        reset();
+        if (_highlightSelectMode && _page.size() > 0) {
+            commit(_sel, out);
+        } else {
+            out = _code;
+            clearLearningContext();
+            reset();
+        }
         return true;
     }
     if (key == '\b') {
@@ -5259,6 +5350,14 @@ bool IME::handleKey(int key, std::string &out) {
     if (key == 27) {
         clearLearningContext();
         reset();
+        return true;
+    }
+    if (_highlightSelectMode && key == IME_KEY_LEFT) {
+        if (!_page.empty()) _sel = (_sel + (int)_page.size() - 1) % (int)_page.size();
+        return true;
+    }
+    if (_highlightSelectMode && key == IME_KEY_RIGHT) {
+        if (!_page.empty()) _sel = (_sel + 1) % (int)_page.size();
         return true;
     }
     if (isStandardPagePrevKey(key)) { pagePrev(); return true; }

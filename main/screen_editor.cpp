@@ -552,7 +552,9 @@ static std::string editorImeContextText() {
     std::string tail;
     int chars = 0;
     for (int y = g_editor.cy; y >= 0; y--) {
-        const std::string &line = g_editor.lines[y];
+        std::string line = (y == g_editor.cy)
+            ? g_editor.lines[y].substr(0, g_editor.cx)
+            : g_editor.lines[y];
         tail.insert(0, line);
         chars += utf8Count(line) + 1;  // +1 记行间换行
         if (y > 0) tail.insert(0, "\n");
