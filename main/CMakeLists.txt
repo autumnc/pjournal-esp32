@@ -80,7 +80,7 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.3")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.4")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PJOURNAL_IME_ENABLE_PINYIN=$<BOOL:${PJOURNAL_IME_ENABLE_PINYIN}>
     PJOURNAL_IME_ENABLE_LIANGFEN=$<BOOL:${PJOURNAL_IME_ENABLE_LIANGFEN}>

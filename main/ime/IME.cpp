@@ -2557,6 +2557,16 @@ bool IME::recentlyDeletedWordHash(uint32_t hash) const {
 
 void IME::rememberDeletedWord(const std::string &word) {
     if (word.empty()) return;
+    bool removedRecent = false;
+    for (auto it = _recentCommittedWords.begin(); it != _recentCommittedWords.end(); ) {
+        if (it->second == word) {
+            it = _recentCommittedWords.erase(it);
+            removedRecent = true;
+        } else {
+            ++it;
+        }
+    }
+    if (removedRecent) rebuildRecentBoostIndex();
     uint32_t h = candidateHash(word);
     for (size_t i = 0; i < _recentDeletedWords.size(); i++) {
         if (_recentDeletedHashes[i] == h && _recentDeletedWords[i] == word) {
@@ -2982,7 +2992,6 @@ void IME::rebuildCandidateHashes() {
 bool IME::appendCandidate(const std::string &text, int candLen) {
     if (_all.size() >= _candidateLimit) return false;
     uint32_t h = candidateHash(text);
-    if (recentlyDeletedWordHash(h) && recentlyDeletedWord(text)) return false;
     rebuildCandidateHashes();
     if (hasCandidate(text, h)) return false;
     _all.push_back(text);

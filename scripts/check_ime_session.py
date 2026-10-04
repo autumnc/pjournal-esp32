@@ -175,6 +175,13 @@ def main():
     require("candidate highlight left key", "key == IME_KEY_LEFT" in ime_cpp and "_sel =" in ime_cpp)
     require("prediction enter pass-through", "key == '\\n'" in ime_cpp and "return false;" in ime_cpp)
     require("empty candidate space source", 'out = _code + " "' in ime_cpp)
+    append_candidate_body = ime_cpp.split("bool IME::appendCandidate", 1)[1].split("\n}\n", 1)[0]
+    require("recent delete not global candidate filter",
+            "recentlyDeletedWord" not in append_candidate_body)
+    remember_deleted_body = ime_cpp.split("void IME::rememberDeletedWord", 1)[1].split("\n}\n", 1)[0]
+    require("recent delete clears recent boost",
+            "_recentCommittedWords.erase" in remember_deleted_body and
+            "rebuildRecentBoostIndex()" in remember_deleted_body)
 
     # #9: 删词改 swap-and-pop + 索引下标就地改写, 不再整表重建。penalize 在退格撤销刚上屏
     # 学到的词时必然触发, 动态词到 470 条时整表重建要 40ms(实测 perf rebuild by=penalize)。

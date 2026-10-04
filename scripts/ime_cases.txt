@@ -1,4 +1,5 @@
 # code<TAB>candidate<TAB>max_rank
+ba	把	2
 shuru	输入	1
 shurufa	输入法	1
 shurutiyan	输入体验	1
