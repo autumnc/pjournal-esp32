@@ -31,6 +31,7 @@ ESP32-S3 上的个人日记工具，配备 4.2 寸 RLCD 黑白全反射屏，支
 - **版本历史**：保存时自动生成历史快照（「设置」中开启「版本历史」），可查看、恢复、删除历史版本
 - **编辑器**：Markdown 实时渲染、标题折叠（`Ctrl+T`）、打字机模式（光标始终居中 + 按键音效）、自动保存、撤销/重做、选择/复制/粘贴、查找/替换（`Ctrl+/`）、发送至 Flomo、快捷键帮助（`Ctrl+?`）
 - **快捷编辑**：SD 卡根目录 0-9.txt 十个文件快速编辑，自动保存、重启续编上次文件，`Ctrl+0-9`/`Ctrl+n`/`Ctrl+p` 切换文件
+- **文件编辑**：普通文本文件编辑模式，默认自动保存并在重启后继续上次文件，`Ctrl+E` 打开/关闭本地文件管理器，`a` 新建、`r` 改名、`d` 删除确认、`Enter` 打开文件
 - **发送至 Flomo**：`Ctrl+F` 即时反馈面板，防止重复发送
 - **AI 润色**：双击 `BOOT` 全文润色，编辑器 `Ctrl+O` 润色选中文本，支持自定义润色提示词（设置）
 - **语音听写**：双击 `USER` 实时语音听写（xiaozhi STT）
@@ -154,6 +155,17 @@ ESP32-S3 上的个人日记工具，配备 4.2 寸 RLCD 黑白全反射屏，支
 
 > 个人日记模式下 `Ctrl+P` 为 AI 生成写作提示；快捷编辑模式下切换上一个文件。
 
+### 文件编辑模式
+
+| 快捷键 | 功能 |
+|---|---|
+| `Ctrl+E` | 打开/关闭本地文件管理器 |
+| `a` | 新建文件 |
+| `r` | 改名 |
+| `d` | 删除，需 `Enter` 确认 |
+| `Enter` | 打开选中文件/进入目录 |
+| `Esc` / `Ctrl+Q` | 保存并跳转到设置 |
+
 ### 通用
 
 | 快捷键 | 功能 |
@@ -255,6 +267,15 @@ esptool.py --chip esp32s3 merge_bin -o build/pjournal-merged.bin \
 ```bash
 # 输入法回归检查
 python3 scripts/check_ime_all.py
+
+# 万象/Rime 资源导入预览: 生成 seg/predict/symbol 三个 delta,默认不改固件资源
+python3 scripts/wanxiang_ime_import.py /path/to/wanxiang.dict.yaml
+
+# 审核 delta 后再合并,随后重新生成派生表
+python3 scripts/wanxiang_ime_import.py /path/to/wanxiang.dict.yaml --apply
+python3 scripts/generate_seg_table.py
+python3 scripts/add_ime_predictions.py
+python3 scripts/kaomoji_convert.py
 
 # 发布辅助：更新版本、跑 IME 检查、构建并生成 merged 固件
 python3 scripts/release.py X.Y.Z --build-dir build-yong-ime
@@ -377,7 +398,7 @@ idf.py -p /dev/ttyUSB0 flash
 
 ## 版本
 
-当前版本: v4.9.2
+当前版本: v4.9.3
 
 ## License
 

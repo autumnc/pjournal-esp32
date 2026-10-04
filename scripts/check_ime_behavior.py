@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 import struct
+import importlib.util
 from pathlib import Path
 
 
@@ -17,6 +18,7 @@ IME_TABLE = ROOT / "main" / "ime" / "ime_table_pinyin.bin"
 PREDICT_SOURCE = ROOT / "main" / "ime" / "predict_source.txt"
 ADD_PREDICT_SCRIPT = ROOT / "scripts" / "add_ime_predictions.py"
 GEN_PREDICT_SCRIPT = ROOT / "scripts" / "generate_predict_source.py"
+WANXIANG_IMPORT_SCRIPT = ROOT / "scripts" / "wanxiang_ime_import.py"
 SCREEN_EDITOR_CPP = ROOT / "main" / "screen_editor.cpp"
 MAIN_CPP = ROOT / "main" / "main.cpp"
 UI_HELPERS_CPP = ROOT / "main" / "ui_helpers.cpp"
@@ -194,6 +196,13 @@ def require_equal(name, actual, expected):
         raise SystemExit(f"{name}: expected {expected!r}, got {actual!r}")
 
 
+def load_wanxiang_importer():
+    spec = importlib.util.spec_from_file_location("wanxiang_ime_import", WANXIANG_IMPORT_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main():
     entries = load_seg_entries()
     predict = load_builtin_predict()
@@ -283,6 +292,34 @@ def main():
     require_source_contains("predict source 输入法", PREDICT_SOURCE.read_text(encoding="utf-8"), "输入法\t")
     require_source_contains("predict generator", ADD_PREDICT_SCRIPT.read_text(encoding="utf-8"), "Append/replace IME3 prediction section")
     require_source_contains("predict source generator", GEN_PREDICT_SCRIPT.read_text(encoding="utf-8"), "augment_from_seg")
+    wanxiang_importer = load_wanxiang_importer()
+    require_equal("wanxiang parse rime", wanxiang_importer.parse_dict_line("西安\txī ān\t100")[:2],
+                  ("xi an", "西安"))
+    require_equal("wanxiang parse code first", wanxiang_importer.parse_dict_line("shuru\t输入\t50")[:2],
+                  ("shu ru", "输入"))
+    wx_entries = [
+        ("xi an", "西安", 100),
+        ("shu ru fa", "输入法", 90),
+        ("a", "啊", 80),
+    ]
+    wx_seg = wanxiang_importer.build_seg_delta(wx_entries, set(), 2, 4, 6, 10)
+    require_equal("wanxiang seg delta", [(s, w) for _, s, w in wx_seg],
+                  [("xi an", "西安"), ("shu ru fa", "输入法")])
+    wx_predict = wanxiang_importer.build_predict_delta(wx_entries, {}, 10, 16)
+    require_contains("wanxiang predict 输入", wx_predict["输入"], "法", 4)
+    require_equal("wanxiang parse symbol code first", wanxiang_importer.parse_symbol_line("xing\t★ ☆"),
+                  [("xing", "★"), ("xing", "☆")])
+    require_equal("wanxiang parse symbol face first", wanxiang_importer.parse_symbol_line("→\tjiantou"),
+                  [("jiantou", "→")])
+    require_equal("wanxiang parse symbol yaml", wanxiang_importer.parse_symbol_line("'/jt': [→, ←, 🐧]"),
+                  [("jt", "→"), ("jt", "←")])
+    wx_symbols = wanxiang_importer.build_symbol_delta(
+        [("xing", "★"), ("xing", "☆"), ("biaodian", "，")],
+        {("biaodian", "，")},
+        8,
+        10,
+    )
+    require_equal("wanxiang symbol delta", wx_symbols, [("xing", "★"), ("xing", "☆")])
     require_source_contains("delete mode api", ime_h, "toggleDeleteMode")
     require_source_contains("delete mode hotkey", main_cpp, "Ctrl+D → IME user word deletion mode")
     require_source_contains("shared ime status label", UI_HELPERS_CPP.read_text(encoding="utf-8"), "imeStatusLabel")

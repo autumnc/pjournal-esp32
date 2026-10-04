@@ -23,6 +23,7 @@ idf_component_register(SRCS
     "screen_editor.cpp"
     "screen_settings.cpp"
     "quick_edit.cpp"
+    "file_edit.cpp"
     "typing_click.cpp"
     "click_samples.cpp"
     "screen_bt_manage.cpp"
@@ -79,7 +80,7 @@ idf_component_register(SRCS
         efuse
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.2")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.3")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PJOURNAL_IME_ENABLE_PINYIN=$<BOOL:${PJOURNAL_IME_ENABLE_PINYIN}>
     PJOURNAL_IME_ENABLE_LIANGFEN=$<BOOL:${PJOURNAL_IME_ENABLE_LIANGFEN}>

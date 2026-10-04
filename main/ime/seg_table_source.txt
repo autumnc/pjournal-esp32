@@ -644,3 +644,4004 @@ zi gu ying xiong chu shao nian	自古英雄出少年
 zui gao ren min fa yuan	最高人民法院
 zui gao ren min jian cha yuan	最高人民检察院
 zui weng zhi yi bu zai jiu	醉翁之意不在酒
+# Wanxiang seg imports
+jiu shi	就是
+yi ge	一个
+dan shi	但是
+zhe ge	这个
+suo yi	所以
+wo men	我们
+yin wei	因为
+ke yi	可以
+zi ji	自己
+ru guo	如果
+hai shi	还是
+dou shi	都是
+mei you	没有
+huo zhe	或者
+ye shi	也是
+ta men	他们
+hen duo	很多
+yi xie	一些
+zhe zhong	这种
+ran hou	然后
+xian zai	现在
+xu yao	需要
+zhe xie	这些
+dui yu	对于
+bi ru	比如
+zhi hou	之后
+er qie	而且
+qi shi	其实
+hai you	还有
+na me	那么
+zi ji de	自己的
+de hua	的话
+gong si	公司
+bu shi	不是
+zui hou	最后
+yi jing	已经
+xuan ze	选择
+tong guo	通过
+yi ji	以及
+sui ran	虽然
+kai shi	开始
+ke neng	可能
+jin xing	进行
+dang ran	当然
+shi jian	时间
+bu guo	不过
+zuo wei	作为
+you xi	游戏
+yi yang	一样
+zhe shi	这是
+zhi jie	直接
+yi xia	一下
+da jia	大家
+wo de	我的
+chan pin	产品
+shen zhi	甚至
+ni de	你的
+lai shuo	来说
+zhen de	真的
+zhi you	只有
+bi jiao	比较
+nei rong	内容
+hui da	回答
+ta de	他的
+zhuan ye	专业
+zhi qian	之前
+zhe yang	这样
+shi yong	使用
+zhi shi	只是
+zhong guo	中国
+tong shi	同时
+ge zhong	各种
+qi ta	其他
+yi ban	一般
+chu le	除了
+kan dao	看到
+lao shi	老是
+qi ta	其它
+jie guo	结果
+hou lai	后来
+yin ci	因此
+fa xian	发现
+zhe li	这里
+dang shi	当时
+neng li	能力
+yi shang	以上
+neng gou	能够
+shu ju	数据
+dong xi	东西
+zhe yang de	这样的
+na xie	那些
+fang shi	方式
+zhong de	中的
+li mian	里面
+guan yu	关于
+she ji	设计
+bing qie	并且
+yi zhong	一种
+mu qian	目前
+wei shen me	为什么
+ji ben	基本
+deng deng	等等
+na ge	那个
+ru guo ni	如果你
+wei le	为了
+suo you	所有
+ru he	如何
+fei chang	非常
+mei guo	美国
+yong hu	用户
+xue sheng	学生
+yao qiu	要求
+liang ge	两个
+shou xian	首先
+bu tong	不同
+yi hou	以后
+tui jian	推荐
+ling wai	另外
+bi jing	毕竟
+tong xue	同学
+ying xiang	影响
+er shi	而是
+wo jue de	我觉得
+ji shu	技术
+gen ju	根据
+jiu hui	就会
+jian yi	建议
+cun zai	存在
+bao kuo	包括
+bu fen	部分
+you yu	由于
+yi dian	一点
+bu neng	不能
+ye you	也有
+ge ren	个人
+yu shi	于是
+cheng wei	成为
+qi zhong	其中
+chu xian	出现
+shen me	什么
+zuo pin	作品
+bu yao	不要
+you xie	有些
+zhi jian	之间
+bu hui	不会
+ying gai	应该
+jia ge	价格
+zhi yao	只要
+ping tai	平台
+dou you	都有
+zhu yao	主要
+dao zhi	导致
+shen me	甚么
+qi ye	企业
+li jie	理解
+shi yi ge	是一个
+yan jiu	研究
+cai neng	才能
+shi pin	视频
+hai zi	孩子
+ye hui	也会
+peng you	朋友
+gong neng	功能
+shang de	上的
+guo nei	国内
+yi zhi	一直
+xiao guo	效果
+fang mian	方面
+jiu neng	就能
+jue de	觉得
+jiu ke yi	就可以
+di fang	地方
+ren wei	认为
+xue xiao	学校
+dian ying	电影
+wan quan	完全
+xi wang	希望
+shi chang	市场
+zhi neng	只能
+ye ke yi	也可以
+fen xi	分析
+ni men	你们
+zheng ge	整个
+ben shen	本身
+xia mian	下面
+ju ti	具体
+da an	答案
+ji ge	几个
+xin xi	信息
+zen me	怎么
+gu shi	故事
+xi huan	喜欢
+zhe ge wen ti	这个问题
+hen duo ren	很多人
+ye jiu shi	也就是
+shui ping	水平
+mei tian	每天
+guo jia	国家
+fa zhan	发展
+na zhong	那种
+wan jia	玩家
+zuo you	左右
+da bu fen	大部分
+gan jue	感觉
+ren lei	人类
+ran er	然而
+que shi	确实
+xiang yao	想要
+wo shi	我是
+shang mian	上面
+ji chu	基础
+ti zhu	题主
+guan zhu	关注
+qing kuang xia	情况下
+tong yang	同样
+yi ci	一次
+xu qiu	需求
+dou hui	都会
+ta men de	他们的
+zui zhong	最终
+shi jie	世界
+zhi hu	知乎
+shi fou	是否
+yi ding yao	一定要
+da gai	大概
+you ren	有人
+ti gong	提供
+wu fa	无法
+jin ru	进入
+ji xu	继续
+sheng huo	生活
+ri ben	日本
+zhi yu	至于
+mei ge	每个
+chan sheng	产生
+rang wo	让我
+fang xiang	方向
+an zhao	按照
+shu yu	属于
+zhi chi	支持
+hou mian	后面
+ta de	她的
+zhi shao	至少
+pin pai	品牌
+zhi dao	知道
+bu zhi dao	不知道
+zhao dao	找到
+dao le	到了
+shi ge	是个
+wo jiu	我就
+geng xin	更新
+bing bu shi	并不是
+ren he	任何
+ti yan	体验
+mo shi	模式
+guo cheng zhong	过程中
+jian dan	简单
+bie ren	别人
+lai kan	来看
+zhen zheng	真正
+ke shi	可是
+tou zi	投资
+er bu shi	而不是
+xi tong	系统
+wo men de	我们的
+zhuang tai	状态
+shi bu shi	是不是
+zhe me	这么
+guo cheng	过程
+zi ran	自然
+yue du	阅读
+jiu xiang	就像
+zhi shi	知识
+geng duo	更多
+yi ding	一定
+fang fa	方法
+ke cheng	课程
+ying gai shi	应该是
+cao zuo	操作
+zhi yi	之一
+li ru	例如
+xiang dui	相对
+shi xian	实现
+ling yu	领域
+yi qi	一起
+you hen duo	有很多
+zuo zhe	作者
+you ge	有个
+ren men	人们
+fen zhong	分钟
+ji ben shang	基本上
+bu tong de	不同的
+zuo yong	作用
+kao shi	考试
+jing yan	经验
+kan kan	看看
+wei zhi	位置
+wei lai	未来
+you yi ge	有一个
+shi ji shang	实际上
+dang nian	当年
+ti sheng	提升
+you qi shi	尤其是
+ke hu	客户
+tuan dui	团队
+feng ge	风格
+fen xiang	分享
+zuo de	做的
+xiang guan	相关
+te bie	特别
+hao de	好的
+zhun bei	准备
+hai yao	还要
+ye jiu	也就
+ren jia	人家
+da xue	大学
+ji hui	机会
+you dian	有点
+rang ni	让你
+kong jian	空间
+quan bu	全部
+li de	里的
+jing li	经历
+zui da	最大
+bi xu	必须
+chu lai	出来
+dui fang	对方
+li shi	历史
+dai lai	带来
+yong you	拥有
+shen ti	身体
+zi yuan	资源
+xing wei	行为
+yuan yin	原因
+biao zhun	标准
+li lun	理论
+guan xi	关系
+wo ye	我也
+bu chong	补充
+liao jie	了解
+duo shao	多少
+ji shi	及时
+jue ding	决定
+yun dong	运动
+zhi lei	之类
+hen nan	很难
+qing kuang	情况
+jing chang	经常
+fu wu	服务
+jin nian	今年
+zhe jiu shi	这就是
+bian hua	变化
+zeng jia	增加
+yin yue	音乐
+yu yan	语言
+li yong	利用
+dong zuo	动作
+ke neng shi	可能是
+geng jia	更加
+bang zhu	帮助
+hai neng	还能
+yun ying	运营
+gei ni	给你
+shuo de	说的
+xing cheng	行程
+you de	有的
+zhe yi	这一
+er yi	而已
+zui jin	最近
+xi lie	系列
+chao guo	超过
+zhu yao shi	主要是
+ju you	具有
+ji hu	几乎
+hen da	很大
+biao xian	表现
+you le	有了
+cheng gong	成功
+ken ding	肯定
+shi yin wei	是因为
+lian xi	联系
+zheng ti	整体
+ke neng hui	可能会
+wo zai	我在
+you shi	有时
+er yan	而言
+wang zhan	网站
+zhe ci	这次
+bing mei you	并没有
+zheng chang	正常
+ju qing	剧情
+shi dai	时代
+xin de	新的
+cheng ben	成本
+da dao	达到
+pu tong	普通
+ye mei you	也没有
+gong ju	工具
+rang ren	让人
+nu li	努力
+ying yu	英语
+mian shi	面试
+huo de	获得
+jia zhi	价值
+shuo ming	说明
+biao shi	表示
+xun lian	训练
+yi qian	以前
+hang ye	行业
+sheng yin	声音
+yu dao	遇到
+xiao shi	小时
+bu hao	不好
+bu duan	不断
+ni ke yi	你可以
+bu shao	不少
+yi sheng	医生
+ye neng	也能
+bu xu yao	不需要
+cai shi	才是
+di yi ci	第一次
+di yi	第一
+dou neng	都能
+zhu yi	注意
+mian dui	面对
+huo dong	活动
+dui bi	对比
+dou ke yi	都可以
+suo you de	所有的
+qi lai	起来
+ping lun	评论
+yi nian	一年
+yi ge ren	一个人
+ti gao	提高
+ta men	它们
+bu jin	不仅
+de dao	得到
+ye wu	业务
+hui you	会有
+tao lun	讨论
+lai zi	来自
+rong yi	容易
+tai duo	太多
+shen qing	申请
+ji neng	技能
+xu duo	许多
+zhi liang	质量
+jie gou	结构
+jiao yi	交易
+ru guo shi	如果是
+feng xian	风险
+yi xia	以下
+zao cheng	造成
+zhen dui	针对
+dou zai	都在
+huan jing	环境
+qian mian	前面
+da liang	大量
+ru ci	如此
+jing guo	经过
+bao zheng	保证
+wang wang	往往
+lao ban	老板
+jie duan	阶段
+gai nian	概念
+bu yong	不用
+bu cuo	不错
+shou ru	收入
+gei wo	给我
+si kao	思考
+mei ci	每次
+ye xu	也许
+ta de	它的
+shi he	适合
+cong er	从而
+sui zhe	随着
+cheng ji	成绩
+ying yong	应用
+jiu suan	就算
+gou mai	购买
+ping shi	平时
+na jiu	那就
+mei nian	每年
+chang jing	场景
+hai ke yi	还可以
+ji jin	基金
+fu mu	父母
+hao xiang	好像
+wo xiang	我想
+gai bian	改变
+ji suan	计算
+ping jia	评价
+yi ran	依然
+yi bu fen	一部分
+cha bu duo	差不多
+xiang bi	相比
+ren sheng	人生
+zuo le	做了
+bing bu	并不
+ceng jing	曾经
+dou mei you	都没有
+bian cheng	变成
+luo ji	逻辑
+jie shao	介绍
+jia shang	加上
+fen si	粉丝
+chu li	处理
+ren de	人的
+jie xia lai	接下来
+geng duo de	更多的
+you xiu	优秀
+lei si	类似
+ben ren	本人
+kong zhi	控制
+ji ke	即可
+cai liao	材料
+jie he	结合
+ye bu shi	也不是
+zi liao	资料
+ling dao	领导
+fang zai	放在
+shi shen me	是什么
+guan dian	观点
+yi qie	一切
+jian chi	坚持
+zhe kuan	这款
+jiu yao	就要
+xi jie	细节
+bao chi	保持
+tu ran	突然
+jie shi	解释
+zhi dao	指导
+tu pian	图片
+jue dui	绝对
+cai yong	采用
+zai zhe li	在这里
+you guan	有关
+zhen de shi	真的是
+si hu	似乎
+shi ji	实际
+gang wei	岗位
+fu xi	复习
+dan ci	单词
+guan zhong	观众
+guan li	管理
+she hui	社会
+zhi wai	之外
+zui hao	最好
+geng shi	更是
+suan shi	算是
+dui ying	对应
+ji gou	机构
+zhong yu	终于
+chuan tong	传统
+jiao du	角度
+guo qu	过去
+zhe lei	这类
+na yang	那样
+wo ren wei	我认为
+wo zi ji	我自己
+wen zi	文字
+guang gao	广告
+shi yi zhong	是一种
+ming zi	名字
+suo wei	所谓
+san ge	三个
+wen hua	文化
+xing shi	形式
+suo wei de	所谓的
+ti dao	提到
+ti mu	题目
+you shi hou	有时候
+dou yao	都要
+yin hang	银行
+kai fa	开发
+dai biao	代表
+bi sai	比赛
+zong shi	总是
+hu lian wang	互联网
+xia lai	下来
+yi tian	一天
+tong chang	通常
+zhao pian	照片
+su du	速度
+shi zai	是在
+ye yao	也要
+di yi ge	第一个
+shu xi	熟悉
+zhen zheng de	真正的
+da duo shu	大多数
+zhang wo	掌握
+huan zhe	患者
+zhe yi dian	这一点
+di er	第二
+lian jie	链接
+shou yi	收益
+man man	慢慢
+hua mian	画面
+yi dan	一旦
+bu ru	不如
+miao shu	描述
+ren wu	人物
+ci shi	此时
+bu yi yang	不一样
+shen shang	身上
+ye bu hui	也不会
+kan qi lai	看起来
+jing tou	镜头
+zai yu	在于
+que ding	确定
+ji yu	基于
+huo xu	或许
+mo xing	模型
+fu za	复杂
+shu xue	数学
+fan yi	翻译
+cheng le	成了
+bi ye	毕业
+xiang xin	相信
+yuan lai	原来
+ye jiu shi shuo	也就是说
+yi bian	一边
+tiao jian	条件
+kan le	看了
+ze shi	则是
+shi xi	实习
+wu lun shi	无论是
+jian dan de	简单的
+ni yao	你要
+gei da jia	给大家
+qu bie	区别
+hou qi	后期
+gu ji	估计
+pan duan	判断
+ru xia	如下
+zuo wei yi ge	作为一个
+zui hao de	最好的
+hai zai	还在
+gong zi	工资
+zhe ye shi	这也是
+yi wei	以为
+bu gou	不够
+xie de	写的
+da kai	打开
+zu zhi	组织
+zhi ye	职业
+shi jian	事件
+nian dai	年代
+kan zhe	看着
+zai zhe ge	在这个
+li liang	力量
+zheng ming	证明
+jue se	角色
+ce shi	测试
+yi kai shi	一开始
+zui duo	最多
+ju li	距离
+you mei you	有没有
+you zhe	有着
+jie shou	接受
+te dian	特点
+lei xing	类型
+ben ke	本科
+ling yi ge	另一个
+qi shi shi	其实是
+xian xiang	现象
+ya li	压力
+fa sheng	发生
+te bie shi	特别是
+xiang guan de	相关的
+shu liang	数量
+hai hui	还会
+zai ci	再次
+ming xian	明显
+biao da	表达
+qi ci	其次
+bie de	别的
+hen rong yi	很容易
+yi jia	一家
+bei jing	北京
+jiao yu	教育
+mou xie	某些
+jia li	家里
+fan er	反而
+zu gou	足够
+ji lu	记录
+zhen shi	真是
+ping guo	苹果
+qi jian	期间
+qiu yuan	球员
+yi kuan	一款
+da zhu	打住
+jin rong	金融
+si wei	思维
+xi guan	习惯
+fan zheng	反正
+yong de	用的
+si lu	思路
+he zuo	合作
+yuan gong	员工
+mu di	目的
+zhe shi hou	这时候
+she ding	设定
+na dao	拿到
+cheng shi	城市
+suan fa	算法
+ji qiao	技巧
+yin su	因素
+duo le	多了
+gu piao	股票
+jia ru	加入
+na ge	哪个
+dang ni	当你
+shen me de	什么的
+bu dao	不到
+yao shi	要是
+jiao liu	交流
+wu lun	无论
+na pa	哪怕
+li zi	例子
+jin liang	尽量
+mei yi ge	每一个
+chang qi	长期
+fou ze	否则
+du li	独立
+zhui qiu	追求
+guan fang	官方
+zhi shi dian	知识点
+fu ze	负责
+ge yue	个月
+ke yi shuo	可以说
+jing ji	经济
+dao yan	导演
+shi li	实力
+wei zhu	为主
+yi ge yue	一个月
+yao me	要么
+dai zhe	带着
+zui gao	最高
+da jia dou	大家都
+dai ma	代码
+nei bu	内部
+yan se	颜色
+qu le	去了
+wo hui	我会
+ben lai	本来
+jia ting	家庭
+gui ze	规则
+yi si	意思
+na jiu shi	那就是
+jiao shou	教授
+shi hou	时候
+lun wen	论文
+xiao fei zhe	消费者
+yi zhang	一张
+zhe me duo	这么多
+liu liang	流量
+xiao shuo	小说
+rang ta	让他
+liu cheng	流程
+nan du	难度
+jing dian	经典
+zhuan men	专门
+yi wei	一位
+fu qin	父亲
+ying guo	英国
+hao le	好了
+bu ke neng	不可能
+zuo chu	做出
+kuai su	快速
+zuo dao	做到
+xiao shou	销售
+zheng zai	正在
+zong zhi	总之
+jin guan	尽管
+bi mian	避免
+huan ying	欢迎
+mou ge	某个
+chuang zuo	创作
+jian shao	减少
+jiu you	就有
+quan qiu	全球
+ding yi	定义
+zhi liao	治疗
+ti chu	提出
+shi zai	实在
+bi li	比例
+ji ran	既然
+fang bian	方便
+zhong jian	中间
+yong lai	用来
+ci wai	此外
+zhi zuo	制作
+yuan su	元素
+ji yi	记忆
+he xin	核心
+xian zhi	限制
+zhuan qian	赚钱
+wei yi	唯一
+zi shen	自身
+bei hou	背后
+wo shuo	我说
+zhu jian	逐渐
+hen hao de	很好的
+bu ran	不然
+ren zhi	认知
+zhu dong	主动
+wo guo	我国
+ji lei	积累
+shao wei	稍微
+qi ta de	其他的
+zen yang	怎样
+jian li	建立
+yi tiao	一条
+fei yong	费用
+hen gao	很高
+chu xian le	出现了
+zheng zhi	政治
+wan zheng	完整
+wen ding	稳定
+zhong dian	重点
+hui dao	回到
+gong zhong hao	公众号
+yuan yi	愿意
+hen hao	很好
+can kao	参考
+man zu	满足
+yong yuan	永远
+zhe ge shi hou	这个时候
+jia she	假设
+fan ying	反应
+jiu ye	就业
+yi fen	一份
+chi xu	持续
+zhe liang ge	这两个
+wo ge ren	我个人
+si xiang	思想
+ri chang	日常
+ting dao	听到
+da liang de	大量的
+yuan su	原宿
+ken ding shi	肯定是
+gen ben	根本
+nian qing ren	年轻人
+reng ran	仍然
+hen zhong yao	很重要
+chu yu	处于
+jiao cai	教材
+shen fen	身份
+chu lai de	出来的
+yong le	用了
+dan wei	单位
+ji bie	级别
+zhe wei	这位
+shi qi	时期
+dong hua	动画
+mian fei	免费
+shi shi shang	事实上
+ru jin	如今
+ru men	入门
+zheng fu	政府
+ding wei	定位
+sui bian	随便
+pai she	拍摄
+sheng ming	生命
+bian de	变得
+cheng du	程度
+you shi	有事
+yu zhou	宇宙
+zhe ben shu	这本书
+geng hao de	更好地
+zhen shi	真实
+ni jiu	你就
+wang shang	网上
+ge ge	各个
+bao hu	保护
+jie lun	结论
+zi jin	资金
+cai hui	才会
+hou de	后的
+wei xin	微信
+qiang da	强大
+huo qu	获取
+mei yuan	美元
+na shi	那是
+tai du	态度
+zuo hao	做好
+pai ming	排名
+di qiu	地球
+dao di	到底
+bi ru shuo	比如说
+qu nian	去年
+qu dao	渠道
+liang zhong	两种
+shi wo	是我
+neng liang	能量
+ni hao	你好
+you xiao	有效
+ke xue	科学
+wei dao	味道
+hen shao	很少
+bu guan	不管
+mei you ren he	没有任何
+chang shi	尝试
+zhe dian	这点
+jie zou	节奏
+fu he	符合
+gou tong	沟通
+du zhe	读者
+zi you	自由
+dan chun	单纯
+ti qian	提前
+shang ye	商业
+shou duan	手段
+ge wei	各位
+neng bu neng	能不能
+guo wai	国外
+shou dao	收到
+ta shi	他是
+an li	案例
+zhen ti	真题
+xiang ying	相应
+gui ding	规定
+zhe jian shi	这件事
+mai le	买了
+li yi	利益
+cheng wei le	成为了
+qu yu	区域
+jiu kai shi	就开始
+shuo le	说了
+wei bo	微博
+shi wu	食物
+huo zhe shuo	或者说
+dui shou	对手
+hai mei you	还没有
+pei he	配合
+yi ju hua	一句话
+qiu dui	球队
+yi yi	意义
+shi yan	实验
+cheng shu	成熟
+yong yu	用于
+zhi qian de	之前的
+dian ji	点击
+fang qi	放弃
+pu tong ren	普通人
+ren shi	认识
+zhu jue	主角
+li you	理由
+tao bao	淘宝
+quan guo	全国
+ke yi zai	可以在
+li kai	离开
+rang wo men	让我们
+gan xie	感谢
+zu he	组合
+yi tao	一套
+jing shen	精神
+bei kao	备考
+fa bu	发布
+fen wei	分为
+hen jian dan	很简单
+ji de	记得
+ma ma	妈妈
+shu zi	数字
+ou zhou	欧洲
+yi duan	一段
+guo lai	过来
+ren qun	人群
+wu li	物理
+yan jiu sheng	研究生
+xing xiang	形象
+yi bian	以便
+xiang dang yu	相当于
+ou er	偶尔
+duo ge	多个
+mian qian	面前
+xing neng	性能
+she ji shi	设计师
+zhu ti	主题
+tian tian	天天
+geng gao	更高
+zan men	咱们
+da pei	搭配
+teng xun	腾讯
+de guo	德国
+bei jing	背景
+da nao	大脑
+chan pin jing li	产品经理
+xie zuo	写作
+bian cheng le	变成了
+hai mei	还没
+ji qi	机器
+na shi hou	那时候
+lai le	来了
+si wang	死亡
+kuang jia	框架
+ke yi shuo shi	可以说是
+feng fu	丰富
+xiao fei	消费
+zhi hui	只会
+zheng ce	政策
+geng hao	更好
+yan jing	眼睛
+huo shi	或是
+ta zai	他在
+ni hui	你会
+bo shi	博士
+can yu	参与
+jian li	简历
+liang ren	两人
+yi ju	一句
+shuo fa	说法
+xia zai	下载
+xiang tong	相同
+you shen me	有什么
+dan wo	但我
+ye zai	也在
+gei ta	给他
+ti xi	体系
+jiu zai	就在
+fen shu	分数
+xiao huo ban	小伙伴
+gang gang	刚刚
+qian qi	前期
+zao qi	早起
+jie chu	接触
+di que	的确
+dang zhong	当中
+hou xu	后续
+di qu	地区
+ceng mian	层面
+ying xiong	英雄
+cha ju	差距
+guan cha	观察
+yuan li	原理
+bu men	部门
+bao xian	保险
+xin li	心里
+zhong yao	重要
+zhi xu yao	只需要
+pu bian	普遍
+zi ben	资本
+yi ben	一本
+you yi xie	有一些
+kan wan	看完
+jie jin	接近
+ke yi kan dao	可以看到
+jiang di	降低
+xun zhao	寻找
+bu zai	不在
+yi zhi zai	一直在
+pei yang	培养
+can jia	参加
+jie shu	结束
+qu zuo	去做
+fen bie	分别
+huo zhe shi	或者是
+er zi	儿子
+kan lai	看来
+zhong guo ren	中国人
+shuo hua	说话
+zhe ju hua	这句话
+zhi suo yi	之所以
+jian kang	健康
+te zheng	特征
+tiao zheng	调整
+bu xiang	不想
+ji bian	几遍
+xue ke	学科
+zi chan	资产
+lian xu	连续
+shi fen	十分
+yi yuan	医院
+shu chu	输出
+bu zu	不足
+nei xin	内心
+xin tai	心态
+xing ge	性格
+lai de	来的
+xian sheng	先生
+zai jia shang	再加上
+yi shu	艺术
+tu po	突破
+zheng shi	正是
+zhe jiu	这就
+zhi shu	指数
+shi wei le	是为了
+zhan zai	站在
+sheng chan	生产
+xian dai	现代
+yuan ben	原本
+wo men ke yi	我们可以
+shang pin	商品
+zhi zhong	之中
+xiang gang	香港
+you ke neng	有可能
+li run	利润
+ke yi tong guo	可以通过
+di wei	地位
+man hua	漫画
+hao hao	好好
+shu ji	书籍
+xian shi	显示
+ni shi	你是
+gei zi ji	给自己
+mu qin	母亲
+que dian	缺点
+jian zhu	建筑
+zai zhong guo	在中国
+xie yao	谢邀
+wei li	威力
+zong he	综合
+du shu	读书
+da xiao	大小
+tong shi	同事
+shi zhi	是指
+guo de	过的
+na me duo	那么多
+dang chu	当初
+bi jiao hao	比较好
+ta shuo	他说
+yin qi	引起
+dui xiang	对象
+chong xin	重新
+xin wen	新闻
+ping jun	平均
+ti xian	体现
+cong shi	从事
+suo yi wo	所以我
+zu cheng	组成
+le ba	了吧
+xiang dang	相当
+xia de	下的
+ping lun qu	评论区
+hui fu	回复
+hen kuai	很快
+qu zuo	取作
+bu guan shi	不管是
+tou zi zhe	投资者
+tai yang	太阳
+yi jiu	依旧
+bu xing	不行
+yi ge shi	一个是
+mei ti	媒体
+an quan	安全
+zi xun	咨询
+zhe shi yi ge	这是一个
+fa guo	发过
+yue lai yue	越来越
+gei chu	给出
+ye hao	也好
+dui ni	对你
+tou ru	投入
+qu shi	趋势
+xin tai	欣泰
+zi wo	自我
+qing gan	情感
+da zhong	大众
+yun yong	运用
+ke yi yong	可以用
+tui guang	推广
+er zai	而在
+ren yuan	人员
+hua ti	话题
+ju ran	居然
+xue hui	学会
+fu jin	附近
+mei ge ren	每个人
+geng da	更大
+shu xing	属性
+jing ran	竟然
+shen bian	身边
+xia qu	下去
+hai shi yao	还是要
+you ren shuo	有人说
+xue li	学历
+ye mei	也没
+wo yao	我要
+fen lei	分类
+dao xian zai	到现在
+xian ran	显然
+bing fei	并非
+kao sheng	考生
+zhan shi	展示
+yi fu	衣服
+zhu liu	主流
+nian qing	年轻
+jiu xing	就行
+shi shi	试试
+ka fei	咖啡
+xue yuan	学院
+ling yi fang mian	另一方面
+na xie	哪些
+you xie ren	有些人
+ye bu	也不
+shi qing	事情
+gao zhong	高中
+yuan ze	原则
+tai da	太大
+jiu bu	就不
+ying xiao	营销
+kan dao le	看到了
+jian cha	检查
+fan wei	范围
+shi ji	世纪
+le ba	乐吧
+gao kao	高考
+yi fang mian	一方面
+da duo	大多
+jin xing le	进行了
+cha yi	差异
+dan xin	担心
+xiao liang	销量
+ju bei	具备
+qi dai	期待
+gen zhe	跟着
+fan fu	反复
+hai you yi ge	还有一个
+dian zan	点赞
+ti gong le	提供了
+sheng wu	生物
+yi wei zhe	意味着
+chu qu	出去
+bao han	包含
+shang shu	上述
+di san	第三
+duan lian	锻炼
+cheng xu	程序
+zhi bu guo	只不过
+mei xiang dao	没想到
+ta men	她们
+zai guo nei	在国内
+er zai	二载
+hao kan	好看
+xuan ze le	选择了
+lao shi de	老师的
+gan qing	感情
+ji rou	鸡肉
+chao ji	超级
+chu le	出了
+jin gong	进攻
+suo shuo	所说
+qi ta ren	其他人
+qun ti	群体
+bai du	百度
+dian zi	电子
+chuang ye	创业
+tong ji	统计
+yue fen	月份
+lai jiang	来讲
+dui you	队友
+ren zhen	认真
+yi shi	意识
+te shu	特殊
+gui hua	规划
+zhan zheng	战争
+guo le	过了
+liu xia	留下
+lian xi	练习
+shuo shi hua	说实话
+nan sheng	男生
+zhe shi	这时
+shi bai	失败
+zhi biao	指标
+ke ji	科技
+qing song	轻松
+nan ren	男人
+ba zi ji	把自己
+ji suan ji	计算机
+nian qing	年青
+zai shuo	再说
+ni zi ji	你自己
+rang zi ji	让自己
+gao su ni	告诉你
+bu duo	不多
+dan zai	但在
+di er tian	第二天
+shang jia	商家
+ni shuo	你说
+duo nian	多年
+you dian	优点
+ming que	明确
+mei cuo	没错
+da zhi	大致
+kan de	看的
+wo dui	我对
+gao su	告诉
+jia zhang	家长
+gong ji	攻击
+jiao lian	教练
+bu xi huan	不喜欢
+yi ding shi	一定是
+ying pian	影片
+zai wo	在我
+yi chang	一场
+shang hai	上海
+xian chang	现场
+hua wei	华为
+zhong wen	中文
+tu cao	吐槽
+qiang diao	强调
+ru guo you	如果有
+ji zhu	记住
+ying li	盈利
+hui lai	回来
+fang zi	房子
+que fa	缺乏
+xiang shou	享受
+ge qu	歌曲
+gao du	高度
+wo xian zai	我现在
+shi you	是有
+da lao	大佬
+xin shou	新手
+que shi	缺失
+yu suan	预算
+zhi neng shuo	只能说
+da de	大的
+cheng zhang	成长
+shi yong de	使用的
+xiao mi	小米
+jue de zi ji	觉得自己
+kan guo	看过
+yue fen	约分
+yi dui	一堆
+zhuan ji	专辑
+nan dao	难道
+ke neng xing	可能性
+xiang dao	想到
+wo dang shi	我当时
+shi zhen de	是真的
+you qi	尤其
+ming bai	明白
+yan yuan	演员
+jiu hao	就好
+shuang fang	双方
+xiao xi	消息
+ru guo mei you	如果没有
+que shi shi	确实是
+ai qing	爱情
+ping heng	平衡
+bu yi ding	不一定
+ji chu shang	基础上
+ba le	罢了
+yi pian	一篇
+zai yi qi	在一起
+hao duo	好多
+xun su	迅速
+le yi ge	了一个
+shen me shi	什么是
+bang ni	帮你
+mao dun	矛盾
+zhan dou	战斗
+gan huo	干活
+lai yuan	来源
+jiu yi jing	就已经
+jing zheng	竞争
+yin wei ta	因为他
+shuo shi	说是
+ha ha	哈哈
+ni zai	你在
+wu zhi	无知
+xing qu	兴趣
+gang kai shi	刚开始
+dang di	当地
+xin li	心理
+zen me ban	怎么办
+quan mian	全面
+fang shou	放手
+dang qian	当前
+xiang xiang	想想
+pi fu	皮肤
+suo zai	所在
+ren ti	人体
+dui wo	对我
+ji zhi	机制
+hai xu yao	还需要
+ge shou	歌手
+yu ce	预测
+zhi cheng	支撑
+dian pu	店铺
+shi zai shi	实在是
+di er ge	第二个
+bi jiao duo	比较多
+kao pu	靠谱
+bu cun zai	不存在
+jin qu	进去
+da gai shi	大概是
+duo ci	多次
+nian ling	年龄
+hui bu hui	会不会
+hai dei	还得
+jin bu	进步
+tian jia	添加
+fen ge xian	分割线
+dui mian	对面
+xian de	闲的
+er shi	二十
+mai de	买的
+zhan kai	展开
+chuang zao	创造
+ben zhi	本质
+zheng que de	正确的
+yin wei wo	因为我
+gei le	给了
+sheng xia de	剩下的
+mu ban	模板
+jie ju	结局
+zhe pian wen zhang	这篇文章
+wei shen me yao	为什么要
+shun jian	瞬间
+che di	彻底
+sheng ji	升级
+bu zhou	步骤
+zhe ye	这也
+wei chi	维持
+wei sha	为啥
+yue lai yue duo	越来越多
+zhong yao de	重要的
+chang jian de	常见的
+xiang ji	相机
+liang ge ren	两个人
+bang ni	邦尼
+kan jian	看见
+shun bian	顺便
+wo dou	我都
+liang ci	两次
+ta shi	她是
+qi che	汽车
+de dao le	得到了
+zheng li	整理
+zheng zhuang	症状
+zhi jin	至今
+tan suo	探索
+yi ban shi	一般是
+zhe bian	这边
+yi dian dian	一点点
+jin yi bu	进一步
+bao zhang	保障
+zuo fa	做法
+ju da de	巨大的
+jiu ke yi le	就可以了
+xian shi	现实
+shang le	上了
+ren cai	人才
+cha bie	差别
+zi ti	字体
+hui jia	回家
+wen wo	问我
+jiu hao le	就好了
+hao chu	好处
+pang bian	旁边
+zhe pian	这篇
+ni kan	你看
+chi fan	吃饭
+wo ma	我妈
+na zhe	拿着
+dou mei	都没
+ci hui	词汇
+ke xi	可惜
+na li	哪里
+ju jue	拒绝
+shou shu	手术
+ju shuo	据说
+shuo shuo	说说
+wu qi	武器
+jing li	经理
+jin jin	仅仅
+tui chu	退出
+bi xu yao	必须要
+you yong	有用
+you shi	优势
+huan jie	缓解
+zhi xia	之下
+fa hui	发挥
+da suan	打算
+zhe zhong qing kuang	这种情况
+ke yan	科研
+bing ren	病人
+cheng wei	称为
+hen duo shi hou	很多时候
+yue dui	乐队
+gao ji	高级
+tong ku	痛苦
+dong li	动力
+shang ke	上课
+yi wai	意外
+yi ban de	一般的
+dong wu	动物
+da yue	大约
+liang nian	两年
+xi yin	吸引
+bie ren de	别人的
+zhang hao	账号
+zhi bo	直播
+hou zhe	后者
+bao gao	报告
+xing zhi	性质
+feng kuang	疯狂
+tong yi	同意
+yin xiang	印象
+xian shang	线上
+shuo dao	说到
+zhe xie ren	这些人
+shu ju ku	数据库
+yi shi	仪式
+qi shi jiu shi	其实就是
+dan ta	但他
+you na xie	有哪些
+bu da	不大
+tai duo le	太多了
+chun cui	纯粹
+quan shi	全是
+xing jia bi	性价比
+gong shi	公式
+zheng shu	证书
+fa xian le	发现了
+fan dui	反对
+guan wang	官网
+zhi de	值得
+dui hua	对话
+zhe bu shi	这不是
+bi qi	比起
+mei ban fa	没办法
+xuan chuan	宣传
+ru guo shuo	如果说
+chong fu	重复
+niu bi	牛逼
+huang di	皇帝
+zheng ju	证据
+te ding	特定
+zen me yang	怎么样
+qu kan	去看
+biao mian	表面
+la ji	垃圾
+zao jiu	早就
+da shi	大事
+shi shui	是谁
+rang ta men	让他们
+ke yi zhi jie	可以直接
+xie le	写了
+shi ke yi	是可以
+yao zhi dao	要知道
+zhuang bei	装备
+jiu xing le	就行了
+you de ren	有的人
+zui chu	最初
+di tu	地图
+zan shi	暂时
+nian qian	年前
+she ji de	设计的
+sui hou	随后
+jiu mei you	就没有
+zhong xin	中心
+zai yi ge	在一个
+jiu shi yi ge	就是一个
+ge ren ren wei	个人认为
+sun shi	损失
+zhi fu	支付
+bi ran	必然
+ke jian	可见
+zhao pin	招聘
+ye mian	页面
+zui hou de	最后的
+yi qing	疫情
+zhe ge ren	这个人
+shuo shi	硕士
+jian zhi	简直
+le ma	了吗
+tiao zhan	挑战
+lai dao	来到
+cheng xian	呈现
+zui zao	最早
+gou cheng	构成
+wo zhi qian	我之前
+zhe xue	哲学
+ge ci	歌词
+shi you	石油
+a li	阿里
+ji nian	几年
+jie zhe	接着
+bu de bu	不得不
+su cai	素材
+fen wei	氛围
+bu suan	不算
+se cai	色彩
+ren kou	人口
+que ren	确认
+wo zhi dao	我知道
+yi shi dao	意识到
+hui bei	会被
+gu ding	固定
+zi xue	自学
+fang fu	仿佛
+zui zhong yao de	最重要的
+wen ming	文明
+ye bu neng	也不能
+mei fa	没法
+zhe shou ge	这首歌
+lu xian	路线
+ting li	听力
+yuan wen	原文
+zuo yi ge	做一个
+ma shang	马上
+lei si de	类似的
+zhi yi	质疑
+ci ji	刺激
+yi ban lai shuo	一般来说
+jiu zhe yang	就这样
+shu ju fen xi	数据分析
+wo hai shi	我还是
+jue da duo shu	绝大多数
+bei song	背诵
+you yi ding	有一定
+zhun que	准确
+gan dao	感到
+san nian	三年
+chong fu	冲服
+ben wen	本文
+cheng jiu	成就
+she ying	摄影
+zai mei guo	在美国
+he shi de	合适的
+ke mu	科目
+biao qian	标签
+dian shang	电商
+wo men zai	我们在
+biao yan	表演
+zi kao	自考
+tong xue men	同学们
+pei xun	培训
+dui kang	对抗
+ting shuo	听说
+dian hua	电话
+gan shou dao	感受到
+mian lin	面临
+ni neng	你能
+bu gan	不敢
+she ji	涉及
+dan du	单独
+gong cheng shi	工程师
+wen xue	文学
+suo ni	索尼
+fei chang zhong yao	非常重要
+wo hai	我还
+hai you hen duo	还有很多
+shuo yi xia	说一下
+xin hao	信号
+cheng xu yuan	程序员
+ba ba	爸爸
+chu xian zai	出现在
+bu dong	不懂
+wo xiang xin	我相信
+cheng fen	成分
+yi ding hui	一定会
+yu fa	语法
+hui zai	会在
+qing jie	清洁
+suo yi shuo	所以说
+cheng li	成立
+sheng cheng	生成
+shen zhi shi	甚至是
+shou dao	受到
+xiao hai	小孩
+zhuan ye ke	专业课
+men kan	门槛
+zhi xing	执行
+chuang xin	创新
+te xing	特性
+zhang hu	账户
+han guo	韩国
+geng rong yi	更容易
+zai zhe	在这
+xin zhong	心中
+yun xu	允许
+huang jin	黄金
+bao xian gong si	保险公司
+ju zi	句子
+ge ren jue de	个人觉得
+pian yi	便宜
+yan fa	研发
+shi dui	是对
+shi tu	试图
+dang xia	当下
+zhi zao	制造
+di ren	敌人
+xiao bai	小白
+you yi ding de	有一定的
+ni jue de	你觉得
+jing ji xue	经济学
+you ji hui	有机会
+guo ji	国际
+kuai qian	块钱
+shi zen me	是怎么
+da duo shu ren	大多数人
+kai tou	开头
+xiang zhe	想着
+ni xu yao	你需要
+you liang ge	有两个
+ban fa	办法
+ta ren	他人
+dao shi	倒是
+liang zhe	两者
+yao wu	药物
+you xing qu	有兴趣
+shuo guo	说过
+wan fa	玩法
+tian fu	天赋
+ha ha ha	哈哈哈
+fan kui	反馈
+yi kao	依靠
+yi zhou	一周
+nan zhu	男主
+zhen shi de	真实的
+deng dao	等到
+yi bo	一波
+xi fang	西方
+hui fu	恢复
+xian shuo	先说
+wan mei	完美
+ji yin	基因
+zhe duan	这段
+an zhuang	安装
+can shu	参数
+zhi yao ni	只要你
+yi zhi	一只
+yi qun	一群
+xin ren	信任
+ke yi xuan ze	可以选择
+hui qu	回去
+ran hou zai	然后再
+ju ge li zi	举个例子
+zui xin	最新
+ren shu	人数
+jing cha	警察
+fa dong ji	发动机
+di zhi	地址
+hen ming xian	很明显
+zhi wei	职位
+nan yi	难以
+chi de	吃的
+zuo wen	作文
+kan fa	看法
+yan zheng	验证
+zheng hao	正好
+ju ben	剧本
+da shen	大神
+shi jiao	视角
+fang dao	放到
+dang ran shi	当然是
+deng dai	等待
+shi jian	实践
+ban nian	半年
+bu shuo	不说
+zai ci	在此
+bian shi	便是
+zheng shi	正式
+lao ren	老人
+hou shi	厚实
+fu fei	付费
+dai you	带有
+shi mian shang	市面上
+mei shen me	没什么
+li nian	理念
+sai ji	赛季
+ti wen	提问
+ji ta	吉他
+dou bu hui	都不会
+ben zhi shang	本质上
+kan shu	看书
+zhe jia	这家
+guo yu	过于
+lu shang	路上
+qu de	取得
+si ge	四个
+wan yuan	万元
+zhi du	制度
+jia ren	家人
+xia jiang	下降
+huai yi	怀疑
+huo bi	货币
+ma fan	麻烦
+fu zhu	辅助
+dou bei	都被
+zhuan jia	专家
+you suo	有所
+xuan xiang	选项
+shi ke	时刻
+hui chu xian	会出现
+yi kuai	一块
+dan shi wo	但是我
+jin jin shi	仅仅是
+shi chang shang	市场上
+meng xiang	梦想
+huo de le	获得了
+tong shi ye	同时也
+gong li	公里
+jiao cheng	教程
+ru shou	入手
+dou xu yao	都需要
+ji shi shi	即使是
+zhe bu fen	这部分
+ling hun	灵魂
+ba ta	把他
+bu jin jin shi	不仅仅是
+lei si yu	类似于
+shen zhen	深圳
+xue shu	学术
+e luo si	俄罗斯
+gao su wo	告诉我
+wei yu	位于
+yuan xiao	元宵
+chi le	吃了
+ni xiang	你想
+xiong di	兄弟
+jiang de	讲的
+ya ma xun	亚马逊
+jiu bei	就被
+cha kan	查看
+shi ying	适应
+ni hui fa xian	你会发现
+zhou qi	周期
+shang ban	上班
+si le	死了
+wo bu zhi dao	我不知道
+chu fei	除非
+zhe ge shi jie	这个世界
+re ai	热爱
+she qu	社区
+ren min bi	人民币
+bu dui	不对
+shao nian	少年
+wo yi jing	我已经
+jiao xue	教学
+hen ke neng	很可能
+bei cheng wei	被称为
+you yi zhong	有一种
+shen me yang de	什么样的
+wen du	温度
+dui ta	对他
+cheng gong de	成功的
+jiu shi zai	就是在
+shun xu	顺序
+qian hou	前后
+wan cheng le	完成了
+yi gong	一共
+gui mo	规模
+zhao gong zuo	找工作
+yi mei yuan	一美元
+yi dong	移动
+zui jia	最佳
+gong cheng	工程
+lao ren	老任
+qi ma	起码
+pai zhao	拍照
+yin dao	引导
+ren ke	认可
+dan shi zai	但是在
+jie tu	截图
+ji qi	及其
+lai zi yu	来自于
+liao tian	聊天
+wan quan ke yi	完全可以
+jue ding le	决定了
+fu chu	付出
+qian zhe	前者
+da jia ke yi	大家可以
+bi jiao da	比较大
+xiao hao	消耗
+hai pa	害怕
+bian cheng	编程
+you duo	有多
+zhong yi	中医
+jia zu	家族
+yong dao	用到
+gong tong	共同
+xuan shou	选手
+li shi shang	历史上
+nan xing	男性
+yi zhi yu	以至于
+bu xiang	不像
+mei zi	妹子
+er fei	而非
+ke yi can kao	可以参考
+zai xian	在线
+hua le	花了
+ming yun	命运
+zeng zhang	增长
+mou zhong	某种
+fa xing	发行
+na bian	那边
+hen qiang	很强
+you qian	有钱
+gao yu	高于
+gai shan	改善
+ke yi kan chu	可以看出
+dui le	对了
+yao xiang	要想
+kao cha	考察
+fu wu qi	服务器
+jia su	加速
+zi shen de	自身的
+zhu ce	注册
+xie xie	谢谢
+zhao dao le	找到了
+zuo guo	做过
+dou bu shi	都不是
+pi pei	匹配
+cha xun	查询
+jiu ba	就把
+kan si	看似
+fei yao	非要
+shi zhong	始终
+bao kao	报考
+shi zhe yang de	是这样的
+zhi hu shang	知乎上
+bian ju	编剧
+yi ba	一把
+ji ben dou shi	基本都是
+zhi dao	直到
+duo de	多的
+kou gan	口感
+ming xing	明星
+qi zi	妻子
+dian xing de	典型的
+ze ren	责任
+hu xiang	互相
+zhong liang	重量
+gan jin	赶紧
+fang jian	房间
+bu zai	不再
+ying xiang li	影响力
+ge lei	各类
+qiang lie	强烈
+li xiang	理想
+li xing	理性
+yin wei ni	因为你
+dan ye	但也
+fei ji	飞机
+da dao le	达到了
+ji bing	疾病
+neng fou	能否
+gao xiao	高效
+wu shu	无数
+wei hu	维护
+na tian	那天
+da zao	打造
+zhan xian	展现
+xiang shi	像是
+yuan yin shi	原因是
+zhe bu	这不
+zi dong	自动
+zai jia	在家
+tao lu	套路
+cong ci	从此
+jie mu	节目
+jie mian	界面
+hao ba	好吧
+mei bi yao	没必要
+zhao bu dao	找不到
+yi duan shi jian	一段时间
+ji qi	记起
+mo ni	模拟
+zheng ru	正如
+lian meng	联盟
+zhong duo	众多
+ji ci	几次
+ying dui	应对
+na ni	那你
+suo yi zai	所以在
+zhi chu	指出
+qu zhao	去找
+jia ban	加班
+yin yong	引用
+xia tu	下图
+kun nan	困难
+you duo shao	有多少
+biao ming	表明
+hen bu cuo	很不错
+you hen da	有很大
+zuo ti	做题
+gao duan	高端
+gu li	鼓励
+zhan shu	战术
+na li	那里
+ming ming	明明
+zhe xie dou shi	这些都是
+bei ren	被人
+ding ji	顶级
+jing dong	京东
+zui di	最低
+fan wei nei	范围内
+te se	特色
+jie du	解读
+zuo ge	做个
+sha de	啥的
+wang you	网友
+ke fu	客服
+liu lan qi	浏览器
+yin du	印度
+bu jian yi	不建议
+zao shang	早上
+wo jia	我家
+she jiao	社交
+ke yi qu	可以去
+kai le	开了
+jian dao	见到
+xing dong	行动
+ji duan	极端
+chan sheng le	产生了
+shou cang	收藏
+zhe ge shi	这个是
+gong xian	贡献
+zhan bi	占比
+jiang jie	讲解
+zuo ye	作业
+li ke	立刻
+she ji dao	涉及到
+di yu	低于
+shi qu	失去
+yan zhong	严重
+fu gai	覆盖
+zheng que	正确
+chang chang	常常
+ta zi ji	他自己
+pin zhi	品质
+yi jian	意见
+wei yi de	唯一的
+bu rong yi	不容易
+shi jie shang	世界上
+gong chang	工厂
+yin wei ta	因为它
+zeng jia le	增加了
+kong pa	恐怕
+ji shi	即使
+jiao wei	较为
+ying dang	应当
+wo mei you	我没有
+ren xing	任性
+shua ti	刷题
+ying jian	硬件
+chi you	持有
+shang shi	上市
+jiu xu yao	就需要
+shi yan shi	实验室
+zai wo kan lai	在我看来
+wo he	我和
+wei he	为何
+dai yu	待遇
+cai you	才有
+shou huo	收获
+da xue sheng	大学生
+zhi fu bao	支付宝
+xiao shi hou	小时候
+xing tai	形态
+na chu	拿出
+quan shi jie	全世界
+liu xing	流行
+biao qing	表情
+tai wan	太晚
+dan ru guo	但如果
+gan xing qu de	感兴趣的
+du te	独特
+jia ju	家具
+yue da	越大
+sheng cun	生存
+zao yi	早已
+jiu bu hui	就不会
+wu guan	无关
+guo chan	国产
+quan li	全力
+tou zi ren	投资人
+ban quan	版权
+mei ge yue	每个月
+yi ming	一名
+xi bao	细胞
+jiu dei	就得
+fa chu	发出
+xiang dui yu	相对于
+qu jue yu	取决于
+xia tian	夏天
+xiang fan	相反
+chang shang	厂商
+yi yuan	一元
+jia ru	假如
+jue dui shi	绝对是
+xiang xi	详细
+you wen ti	有问题
+kong ju	恐惧
+wo fa xian	我发现
+mai jia	卖家
+zhou wei	周围
+zou xiang	走向
+gan xing qu	感兴趣
+bu dan	不但
+hu dong	互动
+ren dou	人都
+bu yuan yi	不愿意
+gang hao	刚好
+dui ci	对此
+shi nian	十年
+da xing	大型
+gou jian	构建
+bei ren	北人
+li ma	立马
+tou fa	头发
+gui fan	规范
+xun huan	循环
+kai fang	开放
+shi yao	是要
+ye ji	业绩
+yi xi lie	一系列
+jia gou	架构
+neng rang	能让
+jin ke neng	尽可能
+duo zhong	多种
+jing li le	经历了
+you xiao de	有效的
+he tong	合同
+zou le	走了
+yi ge wen ti	一个问题
+pao bu	跑步
+gei ren	给人
+da yu	大于
+ru guo ni shi	如果你是
+wo men jiu	我们就
+yi bei zi	一辈子
+bu ju	布局
+chu fa	出发
+yao bi	要比
+zhuan li	专利
+fen bu	分布
+yao you	要有
+shi fei chang	是非常
+gu niang	姑娘
+cai fu	财富
+zhe yang yi ge	这样一个
+yi sheng	一生
+fa sheng le	发生了
+hua xue	化学
+jian shen	健身
+jia qiang	加强
+nai zhi	乃至
+jiu suan shi	就算是
+shuo wo	说我
+wei lai de	未来的
+jie wei	结尾
+zhe ji nian	这几年
+mu qian de	目前的
+fa ming	发明
+yi lu	一路
+wo men yao	我们要
+chao yue	超越
+yi kan	一看
+dao li	道理
+deng yu	等于
+chu shen	出身
+da chang	大厂
+xin shang	欣赏
+xie yi	协议
+jiu zhi dao	就知道
+tui jian de	推荐的
+hai bu ru	还不如
+rong zi	融资
+dian shi	电视
+zu qiu	足球
+zai qu	再去
+shen ru	深入
+cai zhi	材质
+ri zi	日子
+ge ge	哥哥
+e wai	额外
+tong yi ge	同一个
+fu shi	服饰
+yi ban	一半
+you ji ge	有几个
+yue gao	越高
+chu ban	出版
+yue da	约达
+tong yang shi	同样是
+gen wo	跟我
+jun dui	军队
+fa yin	发音
+yi xia shi	以下是
+qu fen	区分
+zai na li	在哪里
+ji yu	给予
+lao po	老婆
+yue duo	越多
+zai lai	再来
+zuo jia	作家
+shou ji	收集
+da shu ju	大数据
+da ge	大哥
+yan li	眼里
+xi huan de	喜欢的
+xian you	现有
+jian ce	检测
+chu ci zhi wai	除此之外
+han shu	函数
+que bao	确保
+dan zhe	但这
+he wo	和我
+na ge shi hou	那个时候
+chao xi	抄袭
+ge ti	个体
+si ji	司机
+gao da	高达
+cheng dan	承担
+bu shi he	不适合
+quan shang	券商
+wan shan	完善
+wai mian	外面
+shang sheng	上升
+jin hua	进化
+zi dai	自带
+yi ju	依据
+xian xia	线下
+dou hui you	都会有
+dao da	到达
+ta ye	他也
+shang lai	上来
+dian chi	电池
+ju da	巨大
+su lian	苏联
+zai wang shang	在网上
+bu zuo	不做
+liu xue	留学
+yi tai	一台
+bi ye sheng	毕业生
+quan li	权利
+zhe kuai	这块
+fen bie shi	分别是
+ti hui	体会
+jiang hui	将会
+neng zai	能在
+tu shu guan	图书馆
+fu zhi	复制
+bao dao	报道
+jing zhun	精准
+dai kuan	贷款
+guan jun	冠军
+fang zhi	防止
+hai you yi xie	还有一些
+bu gao	不高
+zhe ji ge	这几个
+shen mei	审美
+xing cheng le	形成了
+wu ti	物体
+xiang xiang	想象
+qian wan bu yao	千万不要
+wo ba	我把
+sui shi	随时
+ta jiu	他就
+yi qian de	以前的
+hei dong	黑洞
+zuo zai	坐在
+yi jian	一件
+di er ci	第二次
+san xing	三星
+ba ta	把它
+zhen xin	真心
+gong wu yuan	公务员
+yi pi	一批
+biao ti	标题
+geng xiang	更像
+xue de	学的
+shen du	深度
+zuo you de	左右的
+deng ji	登记
+gu dong	股东
+shun li	顺利
+mei ge ren dou	每个人都
+kan shang qu	看上去
+zhai quan	债券
+jiu shuo	就说
+bing bu neng	并不能
+wo gan jue	我感觉
+ken ding hui	肯定会
+peng dao	碰到
+qing xi	清晰
+ye dou	也都
+jin er	今儿
+ba wo	把我
+wan de	玩的
+yun xing	运行
+mian shi guan	面试官
+you yi tian	有一天
+zhi you yi ge	只有一个
+jiang qi	将其
+he li	合理
+zhe bu dian ying	这部电影
+xiu xi	休息
+yi xiang	一项
+mei le	没了
+yin se	银色
+ru tong	如同
+tian xia	天下
+chong tu	冲突
+kuai le	快乐
+wen dang	文档
+zhu ming de	著名的
+kou wei	口味
+zhi you	知友
+deng ren	等人
+ping gu	评估
+wo you	我有
+ba ni	把你
+liang hua	量化
+mo fang	模仿
+shi fou you	是否有
+gu dai	古代
+jie jue wen ti	解决问题
+jue da bu fen	绝大部分
+bao liu	保留
+ben shen jiu shi	本身就是
+gong kai	公开
+pai de	拍的
+gu zhi	估值
+shi qu le	失去了
+chuan bo	传播
+yi lai	依赖
+wo yi zhi	我一直
+ming xian de	明显的
+cheng yuan	成员
+tong zhi	通知
+yao shuo	要说
+you qu de	有趣的
+gang qin	钢琴
+zhe fen	这份
+nian hou	年后
+yi da li	意大利
+yu qi	预期
+duo me	多么
+yao zhu yi	要注意
+zhi de shi	指的是
+you you	又有
+wei zi ji	为自己
+fang song	放松
+suo yi wo men	所以我们
+yin fa	引发
+qing chu	清楚
+mei wen ti	没问题
+shou li	手里
+dang tian	当天
+shuo bai le	说白了
+zhe ge ci	这个词
+shi cong	是从
+ye zhi shi	也只是
+kai qi	开启
+bian fu xia	蝙蝠侠
+mei guo ren	美国人
+ti zhong	体重
+mei zhou	每周
+hua qian	花钱
+dan sheng	诞生
+xing zhuang	形状
+tui dong	推动
+zhe tiao	这条
+hai hao	还好
+jiu dian	酒店
+zao xing	造型
+shi yi	十一
+wo zhen	我真
+li lun shang	理论上
+zhe shi	这事
+zai zuo	在做
+jiang lai	将来
+mei ren	没人
+di yi bu	第一步
+zui kai shi	最开始
+wen xian	文献
+fei chang de	非常地
+jiao shi	教师
+xia yi ge	下一个
+ru guo bu shi	如果不是
+yao qing	邀请
+you yi ci	有一次
+zui wei	最为
+lai zuo	来做
+zhuan hang	转行
+wo ke yi	我可以
+ti shi	提示
+ye suan shi	也算是
+dao di shi	到底是
+jin tian de	今天的
+zhi wu	植物
+chi cun	尺寸
+xin li xue	心理学
+man lian	满脸
+da lu	大陆
+su she	宿舍
+shai xuan	筛选
+dui zhe	对着
+xin ren	新人
+zhe shi wo	这是我
+zi xin	自信
+su zao	塑造
+yu wang	欲望
+dou ban	豆瓣
+ju li	举例
+jie jie	姐姐
+wo ye shi	我也是
+po huai	破坏
+bu ke	不可
+dan qi shi	但其实
+xi shou	吸收
+jing ying	经营
+wei xie	威胁
+ye dou	夜斗
+peng you quan	朋友圈
+cai zhi dao	才知道
+hua shuo	话说
+shi mei you	是没有
+gao de	搞得
+jiu jie	纠结
+gei wo men	给我们
+zhao ge	找个
+jin shu	金属
+mei you ren	没有人
+li cai	理财
+zhuang xiu	装修
+shou fei	收费
+mei yue	每月
+hong se	红色
+mo kuai	模块
+zuo cheng	做成
+sui yi	随意
+chuang yi	创意
+jin le	进了
+shi wu	事物
+che liang	车辆
+jian guo	见过
+ye xu yao	也需要
+zhuang kuang	状况
+lou zhu	楼主
+ling wai yi ge	另外一个
+bao ming	报名
+pi ping	批评
+liang hua	亮化
+na shi	那时
+yi ge ge	一个个
+qiang xing	强行
+shou xian shi	首先是
+wo ba	握把
+you jian	邮件
+gen ni	跟你
+wen ti shi	问题是
+shang qu	上去
+shen me shi hou	什么时候
+yao kan	要看
+wan le	完了
+tian cai	天才
+da le	打了
+neng kan dao	能看到
+shui guo	水果
+peng you men	朋友们
+wo xi huan	我喜欢
+lu qu	录取
+bao zhe	抱着
+bao bao	宝宝
+bing du	病毒
+na lai	拿来
+xi wang neng	希望能
+zhe cai shi	这才是
+dao lu	道路
+bao fa	爆发
+bu guo shi	不过是
+hen xi huan	很喜欢
+cheng ren	承认
+dai lai le	带来了
+hai shi you	还是有
+ke xue jia	科学家
+duo shu	多数
+hei se	黑色
+jian she	建设
+di san fang	第三方
+zhu li	主力
+pi jiu	啤酒
+bu ying gai	不应该
+dui dai	对待
+yan chu	演出
+pin fan	频繁
+ge shi	格式
+ce hua	策划
+di di	弟弟
+ren gong zhi neng	人工智能
+yun dong yuan	运动员
+zhong yao xing	重要性
+zheng qu	争取
+za zhi	杂志
+zhe ge you xi	这个游戏
+mao si	貌似
+ren he yi ge	任何一个
+bu zhi	不知
+dou zhi dao	都知道
+wo lai	我来
+chan ye	产业
+wan yi	万一
+ji tuan	集团
+piao liang	漂亮
+kong qi	空气
+ye hen	也很
+ri yu	日语
+huan le	换了
+mei hao	美好
+fa biao	发表
+ren min	人民
+qian ti xia	前提下
+guo ran	果然
+gan ran	感染
+qi dao	起到
+quan cheng	全程
+er tong	儿童
+chong ji	冲击
+yao zuo	要做
+bang mang	帮忙
+hui yuan	会员
+yin shi	饮食
+wo ji de	我记得
+yi lai	以来
+zong de lai shuo	总的来说
+shang tu	上图
+tu chu	突出
+hua fei	话费
+he ni	和你
+jing ling	精灵
+yi ren	一人
+na pa shi	哪怕是
+geng he kuang	更何况
+lai yuan yu	来源于
+jie da	解答
+jie hun	结婚
+cai qu	采取
+gu ke	顾客
+sheng yi	生意
+xiao shi	消失
+shi xian le	实现了
+bu ting	不停
+yi shou	一首
+zhi chang	职场
+gu jia	股价
+chuang shi ren	创始人
+zhe ge dong xi	这个东西
+ceng ci	层次
+zhu guan	主管
+kou bei	口碑
+kai che	开车
+chu de	出的
+cheng guo	成果
+mai ru	买入
+han you	含有
+jue ce	决策
+jian fei	减肥
+yu qi	语气
+mian fei de	免费的
+chu men	出门
+gu ge	谷歌
+kan bu dao	看不到
+tu xiang	图像
+xian ru	陷入
+yong de shi	用的是
+hen xiao	很小
+wan quan shi	完全是
+he he	呵呵
+hen jiu	很久
+ren tong	认同
+yuan chuang	原创
+jia zhi guan	价值观
+you xian	有限
+shuo ta	说他
+yi jing bei	已经被
+fang qi le	放弃了
+he li de	合理的
+shang xian	上线
+liang hua	两化
+qi yu	其余
+zhe tao	这套
+ji xie	机械
+ji bian shi	即便是
+hai shi hui	还是会
+ming cheng	名称
+xue dao	学到
+ke pu	科普
+dian shi ju	电视剧
+jia wei	价位
+zun zhong	尊重
+bu shi shuo	不是说
+zhong shi	重视
+ji jin jing li	基金经理
+shang xia	上下
+ta men de	它们的
+ji zai	记载
+su shi	素食
+zai dao	再到
+tiao jie	调节
+an jian	按键
+xi wang da jia	希望大家
+yi nei	以内
+qiu mi	球迷
+zhuan zhu	专注
+dang wo	当我
+ye ke neng	也可能
+fen pei	分配
+qing xiang yu	倾向于
+xue zhe	学着
+zong ti	总体
+hen duo ren dou	很多人都
+xin zi	薪资
+zhi shang	智商
+jie zhu	借助
+dang wo men	当我们
+ji hu shi	几乎是
+zeng qiang	增强
+he ta	和他
+shang xian	上限
+ke yi kan kan	可以看看
+zheng mian	正面
+dan yi	单一
+hang ye de	行业的
+fu li	福利
+dui wu	队伍
+dui zi ji de	对自己的
+zhi ding	指定
+kai xin	开心
+na le	拿了
+yi pian	一片
+ban gong shi	办公室
+cheng zhi wei	称之为
+ben di	本地
+han yi	含义
+you zhi	优质
+wo bu shi	我不是
+hui dao zhi	会导致
+cha jian	插件
+rong he	融合
+na wo	那我
+suo you ren	所有人
+gu yi	故意
+mei shi	没事
+shuo de shi	说得是
+kui sun	亏损
+qiang hua	强化
+jie jue le	解决了
+huan cheng	换成
+shao le	少了
+ta shuo	她说
+jiu shi yin wei	就是因为
+shi ni	是你
+xuan ze ti	选择题
+yi mian	一面
+hai bu cuo	还不错
+da ji	打击
+di ceng	底层
+chu yu	出于
+rang ta	让她
+na chu lai	拿出来
+ge zi	各自
+gao shou	高手
+lu jing	路径
+nao zi	脑子
+you li yu	有利于
+mian ji	面积
+jie kou	借口
+dan ren	担任
+shou fa	手法
+qiang du	强度
+chu guo	出国
+ni ye	你也
+zhe li mian	这里面
+ji zhong	集中
+cheng du	成都
+gai jin	改进
+chu qi	初期
+zhou mo	周末
+quan zi	圈子
+jiang shu	讲述
+zhe chang	这场
+ben shen jiu	本身就
+yi zhi shi	一直是
+dang cheng	当成
+jiu shi ni	就是你
+ou mei	欧美
+zhi shi yi ge	只是一个
+re qing	热情
+yin ru	引入
+shu zhi	数值
+guan nian	观念
+yi ran shi	依然是
+hu xi	呼吸
+xuan bu	宣布
+zhu ti	主体
+bu qu	不去
+jiu shi zhe yang	就是这样
+kan chu	看出
+zhe zhang	这张
+chu lai le	出来了
+wu pin	物品
+xu yao zhu yi	需要注意
+wang le	忘了
+zai kan	在看
+bao zhuang	包装
+bing zai	并在
+jiu qu	就去
+ti xing	题型
+dong tian	冬天
+ti cai	题材
+de chu	得出
+zhou bian	周边
+wu nai	无奈
+xia mian shi	下面是
+yi ban dou shi	一般都是
+yu dao le	遇到了
+you guo	有过
+qi wang	期望
+li jie wei	理解为
+quan dou	全都
+beng kui	崩溃
+ben ke sheng	本科生
+xiang si	相似
+ta dui	他对
+zhen xiang	真想
+tu jing	途径
+wang wang shi	往往是
+fa xue	法学
+jiu lian	就连
+kan ni	看你
+tou bu	头部
+zhe yang zuo	这样做
+jia you	加油
+qiu zhi	求职
+ji qi ren	机器人
+dan bai zhi	蛋白质
+guo qu le	过去了
+liu zai	留在
+wo kan	我看
+dou shuo	都说
+bu de bu shuo	不得不说
+lou shang	楼上
+ge da	各大
+geng duo de shi	更多的是
+wo cong	我从
+fang da	放大
+zhe fang mian	这方面
+guan kan	观看
+chang gui	常规
+qi xi	气息
+jiao gei	交给
+tong yi	统一
+jiu shi ge	就是个
+huan jing xia	环境下
+wang ke	网课
+li zhi	离职
+da dian hua	打电话
+jie xi	解析
+ni ke neng	你可能
+ju le bu	俱乐部
+wang yi	网易
+ai hao zhe	爱好者
+bai se	白色
+hai wai	海外
+you bu shao	有不少
+ci shu	次数
+wo qu	我去
+neng zuo dao	能做到
+yan zou	演奏
+shu li	梳理
+zui qiang	最强
+yi da dui	一大堆
+ru zhi	入职
+zhua zhu	抓住
+ji tian	几天
+chang jian	常见
+hen di	很低
+zhe me zuo	这么做
+chang du	长度
+shou zhi	手指
+gan jing	干净
+hai zhen	还真
+shi ti	实体
+da de	打得
+sheng huo de	生活的
+you qu	有趣
+ge zhong ge yang	各种各样
+cuo wu de	错误的
+xue fei	学费
+huan jie	环节
+lang fei	浪费
+yi lei	一类
+jiao hu	交互
+qi bu	起步
+mei sha	没啥
+wei ni	为你
+hao zai	好在
+hui jue de	会觉得
+mu di shi	目的是
+hui ying	回应
+shi he zi ji	适合自己
+dao zhi le	导致了
+zhe xie dong xi	这些东西
+ri ben ren	日本人
+shuo chu	说出
+bei dan ci	背单词
+bao yuan	抱怨
+dong tai	动态
+shi wo men	是我们
+dou yi jing	都已经
+qi zhi	气质
+yao bu yao	要不要
+xiao peng you	小朋友
+wo kan dao	我看到
+xie chu	写出
+ni men de	你们的
+shou shang	受伤
+duan qi	短期
+gang cai	刚才
+huan xiang	幻想
+yan lun	言论
+wo jiu shi	我就是
+fa sheng zai	发生在
+di mian	地面
+zhi neng	智能
+ping jie	凭借
+ling huo	灵活
+yao su	要素
+zi cong	自从
+ta hui	他会
+xue le	学了
+shou gan	手感
+ban li	办理
+ti jiao	提交
+kuo zhan	扩展
+li hai	厉害
+bu lun	不论
+jue wang	绝望
+ta men shi	他们是
+zu yi	足以
+dao shi hou	到时候
+hei an	黑暗
+ye bei	也被
+qing qiu	请求
+wei ci	为此
+bing bu hui	并不会
+zuo chu	作出
+neng ba	能把
+shen gao	身高
+shou zhong	手中
+suo you ren dou	所有人都
+zhuan hua	转化
+mai ge	买个
+ji qi xue xi	机器学习
+ti chu le	提出了
+lian shang	脸上
+wei xian	危险
+fen nu	愤怒
+pai ban	排版
+guan xin	关心
+sheng huo zhong	生活中
+yi wen	疑问
+zhu ji	主机
+ding dan	订单
+da yi	大一
+rang da jia	让大家
+jiao gao	较高
+jiu xiang shi	就像是
+shi ye	事业
+yi zhi	一致
+bo dong	波动
+chu chang	出场
+yi zhi	抑制
+ke guan	客观
+ding jia	定价
+xiao zhong	小众
+yi ke	一刻
+gong yi	公益
+min zu	民族
+gong ren	工人
+ru guo ni xiang	如果你想
+xia ci	下次
+bi ye hou	毕业后
+yan zhong	眼中
+tian ran	天然
+wan you xi	玩游戏
+xi sheng	牺牲
+ba zi ji de	把自己的
+you ci	有次
+he xian	和弦
+bu zhi	不止
+cai wu	财务
+ke yi rang	可以让
+you zhong	有种
+xin pian	芯片
+yao gun	摇滚
+you yao	又要
+kou yu	口语
+shi yong le	使用了
+ke ai	可爱
+que shao	缺少
+qian ti shi	前提是
+jin lai	进来
+tiao xuan	挑选
+gei ta	给她
+miao xie	描写
+zhong lei	种类
+fen zi	分子
+hun he	混合
+pu ji	普及
+qu xian	曲线
+shen me jiao	什么叫
+yi fang	一方
+tong yi	同一
+mei mei	妹妹
+chang ge	唱歌
+guan jian shi	关键是
+dong fang	东方
+fan si	烦死
+bu jin shi	不仅是
+dou hen	都很
+hu you	忽悠
+bie shuo	别说
+cong xiao	从小
+ni dui	你对
+ni yao shi	你要是
+shi yong yu	适用于
+shi cai	食材
+hui rang	会让
+ran hou jiu	然后就
+yi chang	异常
+dou bu	都不
+da gong si	大公司
+shi fu	师傅
+tan tao	探讨
+ci chu	此处
+hai zhen	海镇
+ai hao	爱好
+hao wu	毫无
+cu jin	促进
+wo yong	我用
+tian sheng	天生
+zi shi	姿势
+yi liao	医疗
+ren she	人设
+shu fu	舒服
+lao zi	老子
+ji lu pian	纪录片
+zhuan huan	转换
+dan shi ta	但是他
+ben lai jiu	本来就
+kai fa zhe	开发者
+ji ben shi	基本是
+xiao ying	效应
+xue yuan	学员
+si nian	思念
+chong man	充满
+ke yi	刻意
+bu jiu	不就
+fei chang hao	非常好
+jian zhi shi	简直是
+dang ran le	当然了
+hen you ke neng	很有可能
+tong xing	通行
+wen ding de	稳定的
+di guo	帝国
+ke yi kan	可以看
+zhe xie wen ti	这些问题
+yao ba	要把
+bai tian	白天
+zheng gui	正规
+mian qiang	勉强
+mai chu	卖出
+xian zhuang	现状
+you bang zhu	有帮助
+ru guo yao	如果要
+lian he	联合
+yi shu jia	艺术家
+yan zhi	颜值
+jiu jing	究竟
+wai guan	外观
+biao ge	表格
+kan yi xia	看一下
+shi fang	释放
+shou gou	收购
+shou gan	收干
+shu biao	鼠标
+zhuan lan	专栏
+zhe san ge	这三个
+kai shi le	开始了
+yi jing you	已经有
+yi you	已有
+san zhong	三种
+si xin	私信
+jiu zhe me	就这么
+cuo le	错了
+tong yong	通用
+fen fen	纷纷
+guo duo	过多
+ye ye	爷爷
+chu sheng	出生
+shi zhan	实战
+tong li	同理
+wu xian	无限
+gao xiao	搞笑
+jie chu dao	接触到
+xue zhang	学长
+li xi	利息
+zhao gu	照顾
+lu yin	录音
+jiu gen	就跟
+ji hu mei you	几乎没有
+liang wei	两位
+fou ding	否定
+shi li	视力
+wei ji	危机
+jing li	精力
+ti dai	替代
+hua fen	划分
+shi ta	是他
+qu zi	曲子
+da ti	答题
+ting le	听了
+ye bu zhi dao	也不知道
+lun tai	轮胎
+tie zi	帖子
+dan ni	但你
+dai ti	代替
+ren jun	人均
+hou tai	后台
+pao dao	跑到
+sui ran shi	虽然是
+cai fa xian	才发现
+chuang jian	创建
+piao fang	票房
+hui bao	汇报
+qing huai	情怀
+fen cheng	分成
+ting qi lai	听起来
+wen ding xing	稳定性
+guo qu de	过去的
+hou hui	后悔
+zhong wu	中午
+zi sha	自杀
+diao cha	调查
+xin yang	信仰
+ting guo	听过
+shi shi	事实
+huan ju hua shuo	换句话说
+wen an	文案
+xu shi	叙事
+gan cui	干脆
+guang zhou	广州
+wan ren	万人
+shuo dao	说道
+shi yi yang de	是一样的
+ke yi cong	可以从
+chu zi	出自
+fa xian zi ji	发现自己
+xing fu	幸福
+ni zhi dao	你知道
+ji zhong zai	集中在
+jing li guo	经历过
+qian ti	前提
+na xia	拿下
+nei cun	内存
+gong zuo shi	工作室
+qian duan	前端
+shui zhun	水准
+zai ta	在他
+shan chang	擅长
+nan fang	南方
+pu ji	普吉
+cai ce	猜测
+ya chi	牙齿
+jia re	加热
+tu di	土地
+shi you	是由
+wan quan mei you	完全没有
+ye bu cuo	也不错
+zhi shang	之上
+bian yuan	边缘
+wo you	握有
+wei rao	围绕
+jin qi	近期
+chu zhong	初中
+na yang de	那样的
+wu tai	舞台
+gong zuo ren yuan	工作人员
+jiu shi wei le	就是为了
+yao qu	要去
+dao ju	道具
+zai yi	在意
+pian zi	骗子
+yun qi	运气
+you yi dian	有一点
+lan se	蓝色
+ding zhi	定制
+ji ben dou	基本都
+wo men hui	我们会
+hai shi bi jiao	还是比较
+dan shi ni	但是你
+bei fang	北方
+yue shi	越是
+shou biao	手表
+chang jia	厂家
+ming ling	命令
+bu liao jie	不了解
+geng you	更有
+you zi ji	有自己
+ji jiang	即将
+yi fan	一番
+fei chang gao	非常高
+gai zao	改造
+ping chang	平常
+duo da	多大
+ni yi wei	你以为
+dian de	点的
+shou xian yao	首先要
+ba sa	巴萨
+chuan zhe	穿着
+ye suan	也算
+gong zhu	公主
+jin e	金额
+gao ding	搞定
+zi ji qu	自己去
+bai tian	百天
+biao xian chu	表现出
+si da	四大
+cun chu	存储
+fa sheng de	发生的
+lan qiu	篮球
+zao cheng le	造成了
+bu tai	不太
+wu bi	无比
+bi jiao gao	比较高
+tuo li	脱离
+dang zuo	当作
+di si	第四
+fa li	发力
+nong min	农民
+xian zai shi	现在是
+you zhu yu	有助于
+ye dou shi	也都是
+niu nai	牛奶
+xuan zhuan	旋转
+zhe xiang	这项
+sha si	杀死
+xian jin	现金
+dui bu qi	对不起
+yi du	已读
+bang wo	帮我
+ji xian	极限
+yi xue	医学
+you xian	优先
+hui hua	绘画
+wo men shi	我们是
+yi men	一门
+shang di	上帝
+shang shou	上手
+wan mei de	完美的
+na dao le	拿到了
+ta shi	踏实
+liang wei	两委
+ye zhi neng	也只能
+zhe ge guo cheng	这个过程
+guan zhu wo	关注我
+huo jian	火箭
+zai ni	在你
+dui qi	对齐
+zhe ge jie duan	这个阶段
+kao yan	考研
+yin qing	引擎
+zou dao	走到
+tu biao	图标
+ye xu shi	也许是
+di yi shi jian	第一时间
+jin zhang	紧张
+biao zhu	标注
+er qie shi	而且是
+he bing	合并
+tie zi	贴子
+xian ba	先把
+gu shi	股市
+liao jie yi xia	了解一下
+gong bu	公布
+hua zhi	画质
+shui jiao	睡觉
+bing wei	并未
+gei ta men	给他们
+ren zheng	认证
+que you	却又
+kuai ji	会计
+bu yi	不易
+yi han	遗憾
+shi bing	士兵
+can ting	餐厅
+nian di	年底
+zhuan yi	转移
+gen ben bu	根本不
+lai jin xing	来进行
+ju mian	局面
+xin yong ka	信用卡
+lun tan	论坛
+he cheng	合成
+jian yi da jia	建议大家
+xi ai	喜爱
+mei guan xi	没关系
+yi fu	一副
+gai ge	改革
+gu ding de	固定的
+yi ceng	一层
+gong ye	工业
+yan shen	眼神
+jian zhi	兼职
+zhuan xing	转型
+jia ru le	加入了
+hao xiang shi	好像是
+shi bu ke neng	是不可能
+jiang le	讲了
+ti qu	提取
+tui jin	推进
+wang ye	网页
+zuo wan	昨晚
+xie ye	歇业
+xue ye	学业
+ren he ren	任何人
+hai suan	还算
+ren ding	认定
+reng ran shi	仍然是
+bu zen me	不怎么
+hao ma	好吗
+zhe shi ge	这是个
+ti dao le	提到了
+cha dian	差点
+dian feng	巅峰
+zheng yi	争议
+bi ji ben	笔记本
+ping fen	评分
+zhe yi qie	这一切
+gui zu	贵族
+dao zui hou	到最后
+hui guo	回国
+bu bian	不变
+bu zhi shi	不只是
+san ge yue	三个月
+ru guo bu	如果不
+xun wen	询问
+yu ji	预计
+geng shi he	更适合
+an shi	暗示
+bu jiu shi	不就是
+shuo qi	说起
+jian jian	渐渐
+yao yong	要用
+ni qu	你去
+shi jie guan	世界观
+you xiang	邮箱
+pai zi	牌子
+tai ci	台词
+shou quan	授权
+shao shu	少数
+qian de	前的
+bu chao guo	不超过
+fan guo lai	反过来
+chu fang	厨房
+bu dai biao	不代表
+dai li	代理
+yi si shi	意思是
+yang ben	样本
+jiang li	奖励
+bi jing shi	毕竟是
+qian wang	前往
+mi mang	迷茫
+kao zhe	靠着
+zhe dong xi	这东西
+zhan ju	占据
+jiu bu neng	就不能
+gen ben mei you	根本没有
+bu man	不满
+ren shi	人士
+ru kou	入口
+er wo	而我
+geng qiang	更强
+zhe zhi shi	这只是
+fan zheng wo	反正我
+zhong zhong	种种
+gao ding	高定
+yi jian shi	一件事
+jiu gou le	就够了
+kao xiang	烤箱
+shan chu	删除
+xian zai yi jing	现在已经
+gu du	孤独
+jie dian	节点
+jiu hao xiang	就好像
+wo neng	我能
+fa yuan	法院
+zhi fang	脂肪
+bu wei	部位
+mei ri	每日
+nao dai	脑袋
+tou fang	投放
+dang zuo	当做
+shui mian	睡眠
+xin zang	心脏
+liang xin	良心
+huo yue	活跃
+bu dui	部队
+ding jian	顶尖
+sha ren	啥人
+hao you	好友
+mei yi ci	每一次
+pi pan	批判
+ling yi zhong	另一种
+sha si	沙司
+zi ji shi	自己是
+jiu bu yao	就不要
+fan hui	返回
+jia le	加了
+shuo bu ding	说不定
+jin zhi	禁止
+shou ci	首次
+guo wang	过往
+zhe dui	这对
+di que shi	的确是
+zhong you	中有
+wa jue	挖掘
+ye bu yao	也不要
+guan lian	关联
+guang xian	光线
+ming que de	明确的
+nin de	您的
+zhi hui	智慧
+chang shi jian	长时间
+ji hu suo you	几乎所有
+li mian you	里面有
+zao yu	遭遇
+ge ren gan jue	个人感觉
+hao cheng	号称
+hun luan	混乱
+bi bei	必备
+yi wang	以往
+re men	热门
+zai dang shi	在当时
+dang shi ren	当事人
+yi ben shu	一本书
+bu bi	不必
+mei tian dou	每天都
+ji dan	鸡蛋
+che xing	车型
+gui dao	轨道
+shi yi bu	是一部
+ye hui you	也会有
+shi tang	食堂
+wu xu	无需
+san ci	三次
+jian dan lai shuo	简单来说
+jia de	假的
+yi zhong shi	一种是
+ji shi nian	几十年
+xin ku	辛苦
+ming xiao	名校
+tie zi	铁子
+wang ji	忘记
+qun li	群里
+xue jie	学姐
+shen qi	神奇
+jian guan	监管
+nian ji	年纪
+zui hao shi	最好是
+xiang su	像素
+zuo dao le	做到了
+chao ren	超人
+shuo yi ju	说一句
+er ren	二人
+ao zhou	澳洲
+dong ji	冬季
+hao wu yi wen	毫无疑问
+zhu zhong	注重
+hui dui	会对
+su zhi	素质
+hang qing	行情
+xiu fu	修复
+yi dao	一到
+xun qiu	寻求
+guai wu	怪物
+qu xiao	取消
+sheng li	胜利
+wei du	唯独
+jin qian	金钱
+qian zai	潜在
+jiao huan	交换
+xi ban ya	西班牙
+zhe me duo nian	这么多年
+ben lai jiu shi	本来就是
+nai xin	耐心
+zao zai	早在
+fa she	发射
+fa guan	法官
+jiang jun	将军
+yi xian	一线
+gan zhi	感知
+dou yin	抖音
+zhu yi dao	注意到
+da jian	搭建
+na wei	那位
+er ji	耳机
+cheng nuo	承诺
+shu lian	熟练
+da an shi	答案是
+zuo de	做得
+qian ji tian	前几天
+zong hui	总会
+yi xia zi	一下子
+dan hai shi	但还是
+yi zu	一组
+mei shu	美术
+ba li	巴黎
+ce liang	测量
+mi mi	秘密
+zheng he	整合
+xiang dui lai shuo	相对来说
+yu le	娱乐
+ci qian	此前
+zi ji xi huan	自己喜欢
+cai fang	采访
+she ying shi	摄影师
+jiu zhi jie	就直接
+mei shi	美食
+bian qu	编曲
+shi ti	尸体
+de zhi	得知
+xiao chou	小丑
+zhe yi ci	这一次
+zuo yi xie	做一些
+zhong yang	中央
+zhu ru	注入
+wu liao	无聊
+bu yun xu	不允许
+bu fang	不妨
+zhe liang zhong	这两种
+ni xian zai	你现在
+ting zhi	停止
+xiao de	小的
+zhao chu	找出
+yin er	因而
+zai li mian	在里面
+shi wu	实物
+cao zuo xi tong	操作系统
+bu qing chu	不清楚
+jing xi	惊喜
+ji zhe	记者
+shi ye	视野
+bi ci	彼此
+cun kuan	存款
+chu xue zhe	初学者
+zhang wo le	掌握了
+yao bu	要不
+qing chun	青春
+cai yong le	采用了
+wei le rang	为了让
+zai xue xiao	在学校
+yi wai	以外
+teng tong	疼痛
+bi zhe	逼着
+ben shu	本书
+quan xin	全新
+fan ying	反映
+li ji	立即
+xiang qi	想起
+zu zhi	阻止
+bu yong dan xin	不用担心
+he shi	合适
+ke wang	渴望
+chong man le	充满了
+que xian	缺陷
+zhi kan	只看
+long duan	垄断
+ni jiu hui	你就会
+jiu you le	就有了
+xiang bi yu	相比于
+pai chu	排除
+zhu duo	诸多
+yong shi	勇士
+gong fu	功夫
+qian bei	前辈
+mian bao	面包
+biao ji	标记
+zi ji zai	自己在
+qi dian	起点
+zhen rong	阵容
+qing hua	清华
+bu hao yi si	不好意思
+bo li	玻璃
+bu shuo le	不说了
+men de	闷的
+ban tian	半天
+deng fang mian	等方面
+yao me shi	要么是
+yi ban ren	一般人
+lin chuang	临床
+shang an	上岸
+chuan qi	传奇
+di shang	地上
+lao da	老大
+min zhong	民众
+lao bai xing	老百姓
+wei shen me bu	为什么不
+xie guo	写过
+dui wo lai shuo	对我来说
+she li	设立
+dou dei	都得
+zao yin	噪音
+ming ci	名词
+zui jian dan de	最简单的
+zhe ben	这本
+zhu zhang	主张
+bu hui you	不会有
+jing zheng dui shou	竞争对手
+fu dan	负担
+shi jie bei	世界杯
+bu kan	不看
+zheng qian	挣钱
+pin zhong	品种
+dong bei	东北
+dao wei	到位
+di dian	地点
+shou you	手游
+you neng li	有能力
+zhe wan yi	这玩意
+ji ge yue	几个月
+xuan gou	选购
+gen wo shuo	跟我说
+tao yan	讨厌
+shi yong	实用
+jin ru le	进入了
+tou su	投诉
+bao han le	包含了
+fa le	发了
+jiu zhi neng	就只能
+bao yan	保研
+chu zai	出在
+li bai	礼拜
+da ren	大人
+zong you	总有
+wo men ye	我们也
+er qie hai	而且还
+ran hou zai	然后在
+jiu shi yao	就是要
+an niu	按钮
+zuo shi	做事
+yong guo	用过
+qun li	群力
+kai zhan	开展
+yuan xing	圆形
+sheng xia	剩下
+shi shi	实施
+wu han	武汉
+er ren	二任
+dai jia	代价
+zhu bu	逐步
+wai guo ren	外国人
+hai you ge	还有个
+jiu cheng le	就成了
+zhong suo zhou zhi	众所周知
+na yi ke	那一刻
+huan yuan	还原
+shang shi gong si	上市公司
+zhuan qian de	赚钱的
+kan bu dong	看不懂
+qin zi	亲自
+ke ren	客人
+kuo da	扩大
+dao zhe li	到这里
+ba suo you	把所有
+lu ren	路人
+he kuang	何况
+niu yue	纽约
+hao bu hao	好不好
+li chang	立场
+bang zhu ni	帮助你
+yong xin	用心
+zheng jiu	拯救
+guo ren	国人
+chu se	出色
+yan jiang	演讲
+que mei you	却没有
+zai nei	在内
+du wan	读完
+jiu ying gai	就应该
+guo hou	过后
+xi fen	细分
+gan ga	尴尬
+qia hao	恰好
+shi guang	时光
+yi ge ren de	一个人的
+deng zhe	等着
+jiao duo	较多
+men kou	门口
+zai ri ben	在日本
+shu zhong	书中
+bu zhi yu	不至于
+tong dao	通道
+lao gong	老公
+quan shen	全身
+qu dong	驱动
+bao luo	包罗
+ji bai	击败
+zhang fu	丈夫
+bu ke yi	不可以
+chuan di	传递
+fang wen	访问
+zhong yang	种养
+zhe jian shi qing	这件事情
+dan fan	单反
+lai kan kan	来看看
+liang dian	亮点
+mei li	美丽
+zhen de hen	真的很
+fang xin	放心
+xiao xiao de	小小的
+yi ci xing	一次性
+bao li	暴力
+chao shi	超市
+qu jian	取件
+te si la	特斯拉
+yi jing zai	已经在
+pao bu ji	跑步机
+kuang qie	况且
+yue ding	约定
+hui gu	回顾
+fei chang duo	非常多
+san da	三大
+shang ci	上次
+ai zheng	癌症
+hui ying xiang	会影响
+chao feng	嘲讽
+an zhuo	安卓
+zhi yao shi	只要是
+zhi hui	指挥
+biao zhi	标志
+dan ta	但它
+mai de	买得
+ge ju	格局
+dian ying li	电影里
+da bu fen de	大部分的
+ni ye ke yi	你也可以
+re du	热度
+wei sheng su	维生素
+mi bu	弥补
+tong zhi	同志
+kao jin	靠近
+te xiao	特效
+ji ti	集体
+jian li zai	建立在
+han zi	汉字
+zai na li	在那里
+zhi dao zi ji	知道自己
+gen ta	跟他
+hui ba	会把
+ruo shi	若是
+ji dian	几点
+de fen	得分
+liao jie dao	了解到
+fen kai	分开
+luo hou	落后
+gong ying shang	供应商
+bao zha	爆炸
+shi jue	视觉
+heng xing	恒星
+yao dian	要点
+jiu zai yu	就在于
+re liang	热量
+rong ru	融入
+you liang zhong	有两种
+wo jiu bu	我就不
+jin kou	进口
+te yi	特意
+zui jin de	最近的
+qing nian	青年
+da chu	打出
+da po	打破
+zi ran shi	自然是
+dao chu	到处
+bu rang	不让
+shi yong	试用
+bu zai shi	不再是
+zui ji ben	最基本
+zhi shi	指示
+sui ji	随机
+feng ci	讽刺
+jian pan	间盘
+kao le	考了
+er zhe	二者
+guo du	过度
+yan qian	眼前
+zheng qian	整钱
+zhi wang	指望
+ao ye	熬夜
+zhao le	找了
+lian ai	恋爱
+mo ren	默认
+ye yi yang	也一样
+zhe liang nian	这两年
+ta hai	他还
+hua feng	画风
+xuan ran	渲染
+da gui mo	大规模
+di san ge	第三个
+an quan xing	安全性
+liang hao de	良好的
+gan rao	干扰
+xin xian	新鲜
+zong jiao	宗教
+xing hao	幸好
+he jiu	喝酒
+yuan li	远离
+qi shi ye	其实也
+you bi yao	有必要
+sun shang	损伤
+zheng yi	正义
+ta he	他和
+zhuan bian	转变
+yong guo	用锅
+ke ben	课本
+jing zheng li	竞争力
+gao su wo men	告诉我们
+bu fu he	不符合
+bu tui jian	不推荐
+jin ji nian	近几年
+tui li	推理
+zhu da	主打
+wo xiang shuo	我想说
+bu tie	补贴
+er lai	而来
+han yu	汉语
+wai bu	外部
+ji ji	积极
+qu shi	去世
+bu lun shi	不论是
+da fa	打发
+hen xiang	很想
+huo zhe	活着
+wen nuan	温暖
+yang guang	阳光
+ni you	你有
+shou bing	手柄
+jian mo	建模
+gu quan	股权
+fan pai	反派
+zai zhe zhong	在这种
+ge di	各地
+zhi gan	质感
+gu ren	古人
+ying zi	影子
+zi ge	资格
+ji ben shang shi	基本上是
+nan jing	南京
+chu kou	出口
+wo ceng jing	我曾经
+wo yi qian	我以前
+yi bi	一比
+shuo shen me	说什么
+fa de	发的
+ke zhuan zhai	可转债
+wo zhi	我只
+jiang jin	奖金
+ti nei	体内
+mei li	魅力
+shou dong	手动
+wu yi shi	无疑是
+you hui	优惠
+kao dian	考点
+zai bei jing	在北京
+shi yong	食用
+tai guo	太过
+cong lai mei you	从来没有
+da cheng	达成
+dan wo men	但我们
+shi ji shang shi	实际上是
+da er	大二
+zhi dao le	知道了
+zi xing	自行
+bi yao	必要
+tiao cao	跳槽
+xu duo ren	许多人
+ru guo neng	如果能
+yin wei shi	因为是
+jue qi	崛起
+zhu yao yuan yin	主要原因
+gai cheng	改成
+hui tou	回头
+xian suo	线索
+shen he	审核
+duo jiu	多久
+sui shuo	虽说
+xue ba	学霸
+zai duo	再多
+bei da	北大
+xiao hai zi	小孩子
+you neng	又能
+ya zhou	亚洲
+zhuan xiang	专项
+zou de	走的
+cheng wei yi ge	成为一个
+bei po	被迫
+luo di	落地
+ban kuai	板块
+qi zhong yi ge	其中一个
+dui zhe ge	对这个
+jian cheng	简称
+wo zhi shi	我只是
+zhong yang	中阳
+guan bi	关闭
+ling qu	领取
+bu gei	不给
+qu kan kan	去看看
+ren shi	人是
+xia die	下跌
+hen you	很有
+ba zhe ge	把这个
+mei de	美的
+mei di	美帝
+gao fen	高分
+pai dui	排队
+man man de	慢慢的
+zhi hao	只好
+wo xi wang	我希望
+zhong ren	众人
+mai dao	买到
+cheng nian ren	成年人
+xiang hu	相互
+ce ping	测评
+zhe zhong ren	这种人
+wan mei yuan	万美元
+zhi xu	只需
+shou fa	首发
+zong gong	总共
+hai zi men	孩子们
+ci zhi	辞职
+guang dong	广东
+dao qian	道歉
+wo men zhi dao	我们知道
+bi jiao shao	比较少
+fang di chan	房地产
+hou guo	后果
+ying yang	营养
+ben tu	本土
+hai bu shi	还不是
+yi huo	疑惑
+zhi ye sheng ya	职业生涯
+ren zai	人在
+jiu bu shi	就不是
+xiang xi de	详细的
+ying jie sheng	应届生
+shou shang	手上
+ren ren	人人
+rong liang	容量
+ti ji	体积
+ju bao	举报
+da shu	大叔
+nan peng you	男朋友
+shi zui	是最
+chu ban she	出版社
+zi ji ye	自己也
+yan chang hui	演唱会
+ding qi	定期
+she hui de	社会的
+hao ji ge	好几个
+gan huo	干货
+ling xian	领先
+xian shi	先是
+fang xia	放下
+jian yan	检验
+fan chou	犯愁
+ren yi	任意
+qi shi	歧视
+shi tou	石头
+hui bi	回避
+xi an shi	西安市
+yi sheng	一升
+fu hao	符号
+chan wu	产物
+zui hou yi ge	最后一个
+shang zhang	上涨
+hen kuai jiu	很快就
+wo jian yi	我建议
+jin qiu	进球
+xuan le	选了
+zhe dou shi	这都是
+zhe teng	折腾
+liang bian	两边
+bian xian	变现
+shu jia	暑假
+yi jing kai shi	已经开始
+zai na	在哪
+pian duan	片段
+he ge	合格
+shuang shou	双手
+jia na da	加拿大
+mei you ban fa	没有办法
+hang zhou	杭州
+ya si	雅思
+yan jin	严禁
+zan tong	赞同
+suan le	算了
+hai shi hen	还是很
+ba zhe xie	把这些
+xiang yu	相遇
+neng yong	能用
+cai kai shi	才开始
+dan que	但却
+tiao jian xia	条件下
+cong lai bu	从来不
+yuan zi	院子
+ye bi jiao	也比较
+lin shi	临时
+fan bo	反驳
+chang nian	常年
+wo zhe ge	我这个
+te bie de	特别的
+da da	大大
+mo fa	魔法
+ge bi	隔壁
+li zi	栗子
+cai ke yi	才可以
+ha ha ha ha	哈哈哈哈
+bu ying xiang	不影响
+fan kang	反抗
+da san	大三
+shi pin	食品
+zi ji zuo	自己做
+ke yi shi	可以是
+zhe ge shi qing	这个事情
+le qu	乐趣
+mian xiang	面向
+qing xiang	倾向
+zhu yi li	注意力
+er duo	耳朵
+ke lian	可怜
+ji wei	极为
+xing rong	形容
+pu tong hua	普通话
+shu dian	书店
+zun xun	遵循
+da duo shi	大多是
+jiao da	较大
+du yan	读研
+suo xu	所需
+yi si	疑似
+wen le	问了
+wo zhi neng	我只能
+bu tong yu	不同于
+yong yuan shi	永远是
+sheng tai	生态
+fan zui	犯罪
+deng lu	登录
+duan zan	短暂
+da niu	大牛
+gao san	高三
+shi bu shi	时不时
+nan shou	难受
+qing yi	轻易
+bei dong	被动
+zheng tian	整天
+nan hai	男孩
+mai jia	买家
+ta jia	他家
+chu shou	出售
+ti ji	提及
+fen li	分离
+bu guan ni	不管你
+qin qi	亲戚
+tui ce	推测
+ye zhi you	也只有
+zi mu	字母
+ke huan	科幻
+xiao zhao	校招
+shou zhong	受众
+yi shou	一手
+zhou wei de	周围的
+ge fang mian	各方面
+ye bu yong	也不用
+zheng chang ren	正常人
+ren mai	人脉
+tie ba	贴吧
+you bu shi	又不是
+bian liang	变量
+jiang zi ji	将自己
+ci hou	此后
+jin nian lai	近年来
+zhan dou li	战斗力
+gan dong	感动
+xue guo	学过
+ju min	居民
+shu cai	蔬菜
+biao da de	表达的
+ke neng you	可能有
+nao zi li	脑子里
+shou xuan	首选
+you shi jian	有时间

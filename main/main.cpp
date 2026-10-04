@@ -4,6 +4,7 @@
 #include "wifi_manager.h"
 #include "settings_manager.h"
 #include "quick_edit.h"
+#include "file_edit.h"
 #include "journal_storage.h"
 #include "webdav_client.h"
 #include "flomo_client.h"
@@ -347,9 +348,11 @@ extern "C" void app_main() {
     // Initialize settings (stored on SD card)
     g_settings.begin();
 
-    // 工作模式: "journal"(个人日记) 或 "quick"(快捷编辑), 重启生效
+    // 工作模式: "journal"(个人日记)、"quick"(快捷编辑) 或 "file"(文件编辑), 重启生效
     g_quickEdit = (g_settings.appMode() == "quick");
+    g_fileEdit = (g_settings.appMode() == "file");
     if (g_quickEdit) quickEditInit();
+    if (g_fileEdit) fileEditInit();
 
     // Initialize RTC
     if (g_rtc.begin()) {
@@ -362,7 +365,7 @@ extern "C" void app_main() {
     battery_init();
 
     ui_clear();
-    ui_draw_text_centered(100, g_quickEdit ? "快捷编辑" : "个人日记");
+    ui_draw_text_centered(100, g_fileEdit ? "文件编辑" : (g_quickEdit ? "快捷编辑" : "个人日记"));
     char ver[32];
     snprintf(ver, sizeof(ver), "v" PJOURNAL_VERSION);
     ui_draw_text_centered(135, ver);
@@ -463,10 +466,10 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "Ready!");
 
     // ── App State Machine ────────────────────────────────────────────────
-    // 快捷编辑模式直接进入编辑器(续上次文件); 个人日记从主界面开始
-    AppState currentState = g_quickEdit ? APP_EDITOR : APP_MAIN;
+    // 快捷编辑/文件编辑模式直接进入编辑器(续上次文件); 个人日记从主界面开始
+    AppState currentState = (g_quickEdit || g_fileEdit) ? APP_EDITOR : APP_MAIN;
     ScreenContext ctx;
-    if (g_quickEdit) {
+    if (g_quickEdit || g_fileEdit) {
         ctx.prevState = APP_SETTINGS;  // 编辑器 Esc → 设置, 设置 Esc → 编辑器
         ctx.promptMode = false;
         ctx.promptText = "";
