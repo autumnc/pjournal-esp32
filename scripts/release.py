@@ -48,7 +48,7 @@ def update_versions(version):
 
 
 def build(build_dir):
-    run(f". /home/ywz/esp/esp-idf/export.sh >/dev/null && cmake --build {build_dir} -j2",
+    run(f". /home/ywz/esp-idf/export.sh >/dev/null && cmake --build {build_dir} -j2",
         shell=True)
 
 

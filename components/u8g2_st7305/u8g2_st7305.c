@@ -9,7 +9,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define ST7305_SPI_CLOCK_HZ 24000000
+// 面板 SPI 时钟。整帧 400x300/8 = 15000 字节, 24MHz 约需 5ms, 40MHz 约 3ms。
+// 40MHz 已实测兼容本板 ST7305 模组; 若换屏后出现花屏/残影, 回落此值到 24000000。
+#define ST7305_SPI_CLOCK_HZ 40000000
 #define ST7305_TILE_WIDTH 38
 #define ST7305_TILE_HEIGHT 50
 #define ST7305_FULL_BUFFER_HEIGHT ST7305_TILE_HEIGHT

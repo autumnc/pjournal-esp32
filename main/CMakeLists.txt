@@ -3,6 +3,7 @@ option(PJOURNAL_IME_ENABLE_LIANGFEN "Embed and build the liangfen IME module" ON
 option(PJOURNAL_IME_ENABLE_WUBI "Build optional wubi IME support" OFF)
 option(PJOURNAL_IME_ENABLE_SHUANGPIN "Build optional shuangpin IME support" OFF)
 option(PJOURNAL_IME_PERF_LOG "Enable slow IME lookup timing logs" OFF)
+option(PJOURNAL_IO_PERF_LOG "Enable SD/internal-flash write timing probes" OFF)
 
 set(PJOURNAL_EMBED_FILES
     "ime/ime_table_pinyin.bin"
@@ -20,6 +21,7 @@ idf_component_register(SRCS
     "pjournal_app.cpp"
     "ui_helpers.cpp"
     "safe_file.cpp"
+    "io_probe.cpp"
     "screen_editor.cpp"
     "screen_settings.cpp"
     "quick_edit.cpp"
@@ -57,6 +59,7 @@ idf_component_register(SRCS
         ${PJOURNAL_EMBED_FILES}
     PRIV_REQUIRES
         spi_flash
+        esp_partition
         nvs_flash
         esp_wifi
         esp_netif
@@ -71,6 +74,10 @@ idf_component_register(SRCS
         fatfs
         sdmmc
         driver
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_i2s
+        esp_driver_sdmmc
         u8g2
         u8g2_st7305
         esp_adc
@@ -87,4 +94,5 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PJOURNAL_IME_ENABLE_WUBI=$<BOOL:${PJOURNAL_IME_ENABLE_WUBI}>
     PJOURNAL_IME_ENABLE_SHUANGPIN=$<BOOL:${PJOURNAL_IME_ENABLE_SHUANGPIN}>
     PJOURNAL_IME_PERF_LOG=$<BOOL:${PJOURNAL_IME_PERF_LOG}>
+    PJOURNAL_IO_PERF_LOG=$<BOOL:${PJOURNAL_IO_PERF_LOG}>
 )

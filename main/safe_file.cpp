@@ -1,4 +1,5 @@
 #include "safe_file.h"
+#include "io_probe.h"
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
@@ -13,6 +14,21 @@ bool fileExists(const std::string &path) {
     return stat(path.c_str(), &st) == 0;
 }
 
+// 判断 p 是不是一个已存在的目录。
+//
+// 关键点: 挂载点(/sdcard)上 stat 和 opendir 都是正常的, 唯独 mkdir 会失败 ——
+// 实测 "DIRPROBE /sdcard: stat=0(0) opendir=ok(0) mkdir=-1(22)"。FatFs 那边
+// f_mkdir("0:/") 走到 follow_path 的 NS_NONAME 分支(认出"这是根目录自己"),
+// 返回 FR_INVALID_NAME → EINVAL, 不是 EEXIST。
+//
+// 所以要判断"目录已存在"必须用 stat/opendir, 不能用 mkdir 的 errno。
+// 这里用 stat: 它比 opendir 少分配一个 DIR 对象(内部 RAM 紧张时这点有意义),
+// 而且语义上正好是 fileExists() 的目录版。
+static bool dirExists(const std::string &p) {
+    struct stat st;
+    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 bool ensureDirPath(const std::string &path) {
     if (path.empty()) return false;
     std::string cur;
@@ -24,9 +40,20 @@ bool ensureDirPath(const std::string &path) {
         if (!part.empty()) {
             if (!cur.empty() && cur.back() != '/') cur += "/";
             cur += part;
-            if (mkdir(cur.c_str(), 0777) != 0 && errno != EEXIST) {
-                ESP_LOGE(TAG, "mkdir failed: %s errno=%d", cur.c_str(), errno);
-                return false;
+            // 已经存在的目录一律跳过, 绝不 mkdir。
+            //
+            // 这里曾经是无条件 mkdir + "errno != EEXIST 就算失败"。第一层分量
+            // 恰好就是挂载点本身(/sdcard), 而 mkdir(<挂载点>) 拿到的是 EINVAL
+            // 不是 EEXIST —— 于是对**任何** "/sdcard/..." 路径, ensureDirPath 都
+            // 在第一个分量上返回 false, safeWriteFile 全线失败: 设置写不进去
+            // (set() 见写失败直接 return, 连内存缓存都不更新, 界面上就是"翻不动"),
+            // journal 存不下来、恢复草稿和历史版本全丢。日志里那句
+            // "mkdir failed: /sdcard errno=22" 就是它, 和内存无关。
+            if (!dirExists(cur)) {
+                if (mkdir(cur.c_str(), 0777) != 0 && errno != EEXIST) {
+                    ESP_LOGE(TAG, "mkdir failed: %s errno=%d", cur.c_str(), errno);
+                    return false;
+                }
             }
         }
         if (slash == std::string::npos) break;
@@ -71,6 +98,13 @@ void repairSafeWriteFile(const std::string &path) {
 }
 
 bool safeWriteFile(const std::string &path, const std::string &content) {
+    // 合计探针: 含 fopen / 数据写 / fsync / 两次 rename / 两次 remove。
+    // 和下面"数据+fsync"那条一比, 差值就是 FATFS 元数据操作(rename/remove)的开销。
+    char probeDetail[144];
+    snprintf(probeDetail, sizeof(probeDetail), "%s  %u B", path.c_str(),
+             (unsigned)content.size());
+    IO_PROBE("safeWriteFile 合计", probeDetail);
+
     size_t slash = path.rfind('/');
     if (slash != std::string::npos && slash > 0) {
         if (!ensureDirPath(path.substr(0, slash))) return false;
@@ -86,8 +120,13 @@ bool safeWriteFile(const std::string &path, const std::string &content) {
         ESP_LOGE(TAG, "open tmp failed: %s", tmp.c_str());
         return false;
     }
-    size_t written = fwrite(content.data(), 1, content.size(), f);
-    bool ok = (written == content.size()) && flushAndClose(f);
+    bool ok;
+    {
+        // 只量"写数据 + fflush + fsync + fclose"这一段
+        IO_PROBE("safeWrite:数据+fsync", probeDetail);
+        size_t written = fwrite(content.data(), 1, content.size(), f);
+        ok = (written == content.size()) && flushAndClose(f);
+    }
     if (!ok) {
         ESP_LOGE(TAG, "write tmp failed: %s", tmp.c_str());
         remove(tmp.c_str());

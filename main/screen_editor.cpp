@@ -1,4 +1,5 @@
 #include "screen_editor.h"
+#include "io_probe.h"
 #include "screen_polish.h"
 #include "font_renderer.h"
 #include "journal_storage.h"
@@ -32,8 +33,27 @@ extern "C" {
 }
 
 #include "clipboard.h"
+#include <esp_log.h>
 
 #define EDITOR_MAX_CELLS (SCREEN_W / g_font.halfAdvance())
+
+// ── 上屏(commit)耗时探针 ─────────────────────────────────────────────────
+//
+// 和 IME 内部那套共用 PJOURNAL_IME_PERF_LOG 开关: 一次开机就能同时看到
+// "匹配"和"上屏"两段。上屏这一段此前完全没有埋点, 所以"长词组卡顿"到底卡在
+// IME 处理、正文插入、文档上下文重建还是重绘, 只能靠这个分开量。
+//
+// 阈值以下不打印: 一次上屏要打 2 行, 全部打印会把串口刷屏、反而看不出慢的那次。
+#if PJOURNAL_IME_PERF_LOG
+static const char *const EDITOR_PERF_TAG = "EditorPerf";
+static const int64_t EDITOR_PERF_SLOW_US = 12000;
+#define EDITOR_PERF_NOW() esp_timer_get_time()
+// drawEditor 内部的分段: 布局(全篇重排)与绘制分开量。
+static int64_t s_perfDrawStart = 0;
+static int64_t s_perfLayoutEnd = 0;
+#else
+#define EDITOR_PERF_NOW() 0
+#endif
 
 // ── Editor state ─────────────────────────────────────────────────────────
 
@@ -1528,6 +1548,10 @@ static VerticalLayoutMetrics editorVerticalVm() {
 
 static void drawEditor() {
     g_editor.drawnOnce = true;
+#if PJOURNAL_IME_PERF_LOG
+    s_perfDrawStart = EDITOR_PERF_NOW();
+    s_perfLayoutEnd = s_perfDrawStart;
+#endif
     reconcileFoldsForCursor();
     int y = FONT_H;
 
@@ -1616,6 +1640,11 @@ static void drawEditor() {
     }
 
     const auto& vrows = getVrows();
+#if PJOURNAL_IME_PERF_LOG
+    // getVrows() 内部就是 buildVrows(全篇重排) + getMdInfo(全篇分类),
+    // 是 drawEditor 里唯一 O(正文长度) 的部分, 单独标出来。
+    s_perfLayoutEnd = EDITOR_PERF_NOW();
+#endif
     bool composing = g_ime.composing() && !s_skipStatusBarAndIme;
     // IME 开启期间恒定保留候选条区域,选字后候选条隐藏不再引起正文重排跳动
     bool reserveIME = g_editor.imeActive && !s_skipStatusBarAndIme;
@@ -2083,7 +2112,9 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
 
     if (g_editor.imeActive && key != 0) {
         std::string imeOut;
+        int64_t perfT0 = EDITOR_PERF_NOW();
         if (g_ime.handleKey(key, imeOut)) {
+            int64_t perfT1 = EDITOR_PERF_NOW();
             std::string imeStatus = g_ime.takeStatusMessage();
             if (!imeStatus.empty()) {
                 ctx.statusMessage = imeStatus;
@@ -2108,10 +2139,47 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
                 }
             }
             editorInsertText(imeOut);
+            int64_t perfT2 = EDITOR_PERF_NOW();
             // 刚上屏的词要立刻进文档上下文: 同一篇里再次输入同一个人名/术语时它就该
             // 排在前面。空串(取消组合等)不必重扫。
             if (!imeOut.empty()) g_ime.setDocumentContext(editorImeContextText());
-            ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
+            int64_t perfT3 = EDITOR_PERF_NOW();
+            ui_clear();
+            int64_t perfT3a = EDITOR_PERF_NOW();
+            drawEditor();
+            int64_t perfT3b = EDITOR_PERF_NOW();
+            ui_commit();
+            int64_t perfT4 = EDITOR_PERF_NOW();
+#if PJOURNAL_IME_PERF_LOG
+            {
+                int64_t total = perfT4 - perfT0;
+                if (total >= EDITOR_PERF_SLOW_US) {
+                    size_t docBytes = 0;
+                    for (const auto &l : g_editor.lines) docBytes += l.size();
+                    int64_t layoutUs = (s_perfLayoutEnd > s_perfDrawStart)
+                                           ? s_perfLayoutEnd - s_perfDrawStart : 0;
+                    int64_t drawUs = perfT3b - perfT3a;
+                    ESP_LOGW(EDITOR_PERF_TAG,
+                             "commit 合计=%lldus ime=%lld insert=%lld ctx=%lld 重绘=%lld "
+                             "[清屏=%lld 绘制=%lld(布局=%lld) 提交=%lld] | 上屏=%uB 行=%u 正文=%uB",
+                             (long long)total,
+                             (long long)(perfT1 - perfT0),
+                             (long long)(perfT2 - perfT1),
+                             (long long)(perfT3 - perfT2),
+                             (long long)(perfT4 - perfT3),
+                             (long long)(perfT3a - perfT3),
+                             (long long)drawUs,
+                             (long long)layoutUs,
+                             (long long)(perfT4 - perfT3b),
+                             (unsigned)imeOut.size(),
+                             (unsigned)g_editor.lines.size(),
+                             (unsigned)docBytes);
+                }
+            }
+#endif
+            (void)perfT0; (void)perfT1; (void)perfT2; (void)perfT3;
+            (void)perfT3a; (void)perfT3b; (void)perfT4;
+            return APP_EDITOR;
         }
     }
 
@@ -2569,13 +2637,18 @@ bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
     if (g_editor.autoSaveTime > 0 && esp_timer_get_time() > g_editor.autoSaveTime) {
         g_editor.autoSaveTime = 0;
         bool shouldCommit = inQuickFileSession() || inFileEditSession() || g_settings.autoSave();
+        // 诊断: 这是编辑时**最高频**的 SD 写 —— autoSaveTime 每次按键都重新武装成
+        // "3 秒后", 所以只要打字间歇超过 3 秒就会触发一次整篇重写。用户报的"输入
+        // 词组偶尔卡一下"最可能就落在这一笔上, 而不是用户词典那几条。
         if (shouldCommit) {
+            IO_PROBE("编辑器自动保存(整篇)", "");
             if (saveCurrentContent(false)) {
                 g_editor.modifiedSinceSave = false;
             } else if (g_editor.modifiedSinceSave && g_settings.recoveryDraft()) {
                 saveRecoveryDraftIfChanged();
             }
         } else if (g_editor.modifiedSinceSave && g_settings.recoveryDraft()) {
+            IO_PROBE("编辑器恢复草稿", "");
             saveRecoveryDraftIfChanged();
         }
     }

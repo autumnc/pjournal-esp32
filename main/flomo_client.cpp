@@ -8,7 +8,7 @@
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
-#include <mbedtls/md5.h>
+#include <esp_rom_md5.h>
 
 static const char *TAG = "Flomo";
 FlomoClient g_flomo;
@@ -158,8 +158,13 @@ bool FlomoClient::isConfigured() const {
 
 std::string FlomoClient::generateSign(const std::string &sortedParams) {
     std::string raw = sortedParams + FLOMO_SIGN_SECRET;
-    unsigned char md5[16];
-    mbedtls_md5((const unsigned char *)raw.c_str(), raw.size(), md5);
+    // 用 esp_rom 的 MD5: IDF 6.x 起 mbedtls/md5.h 转为私有头(TF-PSA-Crypto),
+    // esp_rom_md5.h 的 init/update/final 在 5.x/6.x 上签名一致, 免去版本分支。
+    unsigned char md5[ESP_ROM_MD5_DIGEST_LEN];
+    md5_context_t md5ctx;
+    esp_rom_md5_init(&md5ctx);
+    esp_rom_md5_update(&md5ctx, raw.c_str(), raw.size());
+    esp_rom_md5_final(md5, &md5ctx);
     char hex[33];
     for (int i = 0; i < 16; i++) snprintf(hex + i * 2, 3, "%02x", md5[i]);
     return std::string(hex, 32);

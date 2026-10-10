@@ -478,9 +478,25 @@ void drawIMEUIFullscreen() {
 
 // ── UI Helpers ────────────────────────────────────────────────────────────
 void ui_clear() {
-    if (g_u8g2) { u8g2_SetDrawColor(g_u8g2, 1);
+    if (!g_u8g2) return;
+    // 整屏填白。原来走 u8g2_DrawBox(0,0,400,300): u8g2 的 DrawBox 是**按行**循环
+    // 调 DrawHVLine, 每行再逐像素写 —— 一共 400x300 = 12 万次读改写, 每次都要过一遍
+    // 裁剪判断和缓冲地址计算。实测一次上屏就吃掉 ~45ms, 是每次按键最大的一笔固定
+    // 开销(比正文绘制 + 整帧 SPI 加起来还多)。逐像素写还让缓冲走 PSRAM 时更糟,
+    // 但即便缓冲在内部 RAM(见 main.cpp 的 prefer_psram=false)这里依旧是最大头。
+    //
+    // u8g2 的 mono 缓冲里"点亮"就是置位(高位在前, 1=亮), 所以"整屏填色=1"完全
+    // 等价于把缓冲每个字节写 0xFF。一次连续 memset 取代 12 万次随机读改写。
+    uint8_t *buf = u8g2_GetBufferPtr(g_u8g2);
+    size_t size = u8g2_GetBufferSize(g_u8g2);
+    if (buf != nullptr && size > 0) {
+        memset(buf, 0xFF, size);
+    } else {
+        u8g2_SetDrawColor(g_u8g2, 1);
         u8g2_DrawBox(g_u8g2, 0, 0, SCREEN_W, SCREEN_H);
-        u8g2_SetDrawColor(g_u8g2, 0); }
+    }
+    // 与原实现一致: 退出时把绘制色复位成 0(文字/位图都按"前景色"绘制)。
+    u8g2_SetDrawColor(g_u8g2, 0);
 }
 
 // ── Idle refresh optimization ─────────────────────────────────────────────

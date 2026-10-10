@@ -70,6 +70,18 @@ public:
     void handleHostBackspace();
     void cancelComposition() { reset(); }
     void flushUserDictSavesNow() { flushUserDictSaves(true); }
+    // 空闲落盘: 按键路径只标脏不写 SD, 由主循环在用户静默后调用(见 IME.cpp 说明)。
+    // 现在它只做序列化(纯 CPU)并入队, SD 写由写盘任务完成 —— 不再阻塞主循环。
+    void flushUserDictSavesIdle();
+    // 等待异步写盘队列排空。强制落盘路径(休眠/退出/关闭输入法)必须调它:
+    // 那些时刻之后进程可能就不再调度了, 队列里没写完的任务要等它写完。
+    // 超时返回 false(数据仍在队列里, 下次启动会从 journal 恢复)。
+    bool waitUserDictWritesDrained(int timeout_ms);
+    // 是否有待落盘的用户词典改动。主循环用它避免空闲时白调一次。
+    bool hasPendingUserDictWrites() const {
+        return _dynamicUserDirty || _userPredictDirty || _fixedUserDirty ||
+               _userPredictRejectDirty || !_pendingUserDictJournal.empty();
+    }
 
     enum UserDictKind { FIXED_DICT = 0, DYNAMIC_DICT = 1, PREDICT_DICT = 2 };
     struct UserEntryView { std::string code; std::string word; int count; bool trad = false; };
@@ -171,6 +183,8 @@ private:
     bool _userDictLoaded = false;
     int64_t _deferredUserDictSinceUs = 0;
     int64_t _pendingUserDictJournalSinceUs = 0;
+    // 空闲落盘失败后的退避截止时刻。见 flushUserDictSavesIdle 的说明。
+    int64_t _idleFlushBackoffUntilUs = 0;
     void loadUserDict();
     bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
     void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
@@ -233,7 +247,6 @@ private:
     void rememberReplacementPreference(const std::string &code, const std::string &word);
     int contextCandidateBoost(const std::string &word);
     void rebuildContextBoostScores();
-    void appendEnglishInlineCandidates(const std::string &code);
     void appendShortcutSymbol(const char *code, int len);
     int stableCandidateBoost(const std::string &word) const;
     void rememberCandidateStability();

@@ -6,14 +6,27 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 
 # CPU
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# 应用主循环固定在 core 1; core 0 留给 WiFi/BT 协议栈(BLE 按键解码也在 core 0),
+# 免得 UI/IME 与连接事件在同一核上互相抢占。此前的 sdkconfig 沿用了默认的 CPU0。
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+
+# 编译优化: ESP-IDF 默认 -Og, 会显著拖慢 IME 的字符串/容器热路径(-O2 通常快 30%~100%)。
+# 显式固定在 -O2, 避免为了调试临时切回 -Og 后被后续 reconfigure 带上正式固件。
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 # SPI RAM (PSRAM)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_MEMTEST=n
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+# 词典的小分配(9 个 unordered_map 的节点、string 键)必须能落到 PSRAM。
+# 2048 意味着"凡小于 2KB 的分配一律优先内部 RAM", 实测装 2589 个用户词吃掉
+# 112KB 内部 RAM 而 8MB PSRAM 全程闲置, 最终 SDMMC 分不出 DMA 缓冲 →
+# SD 全线失败 → 设置写不进去/蓝牙任务建不起来/落盘 abort()。
+# 不设 0 是保守: PSRAM 在 flash 擦写的 cache 关闭窗口内不可访问, 放宽太激进有风险。
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
+# 给 DMA/任务栈留的地板, 从 96KB 提到 128KB。SDMMC 的 DMA 缓冲只能来自内部 RAM。
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=131072
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 # WiFi

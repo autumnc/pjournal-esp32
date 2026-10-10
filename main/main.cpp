@@ -22,6 +22,7 @@
 #include "ui_helpers.h"
 #include "voice_input.h"
 #include "typing_click.h"
+#include "io_probe.h"
 #include "u8g2_st7305.h"
 #include "pcf85063.h"
 
@@ -53,6 +54,9 @@ static bool initDisplay() {
     cfg.reset_io = RLCD_RST_PIN;
     cfg.rotation = U8G2_R1;
     cfg.tile_buf_height = U8G2_ST7305_TILE_BUF_FULL;
+    // 15KB 整帧缓冲放内部 RAM: u8g2 逐列写像素, 走 PSRAM 会在每次编辑器重绘时
+    // 产生大量缓存行填充, 而内部 SRAM 余量充足。
+    cfg.prefer_psram = false;
 
     esp_err_t ret = u8g2_st7305_init(&s_lcd_dev, &cfg);
     if (ret != ESP_OK) {
@@ -155,6 +159,9 @@ static void btInitTask(void *arg) {
         vTaskDelete(NULL);
         return;
     }
+    // 诊断: BT 协议栈是内部 RAM 的嫌疑大户(TCP/IP host task 的栈、controller 缓冲、
+    // 都不是 PSRAM 能给的)。这条和开机那条一比, 差值就是 BT 吃掉的内部 RAM。
+    IO_PROBE_HEAP("BT init 之后");
     g_bt.loadPairedDevices();
     if (g_bt.pairedDeviceCount() == 0) {
         vTaskDelete(NULL);
@@ -191,6 +198,13 @@ static bool s_boot_wake_release_pending = false;
 #define BTN_DEBOUNCE_US       (30000)     // 30ms 防抖
 #define BTN_LONG_PRESS_US     (1000000)   // 1s 判定长按
 #define BTN_DOUBLE_WINDOW_US  (300000)    // 300ms 双击窗口
+
+// 用户词典落盘的空闲判据: 距上次按键静默超过这么久, 才把攒下的改动一次写入 SD。
+// 写盘含 fsync 和整表重写, 落在按键处理里就是"停一下再敲, 第一个键顿一顿";
+// 400ms 足以区分"打字中的换词间隙"和"真的停下来了"。
+#define IDLE_DICT_FLUSH_QUIET_US   (400000)
+// 空闲落盘的最小调用间隔, 避免异步状态(uiIdleWaitMs=0)下每轮都探一次
+#define IDLE_DICT_FLUSH_MIN_GAP_US (200000)
 
 // 单击动作排队: 松开后等待双击窗口确认非双击再执行,避免双击第一下误发导航键
 static struct { int key = 0; int64_t queued_us = 0; } s_pending_single;
@@ -260,7 +274,7 @@ static void enterLightSleep(void) {
     }
 
     // 后台重新 init BLE + 自动重连键盘(即使休眠失败也恢复 BT 栈)
-    xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 0);
 }
 
 static void checkLightSleep(AppState state) {
@@ -290,8 +304,31 @@ static void checkLightSleep(AppState state) {
 
 // ── Application Main Loop ──────────────────────────────────────────────
 
+// 各界面空闲时主循环阻塞等待按键的最长时间(ms)。这个值不再决定按键响应延迟 ——
+// 有键时 waitKey 立即返回 —— 只决定无输入时的空转节拍与功耗, 因此沿用原先各界面
+// vTaskDelay 的取值, 行为与功耗不变。异步状态(WEBDAV/Flomo)自己用 vTaskDelay 控节奏,
+// 返回 0 以免叠加成双倍等待。
+static uint32_t uiIdleWaitMs(AppState st) {
+    switch (st) {
+        case APP_EDITOR:        return 50;
+        case APP_VOICE:         return 50;
+        case APP_MAIN:          return 200;
+        case APP_FILE_MANAGER:  return 200;
+        case APP_SYNC_WEBDAV:
+        case APP_SYNC_SEND_FLOMO:
+        case APP_QUIT:          return 0;
+        default:                return 100;
+    }
+}
+
 extern "C" void app_main() {
     ESP_LOGI(TAG, "pjournal-esp32 v" PJOURNAL_VERSION " starting...");
+
+    // 主循环(按键处理 + IME 打分 + 整屏重绘)提权到 4。ESP-IDF 默认主任务优先级
+    // 只有 1, 低于打字音效任务(2)、语音任务(2)、bt_conn(3), 打字机模式下每键的
+    // 音效播放会插在按键处理前面。提到 4 高于这些应用级辅助任务, 又低于一次性
+    // 的 bt_init(5), 主循环本身每轮都会阻塞等待, 不会饿死 idle。
+    vTaskPrioritySet(NULL, 4);
 
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -344,6 +381,11 @@ extern "C" void app_main() {
         while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
     ESP_LOGI(TAG, "Journal entries: %d", g_journal.totalEntries());
+
+    // 诊断: 开机基线(此时各子系统还没起来) + 一次写盘基准(内部 flash vs SD)。
+    // 两件事都在这里做是因为 SD 刚挂载成功、而又还没开始跑业务, 数据最干净。
+    IO_PROBE_HEAP("开机-BT/WiFi前");
+    ioProbeRunBenchmark();
 
     // Initialize settings (stored on SD card)
     g_settings.begin();
@@ -406,6 +448,9 @@ extern "C" void app_main() {
 
                 std::string pass = g_settings.wifiPassword();
                 g_wifi.begin();
+                // 诊断: LWIP/esp_netif 的缓冲与 RX/TX 队列。CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP
+                // 没开, 所以这些只能落在内部 RAM 上。
+                IO_PROBE_HEAP("WiFi begin 之后");
                 if (g_wifi.connect(ssid.c_str(), pass.c_str())) {
                     vTaskDelay(pdMS_TO_TICKS(500));
                     esp_sntp_stop();
@@ -461,7 +506,9 @@ extern "C" void app_main() {
     ime.setDisplayWidth(imeCandidateLineWidth());
 
     // Initialize Bluetooth keyboard in background (non-blocking, faster boot)
-    xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 1);
+    // BT 栈(controller/Bluedroid)固定在 core 0, 应用主循环固定在 core 1, 这里也就
+    // 把一次性的 BT 初始化放回 core 0, 免得启动时在 core 1 上抢占界面首绘。
+    xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 0);
 
     ESP_LOGI(TAG, "Ready!");
 
@@ -488,11 +535,41 @@ extern "C" void app_main() {
     while (currentState != APP_QUIT) {
         checkLightSleep(currentState);
 
-        int key = g_bt.readKey();
-        if (key < 0) key = 0;
+        // 空闲时阻塞等键(原来的 vTaskDelay 挪到这里): 无键则按本界面的节拍休眠,
+        // 有键立即唤醒。这样停顿后按下的第一个键不再白等一个轮询周期(编辑器 50ms、
+        // 主菜单最多 200ms), 而空转节拍与功耗与改动前一致。
+        uint8_t keyByte = 0;
+        int key = g_bt.waitKey(keyByte, uiIdleWaitMs(currentState)) ? (int)keyByte : 0;
 
         // BLE 键盘输入视为活动,重置空闲休眠计时
         if (key > 0) s_last_activity_us = esp_timer_get_time();
+
+        // ── 用户词典空闲落盘 ────────────────────────────────────────────
+        // 按键路径(IME 的 commit/学习/惩罚)只标脏, 攒在这里一次写入。写盘含 journal
+        // 的 fsync 和最多 4 个词典的整表重写, 原本挂在按键处理里, 停顿后敲的第一个键
+        // 会被它挡住一下 —— 现在推到"用户确实停手了"的空档。强制落盘(休眠/退出)不走
+        // 这里, 见 enterLightSleep()。
+        if (key == 0 && g_ime.hasPendingUserDictWrites()) {
+            static int64_t s_last_dict_flush_us = 0;
+            int64_t now_us = esp_timer_get_time();
+            if (s_last_activity_us != 0 &&
+                now_us - s_last_activity_us >= IDLE_DICT_FLUSH_QUIET_US &&
+                now_us - s_last_dict_flush_us >= IDLE_DICT_FLUSH_MIN_GAP_US) {
+                s_last_dict_flush_us = now_us;
+                g_ime.flushUserDictSavesIdle();
+            }
+        }
+
+        // 诊断: 每 10 秒打一次内存体检。目的是看内部 RAM 是不是单调下降(泄漏/一次性
+        // 占满), 以及它和 SD 写失败、BT 连不上的时间点对不对得上。
+        {
+            static int64_t s_last_heap_us = 0;
+            int64_t now_us = esp_timer_get_time();
+            if (now_us - s_last_heap_us >= 10 * 1000000LL) {
+                s_last_heap_us = now_us;
+                IO_PROBE_HEAP("运行中");
+            }
+        }
 
         // Check for key repeat events
         g_bt.checkKeyRepeat();
@@ -808,7 +885,7 @@ extern "C" void app_main() {
         case APP_MAIN:
             g_font.setSize(22);
             if (key > 0) currentState = screen_main_handle(key, ctx);
-            else { screen_main_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(200)); }  // 200ms for power saving
+            else { screen_main_handle(0, ctx); }  // 空闲节拍由循环顶部的 waitKey 提供
             break;
 
         case APP_EDITOR: {
@@ -821,7 +898,7 @@ extern "C" void app_main() {
             if (app_editor_needs_reinit()) editorInited = false;
             if (!editorInited) { screen_editor_init(ctx); editorInited = true; }
             if (key > 0) currentState = screen_editor_handle(key, ctx);
-            else { screen_editor_idle(ctx, false); vTaskDelay(pdMS_TO_TICKS(50)); }
+            else { screen_editor_idle(ctx, false); }
             // Preserve editorInited when going to inspiration/polish (editor should resume)
             // Reset editorInited when editor is opened FROM another screen (new content)
             if (currentState != APP_EDITOR && currentState != APP_SYNC_SEND_FLOMO) {
@@ -839,7 +916,7 @@ extern "C" void app_main() {
             static bool browserInited = false;
             if (!browserInited) { screen_browser_init(); browserInited = true; }
             if (key > 0) currentState = screen_browser_handle(key, ctx);
-            else { screen_browser_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_browser_handle(0, ctx); }
             if (currentState != APP_BROWSER) browserInited = false;
             break;
         }
@@ -849,7 +926,7 @@ extern "C" void app_main() {
             static bool viewerInited = false;
             if (!viewerInited) { screen_viewer_init(ctx.selectedEntry); viewerInited = true; }
             if (key > 0) currentState = screen_viewer_handle(key, ctx);
-            else { screen_viewer_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_viewer_handle(0, ctx); }
             if (currentState != APP_VIEWER) viewerInited = false;
             break;
         }
@@ -859,7 +936,7 @@ extern "C" void app_main() {
             static bool historyInited = false;
             if (!historyInited) { screen_history_init(ctx.selectedEntry, ctx.prevState); historyInited = true; }
             if (key > 0) currentState = screen_history_handle(key, ctx);
-            else { screen_history_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_history_handle(0, ctx); }
             if (currentState != APP_HISTORY) historyInited = false;
             break;
         }
@@ -870,7 +947,7 @@ extern "C" void app_main() {
             static bool settingsInited = false;
             if (!settingsInited) { screen_settings_init(); settingsInited = true; }
             if (key > 0) currentState = screen_settings_handle(key, ctx);
-            else { screen_settings_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_settings_handle(0, ctx); }
             if (currentState != APP_SETTINGS) settingsInited = false;
             break;
         }
@@ -880,7 +957,7 @@ extern "C" void app_main() {
             static bool btInited = false;
             if (!btInited) { screen_bt_manage_init(); btInited = true; }
             if (key > 0) currentState = screen_bt_manage_handle(key, ctx);
-            else { screen_bt_manage_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_bt_manage_handle(0, ctx); }
             if (currentState != APP_BT_MANAGE) btInited = false;
             break;
         }
@@ -890,7 +967,7 @@ extern "C" void app_main() {
             static bool fileMgrInited = false;
             if (!fileMgrInited) { screen_file_manager_init(); fileMgrInited = true; }
             if (key > 0) currentState = screen_file_manager_handle(key, ctx);
-            else { screen_file_manager_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(200)); }
+            else { screen_file_manager_handle(0, ctx); }
             if (currentState != APP_FILE_MANAGER) fileMgrInited = false;
             break;
         }
@@ -901,7 +978,7 @@ extern "C" void app_main() {
             static bool gtdInited = false;
             if (!gtdInited) { screen_gtd_init(); gtdInited = true; }
             if (key > 0) currentState = screen_gtd_handle(key, ctx);
-            else { screen_gtd_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_gtd_handle(0, ctx); }
             if (currentState != APP_GTD) gtdInited = false;
             break;
         }
@@ -912,7 +989,7 @@ extern "C" void app_main() {
             static bool outlineInited = false;
             if (!outlineInited) { screen_outline_init(); outlineInited = true; }
             if (key > 0) currentState = screen_outline_handle(key, ctx);
-            else { screen_outline_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_outline_handle(0, ctx); }
             if (currentState != APP_OUTLINE) outlineInited = false;
             break;
         }
@@ -926,7 +1003,7 @@ extern "C" void app_main() {
                 inspInited = true;
             }
             if (key > 0) currentState = screen_inspiration_handle(key, ctx);
-            else { screen_inspiration_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_inspiration_handle(0, ctx); }
             if (currentState != APP_INSPIRATION) inspInited = false;
             break;
         }
@@ -940,7 +1017,7 @@ extern "C" void app_main() {
                 polishInited = true;
             }
             if (key > 0) currentState = screen_polish_handle(key, ctx);
-            else { screen_polish_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_polish_handle(0, ctx); }
             if (currentState != APP_POLISH) polishInited = false;
             break;
         }
@@ -954,7 +1031,7 @@ extern "C" void app_main() {
                 ppInited = true;
             }
             if (key > 0) currentState = screen_polish_prompt_handle(key, ctx);
-            else { screen_polish_prompt_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(100)); }
+            else { screen_polish_prompt_handle(0, ctx); }
             if (currentState != APP_POLISH_PROMPT) ppInited = false;
             break;
         }
@@ -1055,7 +1132,7 @@ extern "C" void app_main() {
             static bool voiceInited = false;
             if (!voiceInited) { screen_voice_init(); voiceInited = true; }
             if (key > 0) currentState = screen_voice_handle(key, ctx);
-            else { screen_voice_handle(0, ctx); vTaskDelay(pdMS_TO_TICKS(50)); }
+            else { screen_voice_handle(0, ctx); }
             if (currentState != APP_VOICE) voiceInited = false;
             break;
         }
@@ -1081,5 +1158,7 @@ extern "C" void app_main() {
         g_voice.update();
     }
 
+    // 退出前强制落盘: 空闲落盘等的是"用户静默", 退出这条路上等不到了
+    IME::getInstance().flushUserDictSavesNow();
     ESP_LOGI(TAG, "Goodbye.");
 }

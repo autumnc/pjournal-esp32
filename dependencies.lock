@@ -32,11 +32,11 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.2
+    version: 6.1.0
 direct_dependencies:
 - espressif/esp_audio_codec
 - espressif/esp_codec_dev
 - espressif/esp_websocket_client
 manifest_hash: 93f53faee2d9e9ae5cda3796f62347c00842141e3a15315f34ab29140ce45036
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

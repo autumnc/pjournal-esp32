@@ -55,7 +55,10 @@ public:
     esp_err_t connectBDA(const uint8_t *bda, esp_ble_addr_type_t addr_type);
 
     // Keyboard input
-    uint8_t readKey();
+    uint8_t readKey();  // 非阻塞取一个按键, 无键返回 0
+    // 阻塞取一个按键: 有键立即返回 true, 否则最多等待 timeout_ms 后返回 false。
+    // 主循环用它做空闲等待, 既保留原来的空转节拍, 又让按键立刻唤醒而不白等一个周期。
+    bool waitKey(uint8_t &out, uint32_t timeout_ms);
     void flushKeys();
     void checkKeyRepeat();  // Check for key repeat events
 
