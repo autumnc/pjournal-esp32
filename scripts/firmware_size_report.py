@@ -17,7 +17,7 @@ def parse_size(text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--build-dir", default="build-yong-ime")
+    ap.add_argument("--build-dir", default="build-ime")
     ap.add_argument("--app-partition-size", default="0xc00000")
     args = ap.parse_args()
 

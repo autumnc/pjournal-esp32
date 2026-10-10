@@ -278,7 +278,7 @@ python3 scripts/add_ime_predictions.py
 python3 scripts/kaomoji_convert.py
 
 # 发布辅助：更新版本、跑 IME 检查、构建并生成 merged 固件
-python3 scripts/release.py X.Y.Z --build-dir build-yong-ime
+python3 scripts/release.py X.Y.Z --build-dir build-ime
 ```
 
 发布脚本默认只生成本地产物；加 `--commit --push --github-release` 后才会提交、推送 tag 并创建 GitHub Release。
@@ -289,13 +289,13 @@ python3 scripts/release.py X.Y.Z --build-dir build-yong-ime
 
 ```bash
 # 加载 ESP-IDF 环境
-. /home/ywz/esp/esp-idf/export.sh
+. /home/ywz/esp-idf/export.sh
 
 # 构建带 IME perflog 的固件
-idf.py -B build-yong-ime-perflog -DPJOURNAL_IME_PERF_LOG=ON build
+idf.py -B build-ime-perflog -DPJOURNAL_IME_PERF_LOG=ON build
 
 # 烧录并保存 monitor 日志
-idf.py -B build-yong-ime-perflog -p /dev/ttyUSB0 flash monitor | tee ime-perf.log
+idf.py -B build-ime-perflog -p /dev/ttyUSB0 flash monitor | tee ime-perf.log
 
 # 汇总每个输入码的 avg / p95 / max
 python3 scripts/ime_perf_report.py ime-perf.log

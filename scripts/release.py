@@ -77,7 +77,7 @@ def copy_artifacts(version, build_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("version", help="semantic version, e.g. 4.9.1")
-    ap.add_argument("--build-dir", default="build-yong-ime")
+    ap.add_argument("--build-dir", default="build-ime")
     ap.add_argument("--skip-checks", action="store_true")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--push", action="store_true")
