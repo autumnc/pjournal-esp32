@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+IDF_EXPORT = "/home/ywz/esp-idf/export.sh"
 
 
 def run(cmd, *, shell=False):
@@ -48,22 +49,19 @@ def update_versions(version):
 
 
 def build(build_dir):
-    run(f". /home/ywz/esp-idf/export.sh >/dev/null && cmake --build {build_dir} -j2",
-        shell=True)
+    run(f". {IDF_EXPORT} >/dev/null && cmake --build {build_dir} -j2", shell=True)
 
 
 def merge(build_dir):
     build = ROOT / build_dir
-    run([
-        "esptool.py", "--chip", "esp32s3", "merge_bin",
-        "-o", build / "pjournal-merged.bin",
-        "--flash_mode", "dio",
-        "--flash_size", "16MB",
-        "--flash_freq", "80m",
-        "0x0", build / "bootloader" / "bootloader.bin",
-        "0x8000", build / "partition_table" / "partition-table.bin",
-        "0x10000", build / "pjournal.bin",
-    ])
+    # esptool.py 只存在于 IDF 的 python 环境里(PATH 上没有), 所以跟 build 一样先 source。
+    run(f". {IDF_EXPORT} >/dev/null && esptool.py --chip esp32s3 merge_bin "
+        f"-o {build / 'pjournal-merged.bin'} "
+        f"--flash_mode dio --flash_size 16MB --flash_freq 80m "
+        f"0x0 {build / 'bootloader' / 'bootloader.bin'} "
+        f"0x8000 {build / 'partition_table' / 'partition-table.bin'} "
+        f"0x10000 {build / 'pjournal.bin'}",
+        shell=True)
 
 
 def copy_artifacts(version, build_dir):
