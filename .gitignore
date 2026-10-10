@@ -14,6 +14,10 @@ build-*/
 !/main/terminus20.fnt
 !/main/terminus16.fnt
 !/main/fontlibrary18.fnt
+# 词库是要嵌进固件的输入产物, 必须跟源码一起进版本库, 否则 clone/发布构建会
+# 拿到别的词库(甚至没有), 固件内容对不上 tag。
+!/main/ime/ime_table_pinyin.bin
+!/main/ime/liangfen.bin
 *.pre-fill
 *.pre-fill[0-9]*
 *.pre-trim

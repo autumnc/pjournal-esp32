@@ -134,7 +134,11 @@ def require_source_not_contains(name, text, snippet):
         raise SystemExit(f"{name}: unexpected source snippet {snippet!r}")
 
 
-def ime3_predict_count(path):
+def ime3_predict_layout(path):
+    """Return (predict group count, predict section offset).
+
+    A dictionary without a predict section (offset == file size) reports 0 groups.
+    """
     blob = path.read_bytes()
     if len(blob) < 12 or blob[:4] != b"IME3":
         raise SystemExit("ime table: not IME3")
@@ -144,12 +148,24 @@ def ime3_predict_count(path):
     word_index_base = single_end + 4
     word_data_base = word_index_base + (26 * 26 + 1) * 4
     if word_data_base > len(blob):
-        return 0
+        return 0, len(blob)
     word_data_size = struct.unpack_from("<I", blob, word_index_base + (26 * 26) * 4)[0]
     pred_base = word_data_base + word_data_size
     if pred_base + 4 > len(blob):
+        return 0, pred_base
+    return struct.unpack_from("<I", blob, pred_base)[0], pred_base
+
+
+def count_builtin_predict(text):
+    """Count BUILTIN_PREDICT entries in IME.cpp (the runtime predict baseline)."""
+    marker = "static const BuiltinPredictEntry BUILTIN_PREDICT[] = {"
+    start = text.find(marker)
+    if start < 0:
         return 0
-    return struct.unpack_from("<I", blob, pred_base)[0]
+    end = text.find("\n};", start)
+    if end < 0:
+        return 0
+    return len(re.findall(r"^\s*\{", text[start + len(marker):end], re.M))
 
 
 def parse_user_line(raw):
@@ -261,7 +277,14 @@ def main():
     require_equal("journal malformed fallback", merged[("bad-count", "词", False)], 1)
     require_source_contains("journal defer macro", ime_config_h, "PJOURNAL_IME_USERDICT_JOURNAL_DEFER_US")
     require_source_contains("journal batching macro", ime_config_h, "PJOURNAL_IME_USERDICT_JOURNAL_BATCH_LIMIT")
-    require_source_contains("journal force before save", ime_cpp, "flushUserDictJournal(force);")
+    # 重构后 flushUserDictSaves 把"非 force 只登记不落盘"提到了函数最前面提前 return,
+    # 强制路径上 journal 依然是第一件事(先 journal, 后 4 个整表)。旧断言盯的是
+    # `flushUserDictJournal(force);` 这个字面量, 而 force 分支现在由早退兜住, 字面量
+    # 没了。改成等价强度的两段: 早退存在, 且强制路径上 journal 排在整表之前。
+    require_source_contains("journal deferral before save", ime_cpp,
+                            "void IME::flushUserDictSaves(bool force) {\n    if (!force) {")
+    require_source_contains("journal force before save", ime_cpp,
+                            "flushUserDictJournal(true);\n    saveUserDictFile(USERDICT_FIXED_PATH")
 
     require_source_contains("liangfen reset max code", ime_cpp, "case PINYIN:    _maxCode = 63; break;")
     require_source_contains("liangfen mode max code", ime_cpp, "_lfMode = true; _maxCode = 12")
@@ -287,8 +310,21 @@ def main():
     require_source_contains("page anchor", ime_h, "_pageAnchor")
     require_source_contains("predict lazy index", yong_dict_cpp, "buildPredictIndex()")
     require_source_contains("predict index cap", ime_config_h, "PJOURNAL_IME_PREDICT_INDEX_MAX_GROUPS")
-    if ime3_predict_count(IME_TABLE) < 1000:
-        raise SystemExit("ime table: prediction section missing or too small")
+    # 词库自带的联想段在 ESP32 固件上是可选路径: IME.cpp 的 rebuildContextBoostScores()
+    # 里是 `if (_dict.hasPredictions())`, 真正托底的是源码里的 BUILTIN_PREDICT 加用户学习。
+    # 发布的 ime_table_pinyin.bin 不带联想段, 所以不再要求"必须 ≥1000 组", 改成三条:
+    #   1) 词库本身可用(IME3 头 + 词条段)
+    #   2) 联想段若存在就必须自洽(计数之后确有整组数据, 不是被截断的尾巴)
+    #   3) 真正干活的 BUILTIN_PREDICT 在位, 且条目数没被削到不像话
+    table_blob = IME_TABLE.read_bytes()
+    if len(table_blob) < 12 or table_blob[:4] != b"IME3":
+        raise SystemExit("ime table: not IME3")
+    predict_count, predict_base = ime3_predict_layout(IME_TABLE)
+    if predict_count > 0 and predict_base + 6 > len(table_blob):
+        raise SystemExit("ime table: predict section truncated")
+    builtin_predict = count_builtin_predict(ime_cpp)
+    if builtin_predict < 50:  # 当前 82 条, 这里只是"别被削成空壳"的下限
+        raise SystemExit(f"ime cpp: BUILTIN_PREDICT too small ({builtin_predict})")
     require_source_contains("predict source 输入法", PREDICT_SOURCE.read_text(encoding="utf-8"), "输入法\t")
     require_source_contains("predict generator", ADD_PREDICT_SCRIPT.read_text(encoding="utf-8"), "Append/replace IME3 prediction section")
     require_source_contains("predict source generator", GEN_PREDICT_SCRIPT.read_text(encoding="utf-8"), "augment_from_seg")
@@ -352,9 +388,14 @@ def main():
     require_source_contains("candidate stability memory", ime_cpp, "rememberCandidateStability()")
     require_source_contains("candidate debug setting", (ROOT / "main" / "settings_manager.h").read_text(encoding="utf-8"), "imeDebug")
     require_source_contains("candidate debug log", ime_cpp, "logCandidateDebug")
-    require_source_contains("inline english candidates", ime_cpp, "appendEnglishInlineCandidates")
-    require_source_contains("inline english tech word", ime_cpp, "\"lvgl9\"")
-    require_source_contains("inline english numeric word", ime_cpp, "\"esp32s3\"")
+    # 行内英文候选(中文模式下把 appendEnglishInlineCandidates / TECH_INLINE_WORDS 插进
+    # 候选)已整块移除, 中文路径不再夹英文候选。这里反过来钉住"别又长回来", 同时保住剩下
+    # 的英文词表: _english 模式的候选走 BUILTIN_ENGLISH_WORDS / loadEnglishDict()。
+    require_source_not_contains("inline english candidates removed", ime_cpp,
+                                "appendEnglishInlineCandidates")
+    require_source_contains("english word table", ime_cpp, "BUILTIN_ENGLISH_WORDS[]")
+    require_source_contains("english tech word", ime_cpp, "\"lvgl9\"")
+    require_source_contains("english dict loader", ime_cpp, "loadEnglishDict()")
     require_source_contains("english punctuation keep halfwidth", ime_cpp, "_lastAsciiCommitUs")
     require_source_contains("ime mode label", ime_h, "modeLabel")
     require_source_contains("ime mode label delete", ime_cpp, "return \"[删]\"")

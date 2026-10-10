@@ -299,13 +299,13 @@ def main():
     require("doc context settings toggle", '"ime_doc_context"' in settings_cpp)
     require("doc context editor feed", "setDocumentContext(editorImeContextText())" in editor_cpp)
 
-    # 实用快捷输入(#14): 无前缀符号按精确整码匹配 + 行内英文候选排到中文路径之后。
+    # 实用快捷输入(#14): 无前缀符号按精确整码匹配。行内英文候选(中文模式里插英文词)已
+    # 整块移除, 所以这里不再要求它排在 Phase 7 之后 —— 只钉住"它没有偷偷回来"。
     require("shortcut symbol table", "K_SHORTCUT_SYMBOLS" in ime_cpp)
     require("shortcut symbol api", "appendShortcutSymbol" in ime_h)
     require("shortcut exact full-code match", "appendShortcutSymbol(q, qlen)" in ime_cpp)
-    require("english inline after phase 7",
-            ime_cpp.find("appendEnglishInlineCandidates(pinyinCode)")
-            > ime_cpp.find("// Phase 7: shorthand + tail match"))
+    require("english inline stays removed",
+            "appendEnglishInlineCandidates" not in ime_cpp)
     # 这两个相位必须排在 Phase 1 之前。它们的候选是靠"先追加"占住首屏的, 一旦退回
     # 末尾追加, Phase 8 的逐字匹配会先用首字母单字填满, 用户就看不到整句/符号了
     # (v4.8.x 设备上实测到的就是这个)。
