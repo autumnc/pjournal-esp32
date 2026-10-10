@@ -152,6 +152,27 @@ static void flomoSendTask(void *arg) {
 
 // BLE stack init + auto-connect in a background task so the main UI
 // renders immediately instead of waiting ~1s for the BT controller.
+// bt_init 任务的栈是 8192 字 = 32KB **连续内部** RAM(xTaskCreatePinnedToCore 的
+// usStackDepth 是"字")。开机时内部 RAM 宽裕, 建得起来; 唤醒时输入法索引等已经把
+// 内部 RAM 吃得七零八落, 就可能建不起来 —— 原来这里不看返回值, 失败的结果是
+// "唤醒后 BT 栈根本没重建, 键盘永远连不上, 而日志里一条错误都没有"。
+// 所以: 查返回值, 失败退避重试几次, 还失败就明确报出来。
+static void btInitTask(void *arg);  // 定义在下面, 这里只是给 startBtInitTask 用
+
+static void startBtInitTask(const char *why) {
+    const int attempts = 3;
+    for (int i = 0; i < attempts; i++) {
+        if (xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 0) == pdPASS) {
+            return;
+        }
+        ESP_LOGE(TAG, "bt_init task create failed (%s, attempt %d/%d), internal largest=%u",
+                 why, i + 1, attempts,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    ESP_LOGE(TAG, "giving up BT re-init after %s — keyboard will not reconnect until reboot", why);
+}
+
 static void btInitTask(void *arg) {
     ESP_LOGI(TAG, "Starting Bluetooth...");
     if (g_bt.init() != ESP_OK) {
@@ -170,14 +191,17 @@ static void btInitTask(void *arg) {
     ESP_LOGI(TAG, "Found %d saved keyboard(s), will auto-connect...",
              g_bt.pairedDeviceCount());
     const BtPairedDevice *p = g_bt.getPairedDevice(0);
-    // 键盘自身空闲超时断开后广播窗口很快过期,自动休眠唤醒时单次直连大概率失败。
-    // 有限重试:连接中/已连接时 requestConnect 内部自动跳过;期间按键盘任意键
-    // 把它从深度休眠唤醒,下一轮重试即可接上。60 秒后放弃,等待手动连接。
-    int64_t deadline = esp_timer_get_time() + 60 * 1000000LL;
-    while (!g_bt.isConnected() && esp_timer_get_time() < deadline) {
-        if (!g_bt.isScanning()) g_bt.connectBDA(p->bda, p->addr_type);
-        vTaskDelay(pdMS_TO_TICKS(5000));
-    }
+    // 踢一脚就退: 后面交给主循环的自动重连(每 2s 一次、按最近使用顺序轮询**所有**
+    // 配对设备, 而且不设 60 秒上限)。
+    //
+    // 这里原来还有一套自己的 60 秒重试循环, 两件事不对:
+    //  1) 它把 32KB(这个任务的栈, 8192 字)白占一分钟 —— 唤醒后正是内部 RAM 最紧的
+    //     时候(输入法索引、界面重建都在抢内部 RAM), 而它只是每 5s 调一次
+    //     requestConnect(那已经是非阻塞的了, 一分钱不需要);
+    //  2) 重连驱动有两套: 主循环那套 60 秒后还在重试, 这套 60 秒就放弃了。日志里
+    //     "BT auto-reconnect retry %d/%d" 刷了 919 条, 干活的本来也是主循环那套。
+    // 现在只留主循环那套: 唤醒后踢一脚(比主循环的下一次迭代早几毫秒), 立刻释放栈。
+    if (!g_bt.isScanning()) g_bt.connectBDA(p->bda, p->addr_type);
     vTaskDelete(NULL);
 }
 
@@ -274,7 +298,7 @@ static void enterLightSleep(void) {
     }
 
     // 后台重新 init BLE + 自动重连键盘(即使休眠失败也恢复 BT 栈)
-    xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 0);
+    startBtInitTask("wake");
 }
 
 static void checkLightSleep(AppState state) {
@@ -508,7 +532,7 @@ extern "C" void app_main() {
     // Initialize Bluetooth keyboard in background (non-blocking, faster boot)
     // BT 栈(controller/Bluedroid)固定在 core 0, 应用主循环固定在 core 1, 这里也就
     // 把一次性的 BT 初始化放回 core 0, 免得启动时在 core 1 上抢占界面首绘。
-    xTaskCreatePinnedToCore(btInitTask, "bt_init", 8192, NULL, 5, NULL, 0);
+    startBtInitTask("boot");
 
     ESP_LOGI(TAG, "Ready!");
 
