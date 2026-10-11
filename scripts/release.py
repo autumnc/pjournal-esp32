@@ -2,8 +2,9 @@
 """Prepare a pjournal firmware release.
 
 Default behavior is local-only: update version strings, run IME checks, build,
-merge firmware, and copy versioned artifacts. Git commit/push/GitHub release are
-opt-in so ordinary release prep cannot publish by accident.
+merge firmware, and copy versioned artifacts. Git commit/push/GitHub release and
+publishing the web flasher are opt-in so ordinary release prep cannot publish by
+accident.
 """
 
 import argparse
@@ -82,6 +83,11 @@ def main():
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--github-release", action="store_true")
+    ap.add_argument(
+        "--publish-flasher",
+        action="store_true",
+        help="publish the web flasher (webflasher/ + this release's merged image) to gh-pages",
+    )
     args = ap.parse_args()
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
@@ -117,6 +123,10 @@ def main():
             "--title", tag,
             "--notes", notes,
         ])
+    if args.publish_flasher:
+        # 用本地这个整包（--bin）而不是从 Release 下，所以没 --github-release 也能先发布看一眼。
+        run(["bash", ROOT / "scripts" / "publish_flasher.sh",
+             "--tag", tag, "--bin", merged])
 
 
 if __name__ == "__main__":
