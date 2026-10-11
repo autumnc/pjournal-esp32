@@ -19,7 +19,8 @@
  *
  * 3. 【刷完必须自己复位，而且 after("hard_reset") 不够】writeFlash 走 compress 那条路时
  *    收尾是 flashDeflFinish(false, …)（reboot=false），**芯片留在 stub 里不自启**。
- *    下面这串是上游那块同芯片板子（小纸 Pico）实机验证出来的，本项目沿用、待实测：
+ *    下面这串先是在上游那块同芯片板子（小纸 Pico）上实机验证，本项目 2026-10-11
+ *    线上刷机实测同样成立（刷完设备自己重启，不必手动断电）：
  *      a) after("hard_reset") **不走** constructResetSequence —— 那条会自动挑 USB-JTAG
  *         序列的路只在 connect/main 里用；after 直接拿 resetConstructors.hardReset。
  *      b) 而 HardReset 非 OTG 分支的全部实现是 sleep(100); setRTS(false)。在 WebSerial
@@ -31,9 +32,11 @@
  *    通道发同一串：RESET_SEQUENCE = "D0|R1|W200|R0"。
  *      · 前面补 D0：把 IO0 钉在高电平（= 正常启动，不用下载模式）
  *      · W200：与 esptool.py 对"USB 内置外设"的 hold_delay 一致
- *    ★ 在本项目这块板子上**尚未实机验证**：刷完若设备留在下载模式不自启，第一顺位把 W 调长
- *      或补一个 trailing "W200|D0"，第二顺位直接用 bundle 里导出的
- *      UsbJtagSerialReset(transport).reset()，第三顺位 after("soft_reset")。
+ *    ★ 2026-10-11 实机验证通过：在线上 GitHub Pages 刷完，设备**自己重启进主界面**，
+ *      不必再手动断电 —— 这一串就是最终解。
+ *    *万一以后又不行（例如换了 esptool-js 版本）：第一顺位把 W 调长或补一个 trailing
+ *     "W200|D0"，第二顺位直接用 bundle 里导出的 UsbJtagSerialReset(transport).reset()，
+ *     第三顺位 after("soft_reset")。*
  *
  * 4. 【resetConstructors 一个字都别传】isUsbJtagSerialPort()（VID 0x303A &&
  *    PID == USB_JTAG_SERIAL_PID）命中的设备，constructResetSequence() **会自动**走
@@ -85,8 +88,8 @@ const OFFSET_APP = 0x10000;
 
 // 刷完之后的复位序列（custom_reset 语法：D=DTR(IO0) R=RTS(EN) W=等待ms；1=断言=低电平）。
 // 为什么不是 after("hard_reset")：见文件头第 3 条 —— 库自带的 HardReset 只"放开" EN、
-// 从不断言，而 EN 本来就是高的，于是等于什么都没做（上游同芯片板子实机验证：刷完芯片
-// 留在 stub 里不自启；本项目沿用同一串、待实机确认）。
+// 从不断言，而 EN 本来就是高的，于是等于什么都没做（上游同芯片板子 + 本项目
+// 2026-10-11 线上实测：不这么做的话刷完芯片会留在 stub 里不自启）。
 // esptool.py 的 hard_reset() 是「RTS 拉低(EN=LOW) → hold → RTS 拉高(EN=HIGH)」，
 // 这里照着写一遍；前面补 D0 把 IO0 钉在高电平（= 正常启动，不进下载模式）。
 const RESET_SEQUENCE = "D0|R1|W200|R0";
