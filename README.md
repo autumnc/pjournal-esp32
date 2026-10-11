@@ -305,14 +305,55 @@ python3 scripts/ime_perf_report.py ime-perf.log
 
 ### 烧录
 
+这块板子的 USB 是芯片内置的 USB-Serial-JTAG，枚举成 `/dev/ttyACM0`（以 `ls /dev/tty*` 实际结果为准）。
+
 ```bash
 # 合并固件一步烧录
-esptool.py --chip esp32s3 -p /dev/ttyUSB0 -b 460800 \
+esptool.py --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
   --before default_reset --after hard_reset \
-  write_flash 0x0 build/pjournal-merged.bin
+  write_flash 0x0 pjournal-4.9.5-merged.bin
 
 # 或分步烧录
-idf.py -p /dev/ttyUSB0 flash
+idf.py -p /dev/ttyACM0 flash
+```
+
+### 网页刷机
+
+`webflasher/` 是一个纯静态的网页刷机台：浏览器里用 WebSerial + esptool-js 把整包写到 `0x0`，
+用户不用装 ESP-IDF、esptool 或 Python（需要 Chrome / Edge 桌面版，WebSerial 只有它们有）。
+站点发到 `gh-pages` 分支，用 GitHub Pages 提供：
+
+- 线上地址：<https://autumnc.github.io/pjournal-esp32/>
+- 站点源码：`webflasher/`（`index.html` + `flasher.js` + `style.css` + `vendor/esptool-js.bundle.js`）。
+  它与 `pjournal-pico` 的刷机台同源，踩过的坑写在 `flasher.js` 文件头，改之前先读那段。
+- 固件不进版本库：发布时把整包拷进站点的 `firmware/` 并生成 `firmware.json`（含 sha256 / md5），
+  页面只读**同源**的 `./firmware.json` 与 `./firmware/*.bin`（GitHub Release 资产不发 CORS 头，
+  浏览器读不到，所以不能直接从 Release 拉）。
+
+发版流程里它在最后一步：
+
+```bash
+# 抬版本 → 跑检查 → 编译 → 合整包 → 本地留档
+python3 scripts/release.py 4.9.6
+
+# 提交 / 打 tag / 推远端 / 传 Release 资产
+python3 scripts/release.py 4.9.6 --commit --push --github-release
+
+# 发布网页刷机台（也可用 --publish-flasher 一步接在上一条后面）
+scripts/publish_flasher.sh --tag v4.9.6 --bin pjournal-4.9.6-merged.bin
+
+# 不想推远端，只落盘本地预览（改页面时用这个）
+scripts/publish_flasher.sh --bin pjournal-4.9.6-merged.bin --out /tmp/site
+cd /tmp/site && python3 -m http.server 8777   # Chrome 打开 http://localhost:8777/
+```
+
+脚本会先自检整包（长度 + `0x0`/`0x8000`/`0x10000` 三处魔数），挡下「把 app-only 的
+`pjournal-<版本>.bin` 当整包发上去」这种会砖的误操作；发布走临时目录里 `git init` + force-push，
+**不碰主工作区的 git 状态**。首次发布需要开一次 Pages：
+
+```bash
+gh api -X POST repos/autumnc/pjournal-esp32/pages \
+  -f source[branch]=gh-pages -f source[path]=/
 ```
 
 ## SD 卡目录结构
