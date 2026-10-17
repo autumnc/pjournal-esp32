@@ -48,7 +48,7 @@ static portMUX_TYPE s_pend_mux = portMUX_INITIALIZER_UNLOCKED;
 static int s_pending = 0;                   // 已排队待播的声数
 
 static bool enabled() {
-    return g_settings.inputMode() == "typewriter" && g_settings.typingClickEnabled();
+    return g_settings.typingClickEnabled();
 }
 
 static double rand01() { return (double)esp_random() / 4294967296.0; }

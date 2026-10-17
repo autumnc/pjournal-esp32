@@ -179,7 +179,7 @@ static void markDirty() {
     g_editor.mdInfoDirty = true;
 }
 
-// 打字机模式:光标居中 + 按键音效是否生效
+// 打字机模式:光标钉在可视区中间(按键音效与输入模式无关,由设置单独控制)
 static bool editorTypewriter() { return g_settings.inputMode() == "typewriter"; }
 static bool editorVertical() { return g_settings.editorOrientation() == "vertical"; }
 static bool inFileEditSession();
@@ -1919,10 +1919,12 @@ void screen_editor_init(ScreenContext &ctx) {
 
     g_editor.scroll = 0;
     g_editor.targetCx = -1;
-    g_editor.imeActive = false;
-    g_ime.setActive(false);
+    // 进入编辑器默认打开中文输入法(半角拼音),与输入模式(打字机/正常)无关。
+    g_editor.imeActive = true;
     g_ime.setFullwidth(false);
     g_ime.setEnglish(false);
+    g_ime.setActive(true);
+    g_ime.setDocumentContext(editorImeContextText());
     g_editor.confirmSave = false;
     g_editor.modifiedSinceSave = false;
     g_editor.drawnOnce = false;
@@ -2128,15 +2130,13 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
                     if (prev != ' ' && prev != '\t') imeOut.insert(imeOut.begin(), ' ');
                 }
             }
-            if (editorTypewriter()) {
-                // 中文音效触发:key=每个被 IME 消费的键一声;count=上屏按字数连响;single=上屏一声
-                if (g_settings.clickChineseMode() == "key") {
-                    typingClickPlay(1);
-                } else if (g_settings.clickChineseMode() == "count") {
-                    int n = utf8Count(imeOut); if (n > 0) typingClickPlay(n);
-                } else {
-                    if (!imeOut.empty()) typingClickPlay(1);
-                }
+            // 中文音效触发:key=每个被 IME 消费的键一声;count=上屏按字数连响;single=上屏一声
+            if (g_settings.clickChineseMode() == "key") {
+                typingClickPlay(1);
+            } else if (g_settings.clickChineseMode() == "count") {
+                int n = utf8Count(imeOut); if (n > 0) typingClickPlay(n);
+            } else {
+                if (!imeOut.empty()) typingClickPlay(1);
             }
             editorInsertText(imeOut);
             int64_t perfT2 = EDITOR_PERF_NOW();
@@ -2523,7 +2523,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         markDirty();
         g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
         g_editor.modifiedSinceSave = true;
-        if (editorTypewriter()) typingClickPlay(1);
+        typingClickPlay(1);
     } else if (key == KEY_LEFT) {
         clearSelection();
         if (g_editor.cx > 0) {
