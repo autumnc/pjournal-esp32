@@ -65,7 +65,8 @@ static DeepseekResult runChat(const std::string &body, volatile bool *cancel = n
     cfg.url = DEEPSEEK_API_URL;
     cfg.method = HTTP_METHOD_POST;
     cfg.timeout_ms = 30000;
-    cfg.skip_cert_common_name_check = true;
+    // 不要设 skip_cert_common_name_check: 它会把 SNI 一起关掉, CDN 于是返回
+    // 默认站点的证书(不是 api.deepseek.com 的链), 校验必然失败。
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
@@ -130,7 +131,7 @@ static DeepseekResult runChat(const std::string &body, volatile bool *cancel = n
                 if (errorResponse.size() > 1024) break;
             }
             ESP_LOGW(TAG, "API returned status %d, response: %s", status, errorResponse.c_str());
-            result.content = "API返回错误";
+            result.content = "API返回错误(" + std::to_string(status) + ")";
         }
     } else {
         ESP_LOGW(TAG, "HTTP request failed: %d", err);
@@ -152,7 +153,7 @@ DeepseekResult DeepseekClient::generatePrompt(const std::string &userContext) {
     std::string escapedContext = json_escape(userContext);
     char body[1024];
     int n = snprintf(body, sizeof(body),
-        "{\"model\":\"deepseek-chat\",\"messages\":["
+        "{\"model\":\"deepseek-flash\",\"thinking\":{\"type\":\"disabled\"},\"messages\":["
         "{\"role\":\"system\",\"content\":\"你是一个日记写作助手。根据用户的背景和爱好，"
         "运用这些爱好领域内的专业知识、概念、理论和思维方式，生成一个富有洞见和启发性的"
         "日记写作提示（不超过56字），引导用户用该领域的视角观察和记录今天的生活。\"},"
@@ -191,7 +192,7 @@ DeepseekResult DeepseekClient::polishText(const std::string &text, const std::st
 
     std::string escSys = json_escape(system);
     std::string escText = json_escape(text);
-    std::string body = "{\"model\":\"deepseek-chat\",\"messages\":["
+    std::string body = "{\"model\":\"deepseek-flash\",\"thinking\":{\"type\":\"disabled\"},\"messages\":["
         "{\"role\":\"system\",\"content\":\"" + escSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escText + "\"}],"
         "\"max_tokens\":2000,\"temperature\":0.3}";

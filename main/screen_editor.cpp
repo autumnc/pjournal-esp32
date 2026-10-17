@@ -2606,7 +2606,6 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
 // auto-save schedule and only repaints when the screen may be stale, avoiding
 // a full redraw every 50ms idle tick.
 bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
-    (void)ctx;
     if (g_editor.promptGenerating) {
         if (s_promptTaskDone) {
             g_editor.promptGenerating = false;
@@ -2618,6 +2617,11 @@ bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
                 g_editor.promptText = result.content;
             } else {
                 if (g_editor.promptText.empty()) g_editor.promptText = "今天发生了什么？";
+                // 空闲路径也要把失败原因显示出来, 否则看起来像"什么都没发生"。
+                if (!result.content.empty()) {
+                    ctx.statusMessage = result.content;
+                    ctx.statusDuration = 30;
+                }
             }
             s_promptTaskContext.clear();
             ui_clear(); drawEditor(); ui_commit();
