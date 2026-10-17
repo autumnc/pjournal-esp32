@@ -19,6 +19,26 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.2
+  espressif/esp_tinyusb:
+    component_hash: cfb066b239957ebfba5f7a7764e534b3000d3b400fd42d11bedb6ee5e6eaf3c9
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    - name: espressif/tinyusb
+      registry_url: https://components.espressif.com
+      require: public
+      version: '>=0.17.0~2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - esp32s31
+    version: 2.4.0
   espressif/esp_websocket_client:
     component_hash: dc00233af846f3a744ada283a300e0d586040aadc3ee67361645ecdce4523672
     dependencies:
@@ -29,6 +49,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.8.0
+  espressif/tinyusb:
+    component_hash: 16c8d774dab1f484d3e0c0f61105624d2424bbae864efd19818baf7b451b41e7
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - esp32s31
+    version: 0.21.0~2
   idf:
     source:
       type: idf
@@ -36,7 +72,8 @@ dependencies:
 direct_dependencies:
 - espressif/esp_audio_codec
 - espressif/esp_codec_dev
+- espressif/esp_tinyusb
 - espressif/esp_websocket_client
-manifest_hash: 93f53faee2d9e9ae5cda3796f62347c00842141e3a15315f34ab29140ce45036
+manifest_hash: 92427e510a3a67a093dc9b6053f95237851701702c27e448390e00d74c36c7f9
 target: esp32s3
 version: 3.0.0

@@ -1,6 +1,7 @@
 #include "screen_settings.h"
 #include "font_renderer.h"
 #include "settings_manager.h"
+#include "journal_storage.h"
 #include "wifi_manager.h"
 #include "flomo_client.h"
 #include "ime/IME.h"
@@ -58,6 +59,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_click_volume", "打字音效音量", false, true},
     {"_click_timbre", "打字音效音色", false, true},
     {"_file_mgr", "文件管理", false, true},
+    {"_usb_msc", "U盘模式", false, true},
     {"_dict_mgr", "词库管理", false, true},
     {"file_mgr_token", "文件管理密码", true, false},
     {"_bt_manage", "蓝牙设备管理", false, true},
@@ -90,18 +92,16 @@ static const SettingField SETTINGS_FIELDS[] = {
 };
 static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);
 
-// 打字机专用设置行仅在该模式开启时显示
+// 打字音效与输入模式无关,只要音效打开就显示细项;竖排参考线仅在竖排时显示。
 static bool fieldHidden(int idx) {
     const char *k = SETTINGS_FIELDS[idx].key;
     if (strcmp(k, "vertical_ref_line") == 0)
         return g_settings.editorOrientation() != "vertical";
     if (strcmp(k, "_vertical_ref_line_style") == 0)
         return g_settings.editorOrientation() != "vertical" || !g_settings.verticalReferenceLine();
-    if (strcmp(k, "click_enabled") == 0)
-        return g_settings.inputMode() != "typewriter";
     if (strcmp(k, "_click_volume") == 0 || strcmp(k, "_click_timbre") == 0 ||
         strcmp(k, "_click_chinese") == 0)
-        return g_settings.inputMode() != "typewriter" || !g_settings.typingClickEnabled();
+        return !g_settings.typingClickEnabled();
     if (strcmp(k, "baidu_asr_api_key") == 0 || strcmp(k, "baidu_asr_secret_key") == 0)
         return g_settings.voiceAsrService() != "baidu";
     return false;
@@ -1063,6 +1063,14 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.nextState = APP_FILE_MANAGER;
                 return APP_FILE_MANAGER;
             }
+            if (strcmp(f.key, "_usb_msc") == 0) {
+                if (!g_journal.isMounted()) {
+                    ctx.statusMessage = "SD卡未挂载";
+                    return APP_SETTINGS;
+                }
+                ctx.nextState = APP_USB_MSC;
+                return APP_USB_MSC;
+            }
             if (strcmp(f.key, "_dict_mgr") == 0) {
                 g_ime.ensureUserDictLoaded();
                 g_settingsState.mode = SETTINGS_DICT_CHOOSE;
@@ -1097,7 +1105,6 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "_input_mode") == 0) {
                 std::string next = (g_settings.inputMode() == "typewriter") ? "normal" : "typewriter";
                 g_settings.setString("input_mode", next);
-                if (next == "normal") typingClickRelease();  // 切回正常立即关喇叭
                 if (g_settingsState.selection > fieldVisibleCount() - 1)
                     g_settingsState.selection = fieldVisibleCount() - 1;
                 return APP_SETTINGS;

@@ -31,6 +31,8 @@ idf_component_register(SRCS
     "screen_bt_manage.cpp"
     "screen_file_manager.cpp"
     "file_manager_server.cpp"
+    "usb_msc.cpp"
+    "screen_usb_msc.cpp"
     "font_renderer.cpp"
     "bt_keyboard.cpp"
     "journal_storage.cpp"
@@ -85,6 +87,8 @@ idf_component_register(SRCS
         esp_codec_dev
         esp_audio_codec
         efuse
+        esp_tinyusb
+        esp_hal_usb
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.5")

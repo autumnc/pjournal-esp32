@@ -7,6 +7,8 @@
 #include <unordered_set>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <esp_err.h>
+#include <sdmmc_cmd.h>
 
 struct JournalEntry {
     std::string filename;   // YYYY-MM-DD_HHMMSS.txt
@@ -25,7 +27,9 @@ struct JournalHistoryVersion {
 class JournalStorage {
 public:
     bool begin();
-    void deinit();
+    // 卸载应用侧 FATFS。IDF 6.1 必须传挂载时返回的原始 card 指针(传 nullptr
+    // 直接返回 ESP_ERR_INVALID_ARG), 所以这里保存了 card_。失败时保持 mounted_ 不变。
+    esp_err_t deinit();
 
     // Save a new entry
     bool saveEntry(const std::string &text);
@@ -88,6 +92,7 @@ private:
     bool m_indexValid = false;
 
     bool mounted_ = false;
+    sdmmc_card_t *card_ = nullptr;  // esp_vfs_fat_sdcard_unmount() 需要原始指针
 };
 
 extern JournalStorage g_journal;

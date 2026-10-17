@@ -106,14 +106,21 @@ bool JournalStorage::begin() {
     esp_err_t ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SD card mount failed: %d", ret);
+        card_ = nullptr;
         mounted_ = false;
         return false;
     }
 
     if (card) {
         sdmmc_card_print_info(stdout, card);
+        card_ = card;
         mounted_ = true;
     }
+
+    // 重挂后必须重扫: U盘模式期间电脑可能增删/改名文件, 旧索引不能再用。
+    m_fileIndex.clear();
+    m_dateSet.clear();
+    m_indexValid = false;
 
     if (!s_sd_mutex) s_sd_mutex = xSemaphoreCreateRecursiveMutex();
     ensureDir();
@@ -121,11 +128,31 @@ bool JournalStorage::begin() {
     return true;
 }
 
-void JournalStorage::deinit() {
+esp_err_t JournalStorage::deinit() {
+    // 与 safe_file / BT 等跨任务写者共用同一把递归锁: 拿到锁之前它们可能已经
+    // 通过了 usbMscActive() 检查, 必须在锁内完成卸载, 不能和 fopen 撞车。
+    SemaphoreHandle_t m = s_sd_mutex;
+    if (m) xSemaphoreTakeRecursive(m, portMAX_DELAY);
+
+    esp_err_t err = ESP_OK;
     if (mounted_) {
-        esp_vfs_fat_sdcard_unmount("/sdcard", nullptr);
-        mounted_ = false;
+        // 注意: IDF 6.1 用 card 指针反查 mount context, 传 nullptr 会直接
+        // 返回 ESP_ERR_INVALID_ARG —— 卡根本卸载不掉。
+        err = esp_vfs_fat_sdcard_unmount("/sdcard", card_);
+        if (err == ESP_OK) {
+            card_ = nullptr;
+            mounted_ = false;
+            m_fileIndex.clear();
+            m_dateSet.clear();
+            m_indexValid = false;
+            ESP_LOGI(TAG, "SD card unmounted");
+        } else {
+            ESP_LOGE(TAG, "SD card unmount failed: %s", esp_err_to_name(err));
+        }
     }
+
+    if (m) xSemaphoreGiveRecursive(m);
+    return err;
 }
 
 std::string JournalStorage::basePath() {

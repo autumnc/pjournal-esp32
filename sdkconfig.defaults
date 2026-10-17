@@ -73,6 +73,11 @@ CONFIG_ESP_EVENT_LOOP_IN_EXT_RAM=y
 # FATFS
 CONFIG_FATFS_LFN_HEAP=y
 
+# U盘模式: TinyUSB Mass Storage Class, 把 SD 卡整卡暴露给电脑。
+# FIFO 保持默认 512B(S3 默认值), 内部 RAM 优先; 挂载路径由代码显式传入,
+# 不依赖 CONFIG_TINYUSB_MSC_MOUNT_PATH。
+CONFIG_TINYUSB_MSC_ENABLED=y
+
 # Console
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 

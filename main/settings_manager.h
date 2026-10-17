@@ -8,6 +8,8 @@ public:
     std::string getString(const std::string &key, const std::string &def = "");
     void setString(const std::string &key, const std::string &val);
     void erase(const std::string &key);
+    // 清空内存缓存: 退出 U 盘模式后调用, 让电脑改过的设置文件重新从 SD 读取。
+    void invalidateCache();
 
     // Convenience accessors
     std::string flomoEmail();
@@ -49,7 +51,7 @@ public:
     bool imeDebug();  // hidden: log IME candidate scoring details
     std::string editorOrientation();  // "horizontal"(横排) 或 "vertical"(竖排)
     std::string verticalReferenceLineStyle();  // "solid"(实线) / "dash"(虚线) / "dot"(点状虚线)
-    bool typingClickEnabled();  // 打字机模式下是否播放打字音效
+    bool typingClickEnabled();  // 编辑器中是否播放打字音效(与输入模式无关)
     std::string clickChineseMode();  // "key"(每键一声) / "count"(上屏按字数) / "single"(上屏单声)
     int typingClickVolume();  // 0..100,打字机音效音量
     std::string typingClickTimbre();  // 18 种轴体采样音色 key,见 click_samples.cpp k_sets

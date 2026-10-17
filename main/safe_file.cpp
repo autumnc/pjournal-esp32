@@ -1,5 +1,6 @@
 #include "safe_file.h"
 #include "io_probe.h"
+#include "usb_msc.h"
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
@@ -8,6 +9,12 @@
 #include <esp_log.h>
 
 static const char *TAG = "SafeFile";
+
+// 注意: 这里刻意不取 SD 锁。JournalStorage 的公开方法持 SD 锁时会调
+// g_settings.versionHistory(), 而 SettingsManager 持自己的 cache 锁时又会走
+// safe_file —— 两把锁顺序相反, 再加一层 SD 锁会造成 ABBA 死锁。跨任务的 SD
+// 写者只有 IME(进入 U 盘模式前已排空)和 BT(自己在 bt_keyboard.cpp 里取锁),
+// 主任务上的 UI 写和进入/退出本来就不会并发。
 
 bool fileExists(const std::string &path) {
     struct stat st;
@@ -63,6 +70,7 @@ bool ensureDirPath(const std::string &path) {
 }
 
 std::string readWholeFile(const std::string &path) {
+    if (usbMscActive()) return "";
     repairSafeWriteFile(path);
     FILE *f = fopen(path.c_str(), "r");
     if (!f) return "";
@@ -87,6 +95,7 @@ static bool flushAndClose(FILE *f) {
 }
 
 void repairSafeWriteFile(const std::string &path) {
+    if (usbMscActive()) return;
     std::string tmp = path + ".tmp";
     std::string bak = path + ".bak";
     bool hasFinal = fileExists(path);
@@ -98,6 +107,10 @@ void repairSafeWriteFile(const std::string &path) {
 }
 
 bool safeWriteFile(const std::string &path, const std::string &content) {
+    if (usbMscActive()) {
+        ESP_LOGW(TAG, "SD owned by USB host, skip write: %s", path.c_str());
+        return false;
+    }
     // 合计探针: 含 fopen / 数据写 / fsync / 两次 rename / 两次 remove。
     // 和下面"数据+fsync"那条一比, 差值就是 FATFS 元数据操作(rename/remove)的开销。
     char probeDetail[144];

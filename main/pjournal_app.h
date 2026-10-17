@@ -22,6 +22,7 @@ enum AppState {
     APP_VOICE,
     APP_POLISH,
     APP_POLISH_PROMPT,
+    APP_USB_MSC,
     APP_QUIT,
 };
 

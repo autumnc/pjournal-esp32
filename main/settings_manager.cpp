@@ -1,5 +1,6 @@
 #include "settings_manager.h"
 #include "safe_file.h"
+#include "usb_msc.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -27,6 +28,9 @@ std::string SettingsManager::get(const std::string &key) {
     std::lock_guard<std::mutex> lock(s_cacheMutex);
     auto it = s_cache.find(key);
     if (it != s_cache.end()) return it->second;
+    // U盘模式期间卡归电脑, 不能 fopen。未缓存的键按空值处理(退出后会
+    // invalidateCache, 下次读取重新从 SD 拿)。
+    if (usbMscActive()) return "";
     std::string path = std::string(BASE_DIR) + "/" + key;
     repairSafeWriteFile(path);
     FILE *f = fopen(path.c_str(), "r");
@@ -52,6 +56,12 @@ std::string SettingsManager::get(const std::string &key) {
 
 void SettingsManager::set(const std::string &key, const std::string &val) {
     std::lock_guard<std::mutex> lock(s_cacheMutex);
+    if (usbMscActive()) {
+        // 卡归电脑: 只更新内存, 不落盘。退出 U 盘模式后 invalidateCache 会丢弃它,
+        // 避免用设备侧的旧值覆盖电脑刚改过的文件。
+        s_cache[key] = val;
+        return;
+    }
     mkdir(BASE_DIR, 0777);
     std::string path = std::string(BASE_DIR) + "/" + key;
     if (!safeWriteFile(path, val)) {
@@ -73,8 +83,14 @@ void SettingsManager::setString(const std::string &key, const std::string &val) 
 void SettingsManager::erase(const std::string &key) {
     std::lock_guard<std::mutex> lock(s_cacheMutex);
     s_cache.erase(key);
+    if (usbMscActive()) return;  // 卡归电脑, 不能删文件
     std::string path = std::string(BASE_DIR) + "/" + key;
     remove(path.c_str());
+}
+
+void SettingsManager::invalidateCache() {
+    std::lock_guard<std::mutex> lock(s_cacheMutex);
+    s_cache.clear();
 }
 
 // Convenience accessors

@@ -1,4 +1,6 @@
 #include "bt_keyboard.h"
+#include "journal_storage.h"
+#include "usb_msc.h"
 #include <cstring>
 #include <cstdio>
 #include <sys/stat.h>
@@ -21,6 +23,18 @@
 #include <esp_hid_common.h>
 
 static const char *TAG = "BtKeybrd";
+
+// U盘模式期间卡归电脑, 配对表的读写要跳过。HID 回调跑在另一个任务上,
+// 所以先查标志, 再在 SD 锁内复查(JournalStorage::deinit 持同一把锁)。
+namespace {
+struct BtSdLock {
+    SemaphoreHandle_t m;
+    BtSdLock() : m(JournalStorage::sdMutex()) {
+        if (m) xSemaphoreTakeRecursive(m, portMAX_DELAY);
+    }
+    ~BtSdLock() { if (m) xSemaphoreGiveRecursive(m); }
+};
+}  // namespace
 
 #define HID_REPORT_LEN  8
 #define MAX_KEYS        6
@@ -1096,6 +1110,14 @@ void BtKeyboard::savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_t
     } else {
         snprintf(s_paired[0].name, sizeof(s_paired[0].name), "BLE-%02x%02x%02x", bda[3], bda[4], bda[5]);
     }
+    // RAM 列表已经更新; U盘模式下只放弃落盘(退出后列表仍可用, 排序可能略旧)。
+    if (usbMscActive()) {
+        ESP_LOGW(TAG, "U-disk mode active, skip saving paired devices");
+        return;
+    }
+    BtSdLock lock;
+    if (usbMscActive()) return;
+
     mkdir("/sdcard/settings", 0777);
     FILE *f = fopen("/sdcard/settings/bt_paired", "w");
     if (!f) {
@@ -1113,6 +1135,11 @@ void BtKeyboard::savePairedDevice(const uint8_t *bda, esp_ble_addr_type_t addr_t
 }
 
 void BtKeyboard::loadPairedDevices() {
+    // 不要清空 RAM 列表后才发现卡不可读。
+    if (usbMscActive()) return;
+    BtSdLock lock;
+    if (usbMscActive()) return;
+
     s_paired_count = 0;
     FILE *f = fopen("/sdcard/settings/bt_paired", "r");
     if (!f) return;
@@ -1159,6 +1186,9 @@ bool BtKeyboard::removePairedDevice(const uint8_t *bda) {
         if (memcmp(s_paired[i].bda, bda, ESP_BD_ADDR_LEN) == 0) {
             for (int j = i; j < s_paired_count - 1; j++) s_paired[j] = s_paired[j + 1];
             s_paired_count--;
+            if (usbMscActive()) return true;
+            BtSdLock lock;
+            if (usbMscActive()) return true;
             FILE *f = fopen("/sdcard/settings/bt_paired", "w");
             if (!f) { ESP_LOGE(TAG, "Failed to save paired devices"); return true; }
             for (int k = 0; k < s_paired_count; k++) {

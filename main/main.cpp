@@ -16,6 +16,8 @@
 #include "screen_outline.h"
 #include "screen_bt_manage.h"
 #include "screen_file_manager.h"
+#include "screen_usb_msc.h"
+#include "usb_msc.h"
 #include "screen_voice.h"
 #include "screen_polish.h"
 #include "screen_polish_prompt.h"
@@ -305,6 +307,7 @@ static void checkLightSleep(AppState state) {
     if (!g_settings.autoSleep()) return;
     if (g_wifi.isConnected()) return;  // 网络操作中不休眠
     if (state == APP_BT_MANAGE) return;  // 用户在蓝牙管理界面
+    if (state == APP_USB_MSC) return;    // U盘模式:卡归电脑, 休眠会断 USB
 
     static int64_t s_last_wake_us = 0;
     int64_t now = esp_timer_get_time();
@@ -336,6 +339,7 @@ static uint32_t uiIdleWaitMs(AppState st) {
     switch (st) {
         case APP_EDITOR:        return 50;
         case APP_VOICE:         return 50;
+        case APP_USB_MSC:       return 50;  // 电脑挂载/占用状态变化要跟手
         case APP_MAIN:          return 200;
         case APP_FILE_MANAGER:  return 200;
         case APP_SYNC_WEBDAV:
@@ -573,7 +577,7 @@ extern "C" void app_main() {
         // 的 fsync 和最多 4 个词典的整表重写, 原本挂在按键处理里, 停顿后敲的第一个键
         // 会被它挡住一下 —— 现在推到"用户确实停手了"的空档。强制落盘(休眠/退出)不走
         // 这里, 见 enterLightSleep()。
-        if (key == 0 && g_ime.hasPendingUserDictWrites()) {
+        if (key == 0 && currentState != APP_USB_MSC && g_ime.hasPendingUserDictWrites()) {
             static int64_t s_last_dict_flush_us = 0;
             int64_t now_us = esp_timer_get_time();
             if (s_last_activity_us != 0 &&
@@ -649,8 +653,8 @@ extern "C" void app_main() {
             static int bt_try_idx = 0;
             static bool bt_was_connected = false;
 
-            if (currentState == APP_BT_MANAGE) {
-                // 用户正在管理面板, 暂停自动重连
+            if (currentState == APP_BT_MANAGE || currentState == APP_USB_MSC) {
+                // 管理面板 / U盘模式(卡归电脑) 期间暂停自动重连和列表重载
                 bt_was_connected = false;
                 last_bt_retry_us = 0;
             } else if (g_bt.isConnected()) {
@@ -741,6 +745,9 @@ extern "C" void app_main() {
                                currentState == APP_POLISH_PROMPT) {
                         // 润色面板/提示词编辑: 长按不动作,避免误进蓝牙管理
                         key = 0;
+                    } else if (currentState == APP_USB_MSC) {
+                        // U盘模式: 长按不动作,避免误进蓝牙管理
+                        key = 0;
                     } else {
                         currentState = APP_BT_MANAGE;
                         key = 0;
@@ -813,6 +820,11 @@ extern "C" void app_main() {
                     (esp_timer_get_time() - btn_boot.press_start_us) >= BTN_LONG_PRESS_US) {
                     if (currentState == APP_BT_MANAGE) {
                         // 长按→Esc(管理模式退出/扫描模式返回)
+                        btn_boot.long_fired = true;
+                        s_pending_single.key = 0;
+                        key = 0x1B;
+                    } else if (currentState == APP_USB_MSC) {
+                        // U盘模式: 长按 BOOT 也退出(屏幕上的提示), 不进入休眠
                         btn_boot.long_fired = true;
                         s_pending_single.key = 0;
                         key = 0x1B;
@@ -897,7 +909,8 @@ extern "C" void app_main() {
         }
 
         // Global Ctrl+I → inspiration panel (works from any screen including editor)
-        if (key == KEY_CTRL_I && currentState != APP_INSPIRATION && !app_editor_search_active() && !app_editor_help_active()) {
+        if (key == KEY_CTRL_I && currentState != APP_INSPIRATION &&
+            currentState != APP_USB_MSC && !app_editor_search_active() && !app_editor_help_active()) {
             inspReturnTo = currentState;
             if (currentState == APP_EDITOR) inspEditorReturnTo = ctx.prevState;
             currentState = APP_INSPIRATION;
@@ -993,6 +1006,24 @@ extern "C" void app_main() {
             if (key > 0) currentState = screen_file_manager_handle(key, ctx);
             else { screen_file_manager_handle(0, ctx); }
             if (currentState != APP_FILE_MANAGER) fileMgrInited = false;
+            break;
+        }
+
+        case APP_USB_MSC: {
+            g_font.setSize(22);
+            static bool usbMscInited = false;
+            if (!usbMscInited) {
+                usbMscInited = true;
+                // init 里先画「正在进入」再同步执行进入流程; 失败已回滚并写 statusMessage
+                AppState next = screen_usb_msc_init(ctx);
+                if (next != APP_USB_MSC) {
+                    usbMscInited = false;
+                    currentState = next;
+                    break;
+                }
+            }
+            currentState = screen_usb_msc_handle(key, ctx);
+            if (currentState != APP_USB_MSC) usbMscInited = false;
             break;
         }
 
