@@ -384,7 +384,7 @@ static void addSegPrefixCandidates(std::vector<uint16_t> &indices,
 }
 
 static void addUserPrefixIndexMatches(std::vector<uint16_t> &indices,
-                                      const std::unordered_map<int, std::vector<uint16_t>> &index,
+                                      const UserCodeIndex &index,
                                       const char *code,
                                       int len,
                                       int maxItems = 0) {
@@ -408,7 +408,7 @@ static std::string userPrefixKeyString(const char *code, int len) {
 }
 
 static void addUserPrefixIndexMatches(std::vector<uint16_t> &indices,
-                                      const std::unordered_map<std::string, std::vector<uint16_t>> &index,
+                                      const UserPrefixIndex &index,
                                       const char *code,
                                       int len,
                                       int maxItems = 0) {
@@ -424,8 +424,8 @@ static void addUserPrefixIndexMatches(std::vector<uint16_t> &indices,
 }
 
 static void addUserLookupIndexMatches(std::vector<uint16_t> &indices,
-                                      const std::unordered_map<int, std::vector<uint16_t>> &index,
-                                      const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex,
+                                      const UserCodeIndex &index,
+                                      const UserPrefixIndex &prefixIndex,
                                       const char *code,
                                       int len,
                                       int maxItems = 0) {
@@ -1852,10 +1852,10 @@ void IME::markUserWordIndexesDirty(const char *reason) {
 }
 
 void IME::indexUserWordEntry(uint16_t idx, const UserEntry &p,
-                             std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                             std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                             std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                             std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+                             UserCodeIndex &codeIndex,
+                             UserCodeIndex &initialIndex,
+                             UserPrefixIndex &codePrefixIndex,
+                             UserPrefixIndex &initialPrefixIndex) {
     int codeKey = segPrefixKey(p.code.c_str(), (int)p.code.length());
     if (codeKey < 26 * 26) codeIndex[codeKey].push_back(idx);
     std::string codePrefixKey = userPrefixKeyString(p.code.c_str(), (int)p.code.length());
@@ -1878,10 +1878,10 @@ void IME::indexUserWordEntry(uint16_t idx, const UserEntry &p,
 }
 
 void IME::sortUserIndexMaps(const std::vector<UserEntry> &entries,
-                            std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                            std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                            std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                            std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+                            UserCodeIndex &codeIndex,
+                            UserCodeIndex &initialIndex,
+                            UserPrefixIndex &codePrefixIndex,
+                            UserPrefixIndex &initialPrefixIndex) {
     auto sortByCount = [&](auto &map) {
         for (auto &kv : map) {
             std::stable_sort(kv.second.begin(), kv.second.end(),
@@ -1899,14 +1899,14 @@ void IME::sortUserIndexMaps(const std::vector<UserEntry> &entries,
 }
 
 void IME::sortUserIndexMapsAfterAppend(const std::vector<UserEntry> &entries,
-                                       std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                                       std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                                       std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                                       std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex) {
+                                       UserCodeIndex &codeIndex,
+                                       UserCodeIndex &initialIndex,
+                                       UserPrefixIndex &codePrefixIndex,
+                                       UserPrefixIndex &initialPrefixIndex) {
     auto countOf = [&entries](uint16_t i) {
         return i < entries.size() ? entries[i].count : 0;
     };
-    auto repairIfNeeded = [&](std::vector<uint16_t> &bucket) {
+    auto repairIfNeeded = [&](PsramU16Vec &bucket) {
         size_t n = bucket.size();
         if (n < 2) return;
         if (countOf(bucket[n - 2]) >= countOf(bucket[n - 1])) return;
@@ -1932,10 +1932,10 @@ void IME::rebuildUserWordIndexes() {
     int64_t perfStartUs = esp_timer_get_time();
 #endif
     auto build = [](const std::vector<UserEntry> &entries,
-                    std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                    std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                    std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                    std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex,
+                    UserCodeIndex &codeIndex,
+                    UserCodeIndex &initialIndex,
+                    UserPrefixIndex &codePrefixIndex,
+                    UserPrefixIndex &initialPrefixIndex,
                     int64_t &insertUs, int64_t &sortUs) {
         codeIndex.clear();
         initialIndex.clear();
@@ -2523,7 +2523,7 @@ void IME::removeDynamicUserWordAt(size_t i) {
         const bool move = (i != last);
         auto fix = [&](auto &map) {
             for (auto it = map.begin(); it != map.end(); ) {
-                std::vector<uint16_t> &bucket = it->second;
+                PsramU16Vec &bucket = it->second;
                 bucket.erase(std::remove(bucket.begin(), bucket.end(), dead), bucket.end());
                 if (move) {
                     for (uint16_t &v : bucket) {
@@ -3563,8 +3563,8 @@ void IME::lookup() {
         bool skipBroadConsonantUserScan = _fixedCandidatePaging && !hasVowel && qlen <= 2;
         bool skipSingleSyllableUserScan = hasVowel && primarySplit.tokens.size() <= 1 && qlen >= 3;
         auto scanUserWords = [&](const std::vector<UserEntry> &entries,
-                                 const std::unordered_map<int, std::vector<uint16_t>> &index,
-                                 const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex,
+                                 const UserCodeIndex &index,
+                                 const UserPrefixIndex &prefixIndex,
                                  int sourceRank) {
         std::vector<uint16_t> indices;
         int scanLimit = _fixedCandidatePaging ? IME_MAX_USER_FIXED_SCAN : IME_MAX_USER_PREFIX_SCAN;
@@ -4001,8 +4001,8 @@ void IME::lookup() {
         int64_t t = IME_PERF_NOW();
         RankedList userInitFreq;
         auto scanInitialWords = [&](const std::vector<UserEntry> &entries,
-                                    const std::unordered_map<int, std::vector<uint16_t>> &index,
-                                    const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex) {
+                                    const UserCodeIndex &index,
+                                    const UserPrefixIndex &prefixIndex) {
         std::vector<uint16_t> indices;
         addUserLookupIndexMatches(indices, index, prefixIndex, q, qlen);
         for (uint16_t entryIdx : indices) {
@@ -4435,8 +4435,8 @@ void IME::lookupSegmented() {
     // 1) 用户词典: 显式分词和去分隔编码共享学习结果
     RankedList userMatches;
     auto scanSegmentedUserWords = [&](const std::vector<UserEntry> &entries,
-                                      const std::unordered_map<int, std::vector<uint16_t>> &index,
-                                      const std::unordered_map<std::string, std::vector<uint16_t>> &prefixIndex) {
+                                      const UserCodeIndex &index,
+                                      const UserPrefixIndex &prefixIndex) {
     std::vector<uint16_t> indices;
     addUserPrefixIndexMatches(indices, index, q.c_str(), (int)q.length());
     addUserPrefixIndexMatches(indices, prefixIndex, q.c_str(), (int)q.length());
@@ -4749,7 +4749,7 @@ void IME::collectSentenceArcs(int pos, const char *code, int len) {
     // 3) 用户词库词弧。桶按前两位分且桶很小, 直接扫桶比走词典便宜; 桶内已按使用
     //    次数降序, 所以位次就是频率先验。
     auto scanUserArcs = [&](const std::vector<UserEntry> &entries,
-                            const std::unordered_map<int, std::vector<uint16_t>> &index) {
+                            const UserCodeIndex &index) {
         auto it = index.find(segPrefixKey(code + pos, remain >= 2 ? 2 : 1));
         if (it == index.end()) return;
 #if PJOURNAL_IME_PERF_LOG

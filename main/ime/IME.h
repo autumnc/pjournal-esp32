@@ -5,9 +5,48 @@
 #include <utility>
 #include <cstdint>
 #include <cstddef>
+#include <cstdlib>
+#include <functional>
 #include <unordered_map>
+#include <esp_heap_caps.h>
 #include "ime_config.h"
 #include "yong_dict.h"
+
+// 用户词索引与预测索引的节点/桶全是几十字节的小块。默认 malloc 在
+// SPIRAM_MALLOC_ALWAYSINTERNAL=512 下会把它们强制放进内部 RAM —— 实测词索引
+// 重建约 48KB、预测索引重建约 53KB，内部 RAM 因此见底，SDMMC 连 512B 的 DMA
+// 缓冲都分配不出来。这两个索引查词时只读、只有重建时才分配，放 PSRAM 对热路径
+// 几乎无影响，却能一次性让出约 100KB 内部 RAM。
+template <class T>
+struct PsramAllocator {
+    using value_type = T;
+
+    PsramAllocator() noexcept {}
+    template <class U>
+    PsramAllocator(const PsramAllocator<U> &) noexcept {}
+
+    T *allocate(std::size_t n) {
+        const size_t bytes = n * sizeof(T);
+        void *p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!p) p = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);  // PSRAM 异常时退回内部
+        if (!p) abort();  // 与默认 operator new 在 -fno-exceptions 下的行为一致
+        return static_cast<T *>(p);
+    }
+    void deallocate(T *p, std::size_t) noexcept { heap_caps_free(p); }
+
+    template <class U>
+    bool operator==(const PsramAllocator<U> &) const noexcept { return true; }
+    template <class U>
+    bool operator!=(const PsramAllocator<U> &) const noexcept { return false; }
+};
+
+using PsramU16Vec = std::vector<uint16_t, PsramAllocator<uint16_t>>;
+using UserCodeIndex =
+    std::unordered_map<int, PsramU16Vec, std::hash<int>, std::equal_to<int>,
+                       PsramAllocator<std::pair<const int, PsramU16Vec>>>;
+using UserPrefixIndex =
+    std::unordered_map<std::string, PsramU16Vec, std::hash<std::string>, std::equal_to<std::string>,
+                       PsramAllocator<std::pair<const std::string, PsramU16Vec>>>;
 
 class IME {
 public:
@@ -162,15 +201,15 @@ private:
     std::vector<UserEntry> _userPredictWords;
     std::vector<UserEntry> _userPredictRejectWords;
     std::vector<PendingJournalEntry> _pendingUserDictJournal;
-    std::unordered_map<int, std::vector<uint16_t>> _fixedUserCodeIndex;
-    std::unordered_map<int, std::vector<uint16_t>> _dynamicUserCodeIndex;
-    std::unordered_map<int, std::vector<uint16_t>> _fixedUserInitialIndex;
-    std::unordered_map<int, std::vector<uint16_t>> _dynamicUserInitialIndex;
-    std::unordered_map<std::string, std::vector<uint16_t>> _fixedUserCodePrefixIndex;
-    std::unordered_map<std::string, std::vector<uint16_t>> _dynamicUserCodePrefixIndex;
-    std::unordered_map<std::string, std::vector<uint16_t>> _fixedUserInitialPrefixIndex;
-    std::unordered_map<std::string, std::vector<uint16_t>> _dynamicUserInitialPrefixIndex;
-    std::unordered_map<std::string, std::vector<uint16_t>> _userPredictIndex;
+    UserCodeIndex _fixedUserCodeIndex;
+    UserCodeIndex _dynamicUserCodeIndex;
+    UserCodeIndex _fixedUserInitialIndex;
+    UserCodeIndex _dynamicUserInitialIndex;
+    UserPrefixIndex _fixedUserCodePrefixIndex;
+    UserPrefixIndex _dynamicUserCodePrefixIndex;
+    UserPrefixIndex _fixedUserInitialPrefixIndex;
+    UserPrefixIndex _dynamicUserInitialPrefixIndex;
+    UserPrefixIndex _userPredictIndex;
     bool _userWordIndexesDirty = true;
     // Last caller to invalidate the positional lookup indexes; reported by the
     // "perf rebuild" log so a stray invalidation is attributable. PERF_LOG only.
@@ -201,24 +240,24 @@ private:
     void rebuildUserPredictIndex();
     // Push one entry's keys into the four lookup maps (push-only, no sort/clear).
     static void indexUserWordEntry(uint16_t idx, const UserEntry &entry,
-                                   std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                                   std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                                   std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                                   std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex);
+                                   UserCodeIndex &codeIndex,
+                                   UserCodeIndex &initialIndex,
+                                   UserPrefixIndex &codePrefixIndex,
+                                   UserPrefixIndex &initialPrefixIndex);
     static void sortUserIndexMaps(const std::vector<UserEntry> &entries,
-                                  std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                                  std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                                  std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                                  std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex);
+                                  UserCodeIndex &codeIndex,
+                                  UserCodeIndex &initialIndex,
+                                  UserPrefixIndex &codePrefixIndex,
+                                  UserPrefixIndex &initialPrefixIndex);
     // Append-path variant of the above. A bucket is count-sorted after the last full
     // rebuild and appends only ever push onto its tail, so the only possible disorder
     // is that tail pair. Re-sorting just those buckets skips a std::stable_sort (which
     // allocates a temporary buffer even for 2-element buckets) on every other bucket.
     static void sortUserIndexMapsAfterAppend(const std::vector<UserEntry> &entries,
-                                             std::unordered_map<int, std::vector<uint16_t>> &codeIndex,
-                                             std::unordered_map<int, std::vector<uint16_t>> &initialIndex,
-                                             std::unordered_map<std::string, std::vector<uint16_t>> &codePrefixIndex,
-                                             std::unordered_map<std::string, std::vector<uint16_t>> &initialPrefixIndex);
+                                             UserCodeIndex &codeIndex,
+                                             UserCodeIndex &initialIndex,
+                                             UserPrefixIndex &codePrefixIndex,
+                                             UserPrefixIndex &initialPrefixIndex);
     // Index one already-appended dynamic entry without a full rebuild. Falls back to
     // a full rebuild (leaving the dirty flag set) if the maps are stale.
     void appendUserWordIndexEntry(size_t entryIdx);
