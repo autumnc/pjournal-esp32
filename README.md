@@ -443,7 +443,7 @@ gh api -X POST repos/autumnc/pjournal-esp32/pages \
 
 ## 版本
 
-当前版本: v4.9.5
+当前版本: v4.9.6
 
 ## License
 

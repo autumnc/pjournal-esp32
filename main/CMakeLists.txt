@@ -91,7 +91,7 @@ idf_component_register(SRCS
         esp_hal_usb
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.5")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="4.9.6")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PJOURNAL_IME_ENABLE_PINYIN=$<BOOL:${PJOURNAL_IME_ENABLE_PINYIN}>
     PJOURNAL_IME_ENABLE_LIANGFEN=$<BOOL:${PJOURNAL_IME_ENABLE_LIANGFEN}>
