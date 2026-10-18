@@ -1,0 +1,10 @@
+{
+  "version": "4.9.7",
+  "tag": "v4.9.7",
+  "date": "2026-10-18",
+  "file": "firmware/pjournal-4.9.7-merged.bin",
+  "size": 10203408,
+  "flashOffset": 0,
+  "sha256": "3a1980431278318f1e60ab10c5911a7a6d5a18262b28d32b50adcc9ce3db8ea3",
+  "md5": "91c70f974d8dc775008ae1dda56cbe5c"
+}
