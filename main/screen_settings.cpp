@@ -54,6 +54,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"ime_candidate_highlight", "候选高亮", false, false},
     {"ime_sentence", "整句候选", false, false},
     {"ime_doc_context", "正文词优先", false, false},
+    {"_letter_sel_key", "字母选字按键", false, true},
     {"click_enabled", "打字音效", false, false},
     {"_click_chinese", "中文音效触发", false, true},
     {"_click_volume", "打字音效音量", false, true},
@@ -197,6 +198,21 @@ static int imePredictIndex(const char *k) {
 static const char *imePredictNext(int idx) {
     int n = (int)(sizeof(IME_PREDICT_OPTS) / sizeof(IME_PREDICT_OPTS[0]));
     return IME_PREDICT_OPTS[(idx + 1) % n].key;
+}
+// 字母选字触发键: 候选模式下按一下, qwertyuio 当作 1..9 选字(40% 配列)。
+// 修饰键靠 bt_keyboard 的"单击"检测(组合键不会触发), off 关闭。
+static const TimbreOpt LETTER_SEL_OPTS[] = {
+    {"tab", "Tab键"}, {"lctrl", "左Ctrl"}, {"lwin", "左Win"}, {"lalt", "左Alt"},
+    {"ralt", "右Alt"}, {"rwin", "右Win"}, {"rctrl", "右Ctrl"}, {"off", "关闭"},
+};
+static int letterSelIndex(const char *k) {
+    for (int i = 0; i < (int)(sizeof(LETTER_SEL_OPTS) / sizeof(LETTER_SEL_OPTS[0])); i++)
+        if (strcmp(k, LETTER_SEL_OPTS[i].key) == 0) return i;
+    return (int)(sizeof(LETTER_SEL_OPTS) / sizeof(LETTER_SEL_OPTS[0])) - 1;  // 未知值按"关闭"
+}
+static const char *letterSelNext(int idx) {
+    int n = (int)(sizeof(LETTER_SEL_OPTS) / sizeof(LETTER_SEL_OPTS[0]));
+    return LETTER_SEL_OPTS[(idx + 1) % n].key;
 }
 // UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
 static int fieldAt(int sel) {
@@ -1119,6 +1135,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     imePredictNext(imePredictIndex(g_settings.imePredictMode().c_str())));
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_letter_sel_key") == 0) {
+                g_settings.setString("letter_sel_key",
+                    letterSelNext(letterSelIndex(g_settings.letterSelKey().c_str())));
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_click_volume") == 0) {
                 static const int LV[] = {0, 20, 40, 60, 80, 100};
                 const int n = (int)(sizeof(LV) / sizeof(LV[0]));
@@ -1199,6 +1220,9 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_ime_predict_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          IME_PREDICT_OPTS[imePredictIndex(g_settings.imePredictMode().c_str())].label);
+            } else if (strcmp(f.key, "_letter_sel_key") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
+                         LETTER_SEL_OPTS[letterSelIndex(g_settings.letterSelKey().c_str())].label);
             } else if (strcmp(f.key, "_click_chinese") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          CLICK_CHINESE_OPTS[clickChineseIndex(g_settings.clickChineseMode().c_str())].label);

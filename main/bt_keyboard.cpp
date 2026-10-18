@@ -62,6 +62,13 @@ struct BtSdLock {
 #define KEY_SEARCH     0xA2
 #define KEY_HELP       0xA3
 #define KEY_REDO       0xA4
+// 字母选字触发键里修饰键的"单击"事件。必须与 pjournal_app.h 的同名宏一致。
+#define KEY_MOD_TAP_LCTRL 0xB0
+#define KEY_MOD_TAP_LGUI  0xB1
+#define KEY_MOD_TAP_LALT  0xB2
+#define KEY_MOD_TAP_RALT  0xB3
+#define KEY_MOD_TAP_RGUI  0xB4
+#define KEY_MOD_TAP_RCTRL 0xB5
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 
@@ -112,6 +119,19 @@ static bool s_connecting = false;  // 新增：标记正在连接中
 static int64_t s_connect_started_us = 0;  // 本次连接尝试的起始时刻(仅在 s_connecting 为真时有意义)
 static bool s_deiniting = false;   // deinit 进行中:阻止重连逻辑再发起新连接尝试
 static bool s_shift_tap_armed = false;  // 左Shift 单击检测武装标记
+// 字母选字触发键(设置里可配置)的单击检测: 六种修饰键各一个武装标记。
+// HID modifier 位: LCtrl=0x01 LAlt=0x04 LGUI=0x08 RCtrl=0x10 RAlt=0x40 RGUI=0x80。
+struct ModTapArm { uint8_t bit; uint8_t code; };
+static const ModTapArm s_mod_tap_arms[] = {
+    {0x01, KEY_MOD_TAP_LCTRL},
+    {0x08, KEY_MOD_TAP_LGUI},
+    {0x04, KEY_MOD_TAP_LALT},
+    {0x40, KEY_MOD_TAP_RALT},
+    {0x80, KEY_MOD_TAP_RGUI},
+    {0x10, KEY_MOD_TAP_RCTRL},
+};
+static const int NUM_MOD_TAP = sizeof(s_mod_tap_arms) / sizeof(s_mod_tap_arms[0]);
+static bool s_mod_tap_armed[NUM_MOD_TAP] = {false};
 static int s_kb_battery = -1;           // 键盘电池电量 %，-1=未知/未连接
 static uint8_t s_last_keys[MAX_KEYS] = {0};
 static uint8_t s_last_mod = 0;
@@ -308,6 +328,7 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
         memset(s_key_press_time, 0, MAX_KEYS * sizeof(int64_t));
         memset(s_last_repeat_time, 0, MAX_KEYS * sizeof(int64_t));
         s_shift_tap_armed = false;
+        memset(s_mod_tap_armed, 0, sizeof(s_mod_tap_armed));
         if (s_self) s_self->setConnected(false);
         ESP_LOGI(TAG, "Keyboard disconnected (rsn=0x%x)", param->close.reason);
         break;
@@ -321,6 +342,12 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
         bool lshiftNow = (mod & 0x02) != 0;
         bool lshiftWas = (s_last_mod & 0x02) != 0;
         if (lshiftNow && !lshiftWas) s_shift_tap_armed = true;
+        // 修饰键按下就开始武装; 期间按了别的键(见下面的 clear)或与其它键组合就解除。
+        for (int i = 0; i < NUM_MOD_TAP; i++) {
+            bool now = (mod & s_mod_tap_arms[i].bit) != 0;
+            bool was = (s_last_mod & s_mod_tap_arms[i].bit) != 0;
+            if (now && !was) s_mod_tap_armed[i] = true;
+        }
         const uint8_t *keys = (len >= HID_REPORT_LEN) ? (data + 2) : (data + 1);
         int nkeys = (len >= HID_REPORT_LEN) ? 6 : ((int)len - 1);
         if (nkeys > MAX_KEYS) nkeys = MAX_KEYS;
@@ -349,6 +376,8 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
             // If new key press, record time and send event
             if (!old) {
                 s_shift_tap_armed = false;  // 与Shift组合使用的按键按下, 取消单击
+                // 与修饰键组合使用的按键按下 → 取消这些修饰键的单击
+                memset(s_mod_tap_armed, 0, sizeof(s_mod_tap_armed));
                 // Find empty slot for this new key
                 for (int j = 0; j < MAX_KEYS; j++) {
                     if (s_last_keys[j] == 0) {
@@ -444,6 +473,18 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                 xQueueSendToBack(s_queue, &ev, 0);
             }
             s_shift_tap_armed = false;
+        }
+        // 修饰键抬手: 这一次按下期间没按别的键才发单击事件。
+        for (int i = 0; i < NUM_MOD_TAP; i++) {
+            bool now = (mod & s_mod_tap_arms[i].bit) != 0;
+            bool was = (s_last_mod & s_mod_tap_arms[i].bit) != 0;
+            if (!now && was) {
+                if (s_mod_tap_armed[i]) {
+                    uint8_t ev = s_mod_tap_arms[i].code;
+                    xQueueSendToBack(s_queue, &ev, 0);
+                }
+                s_mod_tap_armed[i] = false;
+            }
         }
 
         s_last_mod = mod;

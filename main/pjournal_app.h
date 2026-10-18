@@ -62,6 +62,14 @@ struct ScreenContext {
 #define KEY_SEARCH     0xA2
 #define KEY_HELP       0xA3
 #define KEY_REDO       0xA4
+// 字母选字触发键里修饰键的"单击"事件(左/右 Ctrl/Win/Alt)。Tab 走 0x09。
+// 必须与 bt_keyboard.cpp 的同名宏一致。
+#define KEY_MOD_TAP_LCTRL 0xB0
+#define KEY_MOD_TAP_LGUI  0xB1
+#define KEY_MOD_TAP_LALT  0xB2
+#define KEY_MOD_TAP_RALT  0xB3
+#define KEY_MOD_TAP_RGUI  0xB4
+#define KEY_MOD_TAP_RCTRL 0xB5
 // Ctrl+0-9 → 快捷编辑文件切换 (0x90-0x99)
 #define KEY_FILE_BASE 0x90
 

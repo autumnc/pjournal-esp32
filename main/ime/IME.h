@@ -89,6 +89,13 @@ public:
     }
     bool composing() const { return _code.length() > 0 || _predicting || _lfMode || _deleteMode || _vMode || _englishCompose; }
 
+    // 字母选字待选：设置里配了"字母选字按键"后，候选模式下按一下该键，
+    // 这一次的 q/w/e/r/t/y/u/i/o 就当成数字 1..9 选字（见 handleKey）。
+    bool letterSelectArmed() const { return _letterSelArmed; }
+    void disarmLetterSelect() { _letterSelArmed = false; }
+    // 数字 1..9 对应的字母，翻译表和屏幕提示共用这一份。
+    static const char *letterSelKeys();
+
     bool isLfMode() const { return _lfMode; }
     bool isDeleteMode() const { return _deleteMode; }
     std::string modeLabel() const;
@@ -319,6 +326,7 @@ private:
     int _stableBoostCount = 0;
     int64_t _lastAsciiCommitUs = 0;
     int _sel = 0;  // 页内高亮候选(左右键移动)
+    bool _letterSelArmed = false;  // 见 letterSelectArmed()
     bool _englishCompose = false;
     bool _englishDictLoaded = false;
     std::vector<std::string> _englishWords;

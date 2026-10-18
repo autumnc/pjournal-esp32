@@ -4,6 +4,7 @@
 #include "trad_table.h"
 #include "kaomoji_table.h"
 #include "settings_manager.h"
+#include "pjournal_app.h"   // KEY_MOD_TAP_*(修饰键单击, 字母选字触发键)
 #include "safe_file.h"
 #include "io_probe.h"
 #include <cstring>
@@ -3286,6 +3287,7 @@ void IME::reset() {
     _deleteMode = false;
     _vMode = false;
     _sel = 0;
+    _letterSelArmed = false;
     _fixedCandidatePaging = false;
     _candidateLimit = MAX_CANDIDATES;
     _englishCompose = false;
@@ -5261,10 +5263,59 @@ bool IME::handleFullwidthChar(int key, std::string &out) {
     return false;
 }
 
+// 数字 1..9 对应的字母。翻译（handleKey）和候选条标签（ui_helpers）都读这一份，
+// 两处各写一遍，改字母集时迟早对不上。
+const char *IME::letterSelKeys() { return "qwertyuio"; }
+
+// 这一次按键是不是设置里配的"字母选字按键"。只有 Tab 和六种修饰键单击两种可能，
+// 调用处先按键码粗筛，避免在按键热路径上每次查一遍设置。
+static bool isLetterSelArmKey(int key) {
+    const std::string k = g_settings.letterSelKey();
+    if (k.empty() || k == "off") return false;
+    switch (key) {
+    case '\t':             return k == "tab";
+    case KEY_MOD_TAP_LCTRL: return k == "lctrl";
+    case KEY_MOD_TAP_LGUI:  return k == "lwin";
+    case KEY_MOD_TAP_LALT:  return k == "lalt";
+    case KEY_MOD_TAP_RALT:  return k == "ralt";
+    case KEY_MOD_TAP_RGUI:  return k == "rwin";
+    case KEY_MOD_TAP_RCTRL: return k == "rctrl";
+    default: return false;
+    }
+}
+
 bool IME::handleKey(int key, std::string &out) {
     if (!_active) return false;
     // 这里原先每次按键都调 flushUserDictSaves(false) 顺手落盘。落盘已改由主循环的
     // 空闲 tick 触发(flushUserDictSavesIdle), 按键路径只标脏, 不再碰 SD。
+
+    // ── 字母选字（设置 → 字母选字按键；40% 配列没有独立数字键）──
+    // 放在所有分支之前，因为它要改的正是"这一次按键被当成哪个键"：待选期间 q..o 就是
+    // 1..9，下面的数字选字分支原样生效。反向的取消也不用另写：任何一次按键都会清旗
+    //（退格/回车/Esc 因此天然就是取消）。
+    if (key == '\t' || (key >= KEY_MOD_TAP_LCTRL && key <= KEY_MOD_TAP_RCTRL)) {
+        if (isLetterSelArmKey(key)) {
+            // 只在"候选真的是靠数字键选"的状态里开：有候选、且不在 v 模式/联想/删除态。
+            // 候选模式下开关式，再按一下取消；没有候选时 Tab 保持原来的语义。
+            const bool selState = !_page.empty() && !_vMode && !_lfMode && !_deleteMode;
+            if (selState) {
+                _letterSelArmed = !_letterSelArmed;
+                return true;
+            }
+        }
+    }
+    if (_letterSelArmed) {
+        _letterSelArmed = false;   // 一次性：不管这一下选中没有，待选都用掉了
+        // 只翻译 ASCII 字母（Shift+q 打出来的 'Q' 同样算选字）；翻页/方向等 >0x7F 的
+        // 键码不碰，非 q..o 的键照常往下走（当拼音字母接着打）。
+        if (key > 0 && key < 0x80) {
+            const char *letters = letterSelKeys();
+            const char c = (char)tolower((unsigned char)key);
+            for (int i = 0; letters[i]; i++) {
+                if (c == letters[i]) { key = '1' + i; break; }
+            }
+        }
+    }
     if (_english && !_englishCompose) {
         if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
             _englishCompose = true;

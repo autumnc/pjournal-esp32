@@ -436,9 +436,14 @@ void drawIMEUI(int baseY, bool anchorBottom) {
 
     int hl = g_ime.highlightIdx();
     int x = 4;
+    // 字母选字待选(候选模式下按了设置里的触发键): 序号画成 q. w. e. …，
+    // 画什么就得按什么。只认前 9 条，第 10 条起字母表已用完，照旧画数字。
+    const char *selKeys = g_ime.letterSelectArmed() ? IME::letterSelKeys() : nullptr;
     for (int i = 0; i < (int)cands.size(); i++) {
         char idx[16];
-        snprintf(idx, sizeof(idx), "%d.", (i % pageSize) + 1);
+        const int slot = i % pageSize;
+        if (selKeys && slot < 9) snprintf(idx, sizeof(idx), "%c.", selKeys[slot]);
+        else snprintf(idx, sizeof(idx), "%d.", slot + 1);
         std::string prefix = std::string(" ") + idx;
         std::string part = prefix + cands[i];
         int partW = g_font.textWidth(part.c_str());
