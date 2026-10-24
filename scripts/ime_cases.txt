@@ -24,3 +24,4 @@ cipin	词频	2
 duanju	短句	1
 biaodianfuhao	标点符号	3
 lanyajianpan	蓝牙键盘	3
+fangai	翻盖	3
