@@ -282,9 +282,13 @@ private:
     void rememberCommittedText(const std::string &text);
     void rememberRecentCommit(const std::string &code, const std::string &word);
     int recentCommitBoost(const std::string &code, const std::string &word) const;
+    // 单音节完整码(如 "fan")下, 词组只允许排到 Phase 2 单字之后: deferPhrases
+    // 为真时多字词不立即 append, 而是写进 deferred, 由 lookup() 在单字阶段之后补上。
     void appendRecentCommitCandidates(const std::string &code,
                                       const std::vector<std::string> &aliasCodes,
-                                      int typedLen);
+                                      int typedLen,
+                                      bool deferPhrases = false,
+                                      std::vector<std::pair<std::string, int>> *deferred = nullptr);
     bool recentlyDeletedWord(const std::string &word) const;
     bool recentlyDeletedWordHash(uint32_t hash) const;
     void rememberDeletedWord(const std::string &word);

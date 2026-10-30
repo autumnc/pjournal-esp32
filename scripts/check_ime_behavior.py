@@ -445,6 +445,8 @@ def main():
     require_source_not_contains("ime lookup hot path fuzzy setting read", lookup_body, "g_settings.imeFuzzy()")
     require_source_contains("ime fuzzy snapshot", ime_cpp, "_fuzzyConfigCache = g_settings.imeFuzzy()")
     require_source_contains("ime exact phrase promotion", ime_cpp, "exactPhraseMatches")
+    require_source_contains("ime single-syllable recent phrase deferral", ime_cpp, "deferRecentPhrases")
+    require_source_contains("ime short-code phrase learn guard", ime_cpp, "prefixMatchedPhrase")
     require_source_contains("ime shorthand denoise", ime_cpp, "curatedInitialFilled")
     require_source_contains("ime offline simulator", (ROOT / "scripts" / "ime_query_sim.py").read_text(encoding="utf-8"), "Offline approximate IME candidate query")
     require_source_contains("ime ranking cases", (ROOT / "scripts" / "check_ime_cases.py").read_text(encoding="utf-8"), "Check approximate IME candidate ranking cases")
