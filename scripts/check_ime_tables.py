@@ -6,6 +6,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "main" / "ime" / "seg_table_source.txt"
 HDR = ROOT / "main" / "ime" / "seg_table.h"
+TRAD_HDR = ROOT / "main" / "ime" / "trad_table.h"
+TRAD_LO, TRAD_HI = 0x346E, 0x9FD3
+
+# 繁简同形字不能进繁体位图, 否则简体模式会藏掉"为什么/图像/沈阳/瞭望"等正常词组。
+TRAD_MUST_BE_UNMARKED = "么仝俱像叚哩喆堃彷搧椀沈淼澂牴犇甦甯瞭礆祇筦絜耑舖菉藉衹覆迺遶邨阪陞龢"
+TRAD_MUST_BE_MARKED = "們這說會麼爲與舊縣裏"
 
 
 ENTRY_RE = re.compile(
@@ -88,6 +94,45 @@ def parse_header():
     return entries, arrays
 
 
+def parse_trad_bitmap():
+    text = TRAD_HDR.read_text(encoding="utf-8")
+    match = re.search(r"kTradBitmap\[(\d+)\] = \{(.*?)\};", text, re.S)
+    if not match:
+        raise SystemExit("trad_table.h mismatch: kTradBitmap not found")
+    values = [int(v, 16) for v in re.findall(r"0x[0-9A-Fa-f]+", match.group(2))]
+    if len(values) != int(match.group(1)):
+        raise SystemExit("trad_table.h mismatch: bitmap size")
+    return values
+
+
+def trad_marked(bitmap, ch):
+    off = ord(ch) - TRAD_LO
+    if off < 0 or off >= len(bitmap) * 8:
+        return False
+    return (bitmap[off >> 3] >> (off & 7)) & 1
+
+
+def check_trad_table():
+    bitmap = parse_trad_bitmap()
+    bad = [c for c in TRAD_MUST_BE_UNMARKED if trad_marked(bitmap, c)]
+    if bad:
+        raise SystemExit(f"trad_table.h 误标繁简同形字: {''.join(bad)}")
+    bad = [c for c in TRAD_MUST_BE_MARKED if not trad_marked(bitmap, c)]
+    if bad:
+        raise SystemExit(f"trad_table.h 漏标繁体字: {''.join(bad)}")
+    try:
+        import opencc
+    except ImportError:
+        print("OK: trad_table.h 关键位检查 (opencc 未安装, 跳过全量校验)")
+        return
+    cc = opencc.OpenCC("t2s")
+    for cp in range(TRAD_LO, TRAD_HI + 1):
+        expected = cc.convert(chr(cp)) != chr(cp)
+        if expected != bool(trad_marked(bitmap, chr(cp))):
+            raise SystemExit(f"trad_table.h 与 OpenCC t2s 不一致: U+{cp:04X}")
+    print(f"OK: trad_table.h 与 OpenCC t2s 一致 ({TRAD_HI - TRAD_LO + 1} 码位)")
+
+
 def main():
     expected = parse_source()
     actual, arrays = parse_header()
@@ -104,6 +149,7 @@ def main():
         if actual_values != expected_values:
             raise SystemExit(f"{name} mismatch")
     print(f"OK: {len(actual)} SEG_TABLE entries")
+    check_trad_table()
 
 
 if __name__ == "__main__":

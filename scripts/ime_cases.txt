@@ -25,3 +25,8 @@ duanju	短句	1
 biaodianfuhao	标点符号	3
 lanyajianpan	蓝牙键盘	3
 fangai	翻盖	3
+womenxian	我们	1
+zhegehui	这个	1
+nihaoma	你好	1
+wobuyao	我不	1
+zenmehui	怎么会	1

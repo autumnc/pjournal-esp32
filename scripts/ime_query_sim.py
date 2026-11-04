@@ -530,6 +530,43 @@ def seg_matches(entries, code, limit):
     return out
 
 
+_SYLLABLES = None
+
+
+def greedy_boundaries(code):
+    """按最长音节贪心切分, 返回每个音节末尾的位置。与 PinyinEngine::primarySplit
+    (maxVariants=1 的 DFS) 同序。"""
+    global _SYLLABLES
+    if _SYLLABLES is None:
+        _SYLLABLES = load_syllables(DEFAULT_PINYIN)
+    out = []
+    pos = 0
+    while pos < len(code):
+        best = 0
+        for ln in range(min(6, len(code) - pos), 0, -1):
+            if code[pos:pos + ln] in _SYLLABLES:
+                best = ln
+                break
+        if best == 0:
+            return []
+        pos += best
+        out.append(pos)
+    return out
+
+
+def partial_word_candidates(table, code, limit=8):
+    """IME.cpp Phase 7b 镜像: 整串没有词条时, 取能完整消费前几个音节的词典词
+    (womenxian → 我们)。候选消费到该音节边界, 剩余编码由设备端继续查词。
+    边界必须落在完整音节上, 否则 "mingti" 会被错当成 "命题"。"""
+    out = []
+    bounds = [b for b in greedy_boundaries(code) if 2 <= b < len(code)]
+    for b in sorted(bounds, reverse=True):
+        for word in table.phrases(code[:b], exact=True, limit=limit):
+            if len(word) >= 2 and word not in out:
+                out.append(word)
+    return out
+
+
 def query(table, seg_entries, code, limit):
     code = "".join(ch.lower() for ch in code if ch.isalpha())
     if not code:
@@ -546,6 +583,7 @@ def query(table, seg_entries, code, limit):
     add_many(table.singles(code, limit=16))
     add_many(seg_matches(seg_entries, code, limit=24))
     add_many(table.phrases(code, exact=False, limit=limit))
+    add_many(partial_word_candidates(table, code, limit=limit))
     return out[:limit]
 
 
