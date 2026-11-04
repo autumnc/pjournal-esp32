@@ -151,6 +151,8 @@ bool SettingsManager::autoSleep() { return get("auto_sleep") != "0"; }  // defau
 bool SettingsManager::sleepScreen() { return get("sleep_screen") == "1"; }  // default off(白屏)
 bool SettingsManager::markdownRender() { return get("md_render") != "0"; }  // default on
 bool SettingsManager::firstLineIndent() { return get("first_line_indent") == "1"; }  // default off
+bool SettingsManager::showLineNumbers() { return get("show_line_numbers") == "1"; }  // default off
+bool SettingsManager::viMode() { return get("vi_mode") == "1"; }  // default off
 bool SettingsManager::versionHistory() { return get("version_history") == "1"; }  // default off
 bool SettingsManager::recoveryDraft() { return get("recovery_draft") != "0"; }  // default on
 bool SettingsManager::verticalReferenceLine() { return get("vertical_ref_line") == "1"; }  // default off

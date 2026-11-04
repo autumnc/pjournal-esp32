@@ -88,6 +88,8 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"sleep_screen", "休眠保留画面", false, false},
     {"md_render", "Markdown渲染", false, false},
     {"first_line_indent", "首行缩进", false, false},
+    {"show_line_numbers", "显示行号", false, false},
+    {"vi_mode", "Vi 模式", false, false},
     {"_font_size", "字体大小", false, true},
     {"_sync_time", "网络同步时间", false, true},
 };
@@ -236,7 +238,8 @@ static int fieldVisibleCount() {
 static bool isToggleField(const char *key) {
     return strcmp(key, "auto_save") == 0 || strcmp(key, "auto_sleep") == 0 ||
            strcmp(key, "sleep_screen") == 0 || strcmp(key, "md_render") == 0 ||
-           strcmp(key, "first_line_indent") == 0 || strcmp(key, "version_history") == 0 ||
+           strcmp(key, "first_line_indent") == 0 || strcmp(key, "show_line_numbers") == 0 ||
+           strcmp(key, "vi_mode") == 0 || strcmp(key, "version_history") == 0 ||
            strcmp(key, "recovery_draft") == 0 || strcmp(key, "vertical_ref_line") == 0 ||
            strcmp(key, "click_enabled") == 0 || strcmp(key, "ime_sentence") == 0 ||
            strcmp(key, "ime_doc_context") == 0 || strcmp(key, "ime_candidate_highlight") == 0;

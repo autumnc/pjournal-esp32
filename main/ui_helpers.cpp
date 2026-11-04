@@ -223,7 +223,8 @@ static int mdIndentCells(const std::string &line) {
 
 std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
                              const std::vector<MdLineInfo> *mdInfoIn,
-                             const std::set<int> *foldedHeadings) {
+                             const std::set<int> *foldedHeadings,
+                             int reserveCells) {
     std::vector<VRow> vrows;
     bool firstLineIndent = g_settings.firstLineIndent();
     std::vector<MdLineInfo> localInfo;
@@ -242,7 +243,8 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
             vrows.push_back({li, 0, 0});
             continue;
         }
-        int maxc = SCREEN_W / g_font.halfAdvance();
+        int maxc = SCREEN_W / g_font.halfAdvance() - reserveCells;
+        if (maxc < 1) maxc = 1;
         int indent = mdIndentCells(line);
         // 折叠标题行渲染为「级别图标 + uF09DA 折叠标志」共 4 格,比未折叠多 2 格;
         // 折行预留须同步加宽,否则换行处内容会画到屏幕右缘之外。

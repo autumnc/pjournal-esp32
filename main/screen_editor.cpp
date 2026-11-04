@@ -78,6 +78,36 @@ enum class FileMgrMode {
     ConfirmDelete,
 };
 
+// ── vi 模式状态 ──────────────────────────────────────────────────────────
+// 固定大小结构, 不随文档增长; 命名寄存器按需分配。
+enum class ViMode { Insert, Normal, Visual, VisualLine };
+enum class ViOperator { None, Delete, Change, Yank, IndentRight, IndentLeft, ToggleCase };
+
+struct ViRegister {
+    std::string text;
+    bool linewise = false;
+};
+
+struct ViState {
+    ViMode mode = ViMode::Insert;
+    ViOperator op = ViOperator::None;
+    int count = 0, opCount = 0;
+    bool wantRegister = false;
+    char reg = 0;              // 0=unnamed, a-z, A-Z=append
+    bool gPending = false;     // 按下 g 后
+    char findCmd = 0, findChar = 0, lastFindCmd = 0, lastFindChar = 0;
+    bool replacePending = false;
+    bool insertImePref = true;
+    bool cmdlineActive = false;
+    bool cmdlineIme = false;   // 仅 '/' '?' 命令栏允许打开输入法
+    char cmdlineType = ':';
+    std::string cmdline;
+    int cmdlineCur = 0;
+    bool lastSearchForward = true;
+    std::string lastSearch;
+    ViRegister regs[26];
+};
+
 struct EditorState {
     std::vector<std::string> lines;
     int cx = 0, cy = 0;
@@ -91,6 +121,7 @@ struct EditorState {
     bool vrowsDirty = true;
     std::vector<VRow> cachedVrows;
     bool cachedFirstLineIndent = false;
+    int cachedGutterCells = -1;
     int cachedWordCount = 0;
     bool wordCountDirty = true;
     bool mdInfoDirty = true;
@@ -106,6 +137,7 @@ struct EditorState {
     int64_t lastUndoTime = 0;
     int64_t autoSaveTime = 0;
     bool modifiedSinceSave = false;
+    ViState vi;
     std::string savedFilename;
     bool recoveryPrompt = false;
     std::string recoveryContent;
@@ -153,6 +185,10 @@ struct EditorState {
 static EditorState g_editor;
 static EditorState s_stashedEditor;
 static bool s_hasStashedEditor = false;
+// 语音听写背景模式:只画正文,不画状态栏/候选条/行号。
+static bool s_skipStatusBarAndIme = false;
+// 全局剪贴板内容是否为整行(vi linewise), 与 g_clipboard 配套, 跨编辑器重开保留。
+static bool s_clipboardLinewise = false;
 
 static volatile bool s_promptTaskDone = false;
 static DeepseekResult s_promptTaskResult = {false, ""};
@@ -182,10 +218,36 @@ static void markDirty() {
 // 打字机模式:光标钉在可视区中间(按键音效与输入模式无关,由设置单独控制)
 static bool editorTypewriter() { return g_settings.inputMode() == "typewriter"; }
 static bool editorVertical() { return g_settings.editorOrientation() == "vertical"; }
+
+// ── 行号槽 ───────────────────────────────────────────────────────────────
+// 仅横排编辑区显示;竖排从右往左分列,没有合适的左侧槽位,语音背景也不显示。
+static bool editorLineNumbersOn() {
+    return g_settings.showLineNumbers() && !editorVertical() && !s_skipStatusBarAndIme;
+}
+static int editorGutterDigits() {
+    int n = (int)g_editor.lines.size();
+    int d = 1;
+    while (n >= 10) { n /= 10; ++d; }
+    return d;
+}
+static int editorGutterCells() {
+    return editorLineNumbersOn() ? editorGutterDigits() + 1 : 0;  // +1 格与正文留白
+}
+static int editorTextX() {
+    return 4 + editorGutterCells() * g_font.halfAdvance();
+}
+static int editorTextCells() {
+    int n = EDITOR_MAX_CELLS - editorGutterCells();
+    return n < 1 ? 1 : n;
+}
 static bool inFileEditSession();
 static void drawEditor();
 static int utf8Next(const std::string &s, int pos);
 static int utf8Prev(const std::string &s, int pos);
+static void insertMultilineAt(int cy, int cx, const std::string &text,
+                              int &outCy, int &outCx);
+static void insertLinesAt(int at, const std::vector<std::string> &lines,
+                          int &outCy, int &outCx);
 
 static const char *editorStatusTitle() {
     if (!g_editor.titleOverride.empty()) return g_editor.titleOverride.c_str();
@@ -320,7 +382,7 @@ static bool moveCursorVertical(int step, const std::vector<VRow> &vrows) {
     auto &dst = vrows[targetVR];
     if (g_editor.targetCx < 0)
         g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
-    int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
+    int visualCol = g_editor.targetCx % editorTextCells();
     g_editor.cy = dst.lineIdx;
     int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], dst.start);
     int targetCells = vrowStartCells + visualCol;
@@ -339,14 +401,17 @@ static const std::vector<MdLineInfo>& getMdInfo(bool mdOn);
 
 static const std::vector<VRow>& getVrows() {
     bool firstLineIndent = g_settings.firstLineIndent();
-    if (g_editor.vrowsDirty || g_editor.cachedFirstLineIndent != firstLineIndent) {
+    int gutter = editorGutterCells();
+    if (g_editor.vrowsDirty || g_editor.cachedFirstLineIndent != firstLineIndent ||
+        g_editor.cachedGutterCells != gutter) {
         g_editor.cachedFirstLineIndent = firstLineIndent;
+        g_editor.cachedGutterCells = gutter;
         // 传缓存避免重复 classify;md 渲染关闭时缓存全零,须传 nullptr 让
         // buildVrows 自行 classify(首行缩进仍需区分标题/列表)。
         bool mdOn = g_settings.markdownRender();
         const auto &mi = getMdInfo(mdOn);
         g_editor.cachedVrows = buildVrows(g_editor.lines, mdOn ? &mi : nullptr,
-                                          &g_editor.foldedHeadings);
+                                          &g_editor.foldedHeadings, gutter);
         g_editor.vrowsDirty = false;
     }
     return g_editor.cachedVrows;
@@ -1416,6 +1481,15 @@ static const char *HELP_LINES[] = {
     "双击BOOT全文润色",
     "双击USER语音听写",
     "Ctrl+0-9快捷编辑文件切换",
+    "-- Vi 模式 --",
+    "i a I A o O 进入插入  Esc回普通",
+    "hjkl w b e 0 ^ $ gg G 移动",
+    "d c y > < 操作符  dd yy cc 整行",
+    "x X s S D C Y r J ~ 改字",
+    "v V 可视  y d c > < ~ p 选区操作",
+    "p P 粘贴  u Ctrl+R 撤销重做",
+    "/ ? n N 搜索  :w :q :wq :x 命令",
+    "命令栏 Ctrl+Space 临时开输入法",
 };
 static const int HELP_COUNT = (int)(sizeof(HELP_LINES) / sizeof(HELP_LINES[0]));
 
@@ -1471,10 +1545,111 @@ static AppState screen_editor_help_handle(int key, ScreenContext &ctx) {
     return APP_EDITOR;
 }
 
+// ── vi 绘制辅助 ──────────────────────────────────────────────────────────
+static char s_viMsg[160] = {0};
+static int64_t s_viMsgUntil = 0;
+
+static const char *viModeName() {
+    switch (g_editor.vi.mode) {
+        case ViMode::Normal: return "NORMAL";
+        case ViMode::Visual: return "VISUAL";
+        case ViMode::VisualLine: return "VISUAL LINE";
+        case ViMode::Insert: return "INSERT";
+    }
+    return "NORMAL";
+}
+
+// 待决状态(计数/操作符/寄存器/g/f)拼成状态栏后缀, 便于确认键序。
+static std::string viPendingLabel() {
+    const ViState &v = g_editor.vi;
+    std::string s;
+    if (v.count > 0) s += std::to_string(v.count);
+    switch (v.op) {
+        case ViOperator::Delete: s += 'd'; break;
+        case ViOperator::Change: s += 'c'; break;
+        case ViOperator::Yank: s += 'y'; break;
+        case ViOperator::IndentRight: s += '>'; break;
+        case ViOperator::IndentLeft: s += '<'; break;
+        case ViOperator::ToggleCase: s += '~'; break;
+        default: break;
+    }
+    if (v.wantRegister) { s += '"'; if (v.reg) s += v.reg; }
+    if (v.gPending) s += 'g';
+    if (v.findCmd) s += v.findCmd;
+    if (v.replacePending) s += 'r';
+    return s;
+}
+
+static std::string viStatusLeft() {
+    if (s_viMsg[0] && esp_timer_get_time() < s_viMsgUntil) return s_viMsg;
+    std::string s = std::string("-- ") + viModeName() + " --";
+    std::string pend = viPendingLabel();
+    if (!pend.empty()) s += " " + pend;
+    return s;
+}
+
+// 字符 visual 的选区包含光标所在字符, 行 visual 选中整行; 供绘制与运算共用。
+static void viVisualRange(TextPos &start, TextPos &end) {
+    TextPos a = {g_editor.selAnchorCy, g_editor.selAnchorCx};
+    TextPos c = {g_editor.cy, g_editor.cx};
+    if (g_editor.vi.mode == ViMode::VisualLine) {
+        int ay = std::min(a.cy, c.cy), by = std::max(a.cy, c.cy);
+        if (ay < 0) ay = 0;
+        if (by >= (int)g_editor.lines.size()) by = (int)g_editor.lines.size() - 1;
+        start = {ay, 0};
+        end = {by, by >= 0 ? (int)g_editor.lines[by].length() : 0};
+        return;
+    }
+    if (posLess(c, a)) { start = c; end = a; }
+    else { start = a; end = c; }
+    if (end.cy >= 0 && end.cy < (int)g_editor.lines.size() &&
+        end.cx < (int)g_editor.lines[end.cy].length())
+        end.cx = utf8Next(g_editor.lines[end.cy], end.cx);
+}
+
+static void viDrawCommandBar() {
+    int y = STATUS_BAR_Y;
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 0, y, SCREEN_W);
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, 0, y + 1, SCREEN_W, FONT_H + 3);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    int textY = y + 1 + (STATUS_BAR_H - g_font.lineHeight()) / 2 + g_font.ascent();
+
+    std::string full = std::string(1, g_editor.vi.cmdlineType) + g_editor.vi.cmdline;
+    int curAbs = 1 + g_editor.vi.cmdlineCur;
+    if (curAbs < 0) curAbs = 0;
+    if (curAbs > (int)full.length()) curAbs = (int)full.length();
+    // 超宽时丢前导字符, 保证看到尾部与光标
+    int maxW = SCREEN_W - 8 - g_font.halfAdvance();
+    size_t drop = 0;
+    while (drop < full.length() &&
+           g_font.textWidth(full.substr(drop).c_str()) > maxW) {
+        drop = utf8Next(full, (int)drop);
+    }
+    std::string vis = full.substr(drop);
+    int curVis = (int)(curAbs - (int)drop);
+    if (curVis < 0) curVis = 0;
+    if (curVis > (int)vis.length()) curVis = (int)vis.length();
+    g_font.drawText(4, textY, vis.c_str());
+    int curX = 4 + g_font.textWidth(vis.substr(0, curVis).c_str());
+    int cw = g_font.halfAdvance();
+    if (curVis < (int)vis.length()) {
+        const char *cp = vis.c_str() + curVis;
+        std::string one;
+        unsigned char b = (unsigned char)*cp;
+        if (b < 0x80) one = vis.substr(curVis, 1);
+        else if ((b & 0xE0) == 0xC0) one = vis.substr(curVis, 2);
+        else if ((b & 0xF0) == 0xE0) one = vis.substr(curVis, 3);
+        else if ((b & 0xF8) == 0xF0) one = vis.substr(curVis, 4);
+        if (!one.empty()) cw = g_font.textWidth(one.c_str());
+    }
+    u8g2_DrawFrame(g_u8g2, curX, y + 2, cw, FONT_H);
+    u8g2_SetDrawColor(g_u8g2, 1);
+}
+
 // ── Editor drawing ────────────────────────────────────────────────────────
-// When true, drawEditor renders the content but skips the IME strip and the
-// status bar — used by the voice dictation screen as a transparent background.
-static bool s_skipStatusBarAndIme = false;
+// s_skipStatusBarAndIme 定义在文件顶部,供行号槽与 drawEditor 共用。
 
 // 光标落入折叠区时自动展开最近的折叠标题。放 drawEditor 入口覆盖所有重绘路径
 // (主循环尾部、搜索跳转、Ctrl+X/V 早退、idle)。
@@ -1530,7 +1705,8 @@ static VerticalLayoutMetrics editorVerticalVm() {
     int y = FONT_H;
     int pRows = (int)promptWrappedRowRanges().size();
     if (pRows > 0) y += (pRows + 1) * LINE_SPACING;
-    bool reserveIME = g_editor.imeActive && !s_skipStatusBarAndIme;
+    bool reserveIME = !s_skipStatusBarAndIme &&
+        (g_editor.imeActive || (g_editor.vi.cmdlineActive && g_editor.vi.cmdlineIme));
     int contentEndY;
     if (reserveIME) {
         // 候选条底边锚定分割线(276)后,编码行白框上沿 = 276-2*FONT_H-11
@@ -1565,7 +1741,9 @@ static void drawEditor() {
     }
 
     if (editorVertical()) {
-        bool composing = g_ime.composing() && !s_skipStatusBarAndIme;
+        bool composing = !s_skipStatusBarAndIme &&
+        (g_editor.imeActive || (g_editor.vi.cmdlineActive && g_editor.vi.cmdlineIme)) &&
+        g_ime.composing();
         VerticalLayoutMetrics vm = editorVerticalVm();
         bool mdOn = g_settings.markdownRender();
         mdSetRenderEnabled(mdOn);
@@ -1617,24 +1795,44 @@ static void drawEditor() {
                                 kFoldMarker, false);
             }
         }
-        if (g_editor.hasSelection) {
+        if (g_settings.viMode() &&
+            (g_editor.vi.mode == ViMode::Visual || g_editor.vi.mode == ViMode::VisualLine)) {
+            TextPos selStart, selEnd;
+            viVisualRange(selStart, selEnd);
+            drawVerticalHighlight(data, g_editor.scroll, vm, selStart, selEnd);
+        } else if (g_editor.hasSelection) {
             TextPos selStart, selEnd;
             getSelRange(selStart, selEnd);
             drawVerticalHighlight(data, g_editor.scroll, vm, selStart, selEnd);
         }
-        drawVerticalCursor(g_editor.lines, data, g_editor.scroll, vm, g_editor.cy, g_editor.cx);
+        bool viBlockCursor = g_settings.viMode() && g_editor.vi.mode != ViMode::Insert;
+        drawVerticalCursor(g_editor.lines, data, g_editor.scroll, vm, g_editor.cy, g_editor.cx,
+                           viBlockCursor);
 
         if (!s_skipStatusBarAndIme) {
-            int wc = getWordCount();
-            char left[48];
-            if (inQuickFileSession()) snprintf(left, sizeof(left), "[%d] 竖排", quickEditIndex());
-            else if (inFileEditSession()) snprintf(left, sizeof(left), "%s 竖排", fileEditBaseName(fileEditCurrentPath()).c_str());
-            else snprintf(left, sizeof(left), "%s 竖排", editorStatusTitle());
-            std::string imeLabel = imeStatusLabel(g_editor.imeActive);
-            std::string right = std::to_string(wc) + "字 " + imeLabel;
-            std::string bt = battery_icon_status_text();
-            if (!bt.empty()) right += " " + bt;
-            ui_draw_status(left, right.c_str());
+            if (g_settings.viMode() && g_editor.vi.cmdlineActive) {
+                viDrawCommandBar();
+            } else {
+                int wc = getWordCount();
+                std::string left, right;
+                if (g_settings.viMode()) {
+                    left = viStatusLeft();
+                    const std::string &curLine = g_editor.lines[g_editor.cy];
+                    int col = utf8Count(curLine.substr(0, std::min(g_editor.cx, (int)curLine.length()))) + 1;
+                    right = std::to_string(g_editor.cy + 1) + ":" + std::to_string(col) +
+                            " " + std::to_string(wc) + "字";
+                } else {
+                    char lbuf[48];
+                    if (inQuickFileSession()) snprintf(lbuf, sizeof(lbuf), "[%d] 竖排", quickEditIndex());
+                    else if (inFileEditSession()) snprintf(lbuf, sizeof(lbuf), "%s 竖排", fileEditBaseName(fileEditCurrentPath()).c_str());
+                    else snprintf(lbuf, sizeof(lbuf), "%s 竖排", editorStatusTitle());
+                    left = lbuf;
+                    right = std::to_string(wc) + "字 " + imeStatusLabel(g_editor.imeActive);
+                }
+                std::string bt = battery_icon_status_text();
+                if (!bt.empty()) right += " " + bt;
+                ui_draw_status(left.c_str(), right.c_str());
+            }
         }
         return;
     }
@@ -1645,9 +1843,12 @@ static void drawEditor() {
     // 是 drawEditor 里唯一 O(正文长度) 的部分, 单独标出来。
     s_perfLayoutEnd = EDITOR_PERF_NOW();
 #endif
-    bool composing = g_ime.composing() && !s_skipStatusBarAndIme;
+    bool composing = !s_skipStatusBarAndIme &&
+        (g_editor.imeActive || (g_editor.vi.cmdlineActive && g_editor.vi.cmdlineIme)) &&
+        g_ime.composing();
     // IME 开启期间恒定保留候选条区域,选字后候选条隐藏不再引起正文重排跳动
-    bool reserveIME = g_editor.imeActive && !s_skipStatusBarAndIme;
+    bool reserveIME = !s_skipStatusBarAndIme &&
+        (g_editor.imeActive || (g_editor.vi.cmdlineActive && g_editor.vi.cmdlineIme));
     int contentEndY = reserveIME ? imeStatusPanelTopY() : STATUS_Y;
     int visibleVrows = (contentEndY - y + LINE_SPACING - 1) / LINE_SPACING;
     if (visibleVrows < 1) visibleVrows = 1;
@@ -1687,21 +1888,36 @@ static void drawEditor() {
     bool mdOn = g_settings.markdownRender();
     mdSetRenderEnabled(mdOn);
     const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
+    int textX = editorTextX();
+    bool gutter = editorLineNumbersOn();
+    int gutterDigits = editorGutterDigits();
     for (int i = 0; i < visibleVrows; i++) {
         int idx = g_editor.scroll + i;
         if (idx < 0 || idx >= (int)vrows.size()) continue;  // 打字机留白行
         auto &vr = vrows[idx];
+        int ly = y + i * LINE_SPACING;
+        // 行号只标在硬行首行的视觉行, 续行留空; 右对齐在槽内
+        if (gutter && vr.start == 0) {
+            char num[16];
+            snprintf(num, sizeof(num), "%d", vr.lineIdx + 1);
+            int nd = (int)strlen(num);
+            int nx = 4 + (gutterDigits - nd) * g_font.halfAdvance();
+            g_font.drawText(nx, ly, num);
+        }
         int mdCursor = (vr.lineIdx == g_editor.cy) ? g_editor.cx : -1;
         bool folded = !g_editor.foldedHeadings.empty() &&
                       g_editor.foldedHeadings.count(vr.lineIdx);
-        mdDrawVrow(4, y + i * LINE_SPACING, g_editor.lines[vr.lineIdx], vr.start, vr.end,
+        mdDrawVrow(textX, ly, g_editor.lines[vr.lineIdx], vr.start, vr.end,
                    mdInfo[vr.lineIdx], vr.indentCells, mdCursor, folded);
     }
 
     // Selection highlight
-    if (g_editor.hasSelection) {
+    bool viVisual = g_settings.viMode() &&
+        (g_editor.vi.mode == ViMode::Visual || g_editor.vi.mode == ViMode::VisualLine);
+    if (g_editor.hasSelection || viVisual) {
         TextPos selStart, selEnd;
-        getSelRange(selStart, selEnd);
+        if (viVisual) viVisualRange(selStart, selEnd);
+        else getSelRange(selStart, selEnd);
         for (int i = 0; i < visibleVrows; i++) {
             int vrIdx = g_editor.scroll + i;
             if (vrIdx < 0 || vrIdx >= (int)vrows.size()) continue;  // 打字机留白行
@@ -1719,10 +1935,10 @@ static void drawEditor() {
             bool folded = !g_editor.foldedHeadings.empty() &&
                           g_editor.foldedHeadings.count(lineIdx);
             int mdCursor = (lineIdx == g_editor.cy) ? g_editor.cx : -1;
-            int xOff = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlStart, rowStart,
-                                   vr.indentCells, mdCursor, folded);
-            int selEndX = 4 + mdVrowX(g_editor.lines[lineIdx], mdi, hlEnd, rowStart,
-                                      vr.indentCells, mdCursor, folded);
+            int xOff = textX + mdVrowX(g_editor.lines[lineIdx], mdi, hlStart, rowStart,
+                                       vr.indentCells, mdCursor, folded);
+            int selEndX = textX + mdVrowX(g_editor.lines[lineIdx], mdi, hlEnd, rowStart,
+                                          vr.indentCells, mdCursor, folded);
             int selW = selEndX - xOff;
             int ly = y + i * LINE_SPACING;
             u8g2_SetDrawColor(g_u8g2, 2);  // XOR mode
@@ -1737,8 +1953,8 @@ static void drawEditor() {
         const MdLineInfo &mdi = mdInfo[vr.lineIdx];
         bool folded = !g_editor.foldedHeadings.empty() &&
                       g_editor.foldedHeadings.count(vr.lineIdx);
-        int cx = 4 + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells,
-                             g_editor.cx, folded);
+        int cx = textX + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells,
+                                 g_editor.cx, folded);
         int cy_draw = y + (cursorVR - g_editor.scroll) * LINE_SPACING;
         int cw = g_font.halfAdvance();
         if (g_editor.cx < (int)line.length()) {
@@ -1751,29 +1967,50 @@ static void drawEditor() {
             else if ((b & 0xF8) == 0xF0) oneChar = line.substr(g_editor.cx, 4);
             if (!oneChar.empty()) cw = g_font.textWidth(oneChar.c_str());
         }
+        bool viBlock = g_settings.viMode() && g_editor.vi.mode != ViMode::Insert;
         u8g2_SetDrawColor(g_u8g2, 0);
-        u8g2_DrawBox(g_u8g2, cx, cy_draw + 4, cw, 3);
+        if (viBlock) {
+            // normal/visual: 覆盖字符单元的框形光标
+            u8g2_DrawFrame(g_u8g2, cx, cy_draw - g_font.ascent(), cw, FONT_H);
+            if (cw > 2) u8g2_DrawFrame(g_u8g2, cx + 1, cy_draw - g_font.ascent() + 1,
+                                       cw - 2, FONT_H - 2);
+        } else {
+            u8g2_DrawBox(g_u8g2, cx, cy_draw + 4, cw, 3);
+        }
         u8g2_SetDrawColor(g_u8g2, 1);
     }
 
     if (composing) drawIMEUIWithStatusBar();
 
     if (!s_skipStatusBarAndIme) {
-        int wc = getWordCount();
-        char left[48];
-        if (inQuickFileSession()) {
-            snprintf(left, sizeof(left), "[%d]", quickEditIndex());
-        } else if (inFileEditSession()) {
-            snprintf(left, sizeof(left), "%s", fileEditBaseName(fileEditCurrentPath()).c_str());
-        } else {
-            snprintf(left, sizeof(left), "%s", editorStatusTitle());
+        if (g_settings.viMode() && g_editor.vi.cmdlineActive) {
+            viDrawCommandBar();
+            return;
         }
-        std::string imeLabel = imeStatusLabel(g_editor.imeActive);
-        std::string right = std::to_string(wc) + "字 " + imeLabel;
+        int wc = getWordCount();
+        std::string left, right;
+        if (g_settings.viMode()) {
+            left = viStatusLeft();
+            const std::string &curLine = g_editor.lines[g_editor.cy];
+            int col = utf8Count(curLine.substr(0, std::min(g_editor.cx, (int)curLine.length()))) + 1;
+            right = std::to_string(g_editor.cy + 1) + ":" + std::to_string(col) +
+                    " " + std::to_string(wc) + "字";
+        } else {
+            char lbuf[48];
+            if (inQuickFileSession()) {
+                snprintf(lbuf, sizeof(lbuf), "[%d]", quickEditIndex());
+            } else if (inFileEditSession()) {
+                snprintf(lbuf, sizeof(lbuf), "%s", fileEditBaseName(fileEditCurrentPath()).c_str());
+            } else {
+                snprintf(lbuf, sizeof(lbuf), "%s", editorStatusTitle());
+            }
+            left = lbuf;
+            right = std::to_string(wc) + "字 " + imeStatusLabel(g_editor.imeActive);
+        }
         std::string bt = battery_icon_status_text();
         if (!bt.empty()) right += " " + bt;
 
-        ui_draw_status(left, right.c_str());
+        ui_draw_status(left.c_str(), right.c_str());
     }
 }
 
@@ -1886,6 +2123,1782 @@ static AppState finishEditor(ScreenContext &ctx) {
     return ctx.prevState;
 }
 
+// ── vi 模式实现 ──────────────────────────────────────────────────────────
+enum class ViCharClass { Space, Word, Punct, Han };
+
+struct ViMotion {
+    bool ok = false;
+    bool linewise = false;
+    bool inclusive = false;
+    bool keepCol = false;
+    int cy = 0, cx = 0;
+};
+
+static void viSetMsg(const std::string &m) {
+    size_t n = m.size();
+    if (n > sizeof(s_viMsg) - 1) {
+        n = sizeof(s_viMsg) - 1;
+        // 不要从 UTF-8 多字节字符中间截断, 否则绘制端会读到半个码点。
+        while (n > 0 && ((unsigned char)m[n] & 0xC0) == 0x80) n--;
+    }
+    memcpy(s_viMsg, m.data(), n);
+    s_viMsg[n] = 0;
+    s_viMsgUntil = esp_timer_get_time() + 2500000;
+}
+
+static bool viIsHan(uint32_t cp) {
+    return (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) ||
+           (cp >= 0xF900 && cp <= 0xFAFF);
+}
+static bool viIsSpaceCp(uint32_t cp) {
+    return cp == ' ' || cp == '\t' || cp == 0x00A0 || cp == 0x3000 ||
+           (cp >= 0x2000 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029;
+}
+static bool viIsCjkPunct(uint32_t cp) {
+    return (cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF01 && cp <= 0xFF20) ||
+           (cp >= 0xFF3B && cp <= 0xFF65) || (cp >= 0x2018 && cp <= 0x201F) ||
+           cp == 0x2026 || cp == 0x2014 || cp == 0x2013;
+}
+static ViCharClass viClassifyCp(uint32_t cp) {
+    if (viIsSpaceCp(cp)) return ViCharClass::Space;
+    if (cp >= 0x80 && viIsCjkPunct(cp)) return ViCharClass::Punct;
+    if (viIsHan(cp)) return ViCharClass::Han;
+    if (cp < 0x80) {
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') ||
+            (cp >= '0' && cp <= '9') || cp == '_')
+            return ViCharClass::Word;
+        return ViCharClass::Punct;
+    }
+    return ViCharClass::Word;
+}
+static ViCharClass viClassAt(const std::string &s, int pos) {
+    if (pos < 0 || pos >= (int)s.length()) return ViCharClass::Space;
+    const char *p = s.c_str() + pos;
+    return viClassifyCp(FontRenderer::utf8Decode(p));
+}
+static bool viSpaceAt(const std::string &s, int pos) {
+    return viClassAt(s, pos) == ViCharClass::Space;
+}
+
+static int viFirstNonBlank(const std::string &s) {
+    int i = 0;
+    while (i < (int)s.length() && (s[i] == ' ' || s[i] == '\t')) i++;
+    return i;
+}
+static int viLastCharPos(const std::string &s) {
+    return s.empty() ? 0 : utf8Prev(s, (int)s.length());
+}
+
+static void viClampNormal() {
+    if (g_editor.lines.empty()) g_editor.lines.push_back("");
+    if (g_editor.cy < 0) g_editor.cy = 0;
+    if (g_editor.cy >= (int)g_editor.lines.size())
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+    const std::string &s = g_editor.lines[g_editor.cy];
+    if (g_editor.cx < 0) g_editor.cx = 0;
+    if (g_editor.cx > (int)s.length()) g_editor.cx = (int)s.length();
+    // normal/visual 光标停在字符上, 不越过行尾
+    if (g_editor.cx == (int)s.length() && !s.empty())
+        g_editor.cx = utf8Prev(s, g_editor.cx);
+}
+
+static void viMarkChanged() {
+    g_editor.targetCx = -1;
+    markDirty();
+    g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+    g_editor.modifiedSinceSave = true;
+}
+
+// vi 的 count 没有上限时, 长按数字会在 int 上溢出(UB), 后续循环也失去意义。
+static const int kViMaxCount = 999999;
+static void viCountDigit(int &count, int digit) {
+    if (count >= kViMaxCount) { count = kViMaxCount; return; }
+    count = count * 10 + digit;
+    if (count > kViMaxCount) count = kViMaxCount;
+}
+// 操作符 count 与 motion count 相乘, 同样夹在 int 安全范围内。
+static int viCountMul(int a, int b) {
+    long long v = (long long)a * (long long)b;
+    if (v > kViMaxCount) v = kViMaxCount;
+    if (v < 1) v = 1;
+    return (int)v;
+}
+
+// ── 寄存器 ───────────────────────────────────────────────────────────────
+static ViRegister &viRegSlot(char reg) {
+    int i = (reg >= 'A' && reg <= 'Z') ? (reg - 'A') : (reg - 'a');
+    if (i < 0) i = 0;
+    if (i > 25) i = 25;
+    return g_editor.vi.regs[i];
+}
+static bool viRegNamed(char reg) {
+    return (reg >= 'a' && reg <= 'z') || (reg >= 'A' && reg <= 'Z');
+}
+static bool viRegAppend(char reg) { return reg >= 'A' && reg <= 'Z'; }
+
+static bool viReadRegister(char reg, std::string &text, bool &linewise) {
+    if (reg == 0 || reg == '+' || reg == '*' || (reg >= '0' && reg <= '9')) {
+        text = g_clipboard;
+        linewise = s_clipboardLinewise;
+        return !text.empty();
+    }
+    if (viRegNamed(reg)) {
+        ViRegister &r = viRegSlot(reg);
+        text = r.text;
+        linewise = r.linewise;
+        return !text.empty();
+    }
+    text.clear();
+    linewise = false;
+    return false;
+}
+// 命名寄存器上限 32KB: 26 个寄存器各存一份大选区会成倍占用内部 RAM。
+static const size_t kViRegMaxBytes = 32768;
+static void viCapRegister(ViRegister &r) {
+    if (r.text.size() <= kViRegMaxBytes) return;
+    size_t n = kViRegMaxBytes;
+    while (n > 0 && ((unsigned char)r.text[n] & 0xC0) == 0x80) n--;
+    r.text.resize(n);
+}
+
+static void viWriteRegister(char reg, const std::string &text, bool linewise) {
+    if (viRegNamed(reg)) {
+        ViRegister &r = viRegSlot(reg);
+        if (viRegAppend(reg) && !r.text.empty()) {
+            r.text += text;
+            r.linewise = (linewise && r.linewise) || (r.text.find('\n') == std::string::npos ? linewise : false);
+        } else {
+            r.text = text;
+            r.linewise = linewise;
+        }
+        viCapRegister(r);
+        // unnamed 寄存器仍保留完整文本, 命名寄存器超限只影响 "a 这类显式引用。
+        g_clipboard = text;
+        s_clipboardLinewise = linewise;
+    } else {
+        g_clipboard = text;
+        s_clipboardLinewise = linewise;
+    }
+}
+static std::string viLineRangeText(int a, int b) {
+    std::string out;
+    if (a < 0) a = 0;
+    if (b >= (int)g_editor.lines.size()) b = (int)g_editor.lines.size() - 1;
+    for (int i = a; i <= b; i++) { out += g_editor.lines[i]; out += '\n'; }
+    return out;
+}
+static void viClampPos(TextPos &p) {
+    if (g_editor.lines.empty()) g_editor.lines.push_back("");
+    if (p.cy < 0) p.cy = 0;
+    if (p.cy >= (int)g_editor.lines.size()) p.cy = (int)g_editor.lines.size() - 1;
+    const int len = (int)g_editor.lines[p.cy].length();
+    if (p.cx < 0) p.cx = 0;
+    if (p.cx > len) p.cx = len;
+}
+
+static std::string viCharRangeText(TextPos s, TextPos e) {
+    viClampPos(s);
+    viClampPos(e);
+    if (posLess(e, s)) std::swap(s, e);
+    if (s.cy == e.cy) {
+        if (e.cx <= s.cx) return "";
+        return g_editor.lines[s.cy].substr(s.cx, e.cx - s.cx);
+    }
+    std::string out = g_editor.lines[s.cy].substr(s.cx) + "\n";
+    for (int i = s.cy + 1; i < e.cy; i++) out += g_editor.lines[i] + "\n";
+    out += g_editor.lines[e.cy].substr(0, e.cx);
+    return out;
+}
+
+// ── 删除 / 缩进 / 大小写 ─────────────────────────────────────────────────
+static void viDeleteCharwise(TextPos s, TextPos e) {
+    viClampPos(s);
+    viClampPos(e);
+    if (posLess(e, s)) std::swap(s, e);
+    if (s.cy == e.cy && s.cx == e.cx) return;
+    g_editor.selAnchorCy = s.cy;
+    g_editor.selAnchorCx = s.cx;
+    g_editor.cy = e.cy;
+    g_editor.cx = e.cx;
+    g_editor.hasSelection = true;
+    deleteSelection();
+}
+
+static void viDeleteLines(int a, int b) {
+    if (a < 0) a = 0;
+    if (b >= (int)g_editor.lines.size()) b = (int)g_editor.lines.size() - 1;
+    if (a > b) return;
+    int count = b - a + 1;
+    g_editor.lines.erase(g_editor.lines.begin() + a, g_editor.lines.begin() + b + 1);
+    foldLinesErased(a, count);
+    if (g_editor.lines.empty()) g_editor.lines.push_back("");
+    if (g_editor.cy >= (int)g_editor.lines.size())
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+    if (g_editor.cy < a) g_editor.cy = a;
+    if (g_editor.cy >= (int)g_editor.lines.size())
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+    g_editor.cx = viFirstNonBlank(g_editor.lines[g_editor.cy]);
+    viMarkChanged();
+}
+
+static void viChangeLines(int a, int b) {
+    if (a < 0) a = 0;
+    if (b >= (int)g_editor.lines.size()) b = (int)g_editor.lines.size() - 1;
+    if (a > b) return;
+    if (b > a) {
+        g_editor.lines.erase(g_editor.lines.begin() + a + 1, g_editor.lines.begin() + b + 1);
+        foldLinesErased(a + 1, b - a);
+    }
+    g_editor.lines[a].clear();
+    g_editor.cy = a;
+    g_editor.cx = 0;
+    viMarkChanged();
+}
+
+static void viIndentLines(int a, int b, bool right) {
+    if (a < 0) a = 0;
+    if (b >= (int)g_editor.lines.size()) b = (int)g_editor.lines.size() - 1;
+    for (int i = a; i <= b && i < (int)g_editor.lines.size(); i++) {
+        std::string &s = g_editor.lines[i];
+        if (right) {
+            s.insert(0, "    ");
+        } else if (!s.empty()) {
+            if (s[0] == '\t') s.erase(0, 1);
+            else {
+                int n = 0;
+                while (n < 4 && n < (int)s.length() && s[n] == ' ') n++;
+                s.erase(0, n);
+            }
+        }
+    }
+    g_editor.cy = a;
+    if (g_editor.cy >= (int)g_editor.lines.size())
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+    g_editor.cx = viFirstNonBlank(g_editor.lines[g_editor.cy]);
+    viMarkChanged();
+}
+
+static void viToggleCaseRange(TextPos s, TextPos e) {
+    if (s.cy == e.cy && s.cx == e.cx) return;
+    for (int y = s.cy; y <= e.cy && y < (int)g_editor.lines.size(); y++) {
+        std::string &line = g_editor.lines[y];
+        int from = (y == s.cy) ? s.cx : 0;
+        int to = (y == e.cy) ? e.cx : (int)line.length();
+        if (to > (int)line.length()) to = (int)line.length();
+        for (int i = from; i < to; i++) {
+            unsigned char c = (unsigned char)line[i];
+            if (c >= 'a' && c <= 'z') line[i] = (char)(c - 'a' + 'A');
+            else if (c >= 'A' && c <= 'Z') line[i] = (char)(c - 'A' + 'a');
+        }
+    }
+    g_editor.cy = e.cy;
+    g_editor.cx = e.cx;
+    g_editor.targetCx = -1;
+    viClampNormal();
+    markDirty();
+}
+
+// ── 词移动 ───────────────────────────────────────────────────────────────
+static void viStepNext(int &y, int &x) {
+    if (y < 0 || y >= (int)g_editor.lines.size()) return;
+    const std::string &s = g_editor.lines[y];
+    if (x < (int)s.length()) x = utf8Next(s, x);
+    else if (y < (int)g_editor.lines.size() - 1) { y++; x = 0; }
+}
+static void viStepPrev(int &y, int &x) {
+    if (y < 0 || y >= (int)g_editor.lines.size()) return;
+    if (x > 0) x = utf8Prev(g_editor.lines[y], x);
+    else if (y > 0) { y--; x = (int)g_editor.lines[y].length(); }
+}
+
+static void viWordForward(int &y, int &x, int times, bool big) {
+    for (int t = 0; t < times; t++) {
+        if (y >= (int)g_editor.lines.size()) return;
+        // 已在文末再往前: 提前退出, 避免超大 count 空转。
+        if (y == (int)g_editor.lines.size() - 1 &&
+            x >= (int)g_editor.lines[y].length()) return;
+        const std::string &s = g_editor.lines[y];
+        ViCharClass cls = (x >= (int)s.length()) ? ViCharClass::Space : viClassAt(s, x);
+        if (cls == ViCharClass::Space) {
+            // 跳过空白(可跨行)
+            while (true) {
+                const std::string &cur = g_editor.lines[y];
+                while (x < (int)cur.length() && viSpaceAt(cur, x)) x = utf8Next(cur, x);
+                if (x < (int)cur.length()) break;
+                if (y + 1 < (int)g_editor.lines.size()) { y++; x = 0; }
+                else break;
+            }
+        } else {
+            if (big) {
+                while (x < (int)s.length() && !viSpaceAt(s, x)) x = utf8Next(s, x);
+            } else if (cls == ViCharClass::Han) {
+                x = utf8Next(s, x);
+            } else {
+                while (x < (int)s.length() && viClassAt(s, x) == cls) x = utf8Next(s, x);
+            }
+            // 跳过后续空白(可跨行)
+            while (true) {
+                if (y >= (int)g_editor.lines.size()) break;
+                const std::string &cur = g_editor.lines[y];
+                while (x < (int)cur.length() && viSpaceAt(cur, x)) x = utf8Next(cur, x);
+                if (x < (int)cur.length()) break;
+                if (y + 1 < (int)g_editor.lines.size()) { y++; x = 0; }
+                else break;
+            }
+        }
+    }
+}
+
+static void viWordEnd(int &y, int &x, int times, bool big) {
+    for (int t = 0; t < times; t++) {
+        if (y >= (int)g_editor.lines.size()) return;
+        if (y == (int)g_editor.lines.size() - 1 &&
+            x >= (int)g_editor.lines[y].length()) return;
+        viStepNext(y, x);
+        // 跳过空白
+        while (true) {
+            if (y >= (int)g_editor.lines.size()) return;
+            const std::string &s = g_editor.lines[y];
+            while (x < (int)s.length() && viSpaceAt(s, x)) x = utf8Next(s, x);
+            if (x < (int)s.length()) break;
+            if (y + 1 < (int)g_editor.lines.size()) { y++; x = 0; }
+            else return;
+        }
+        const std::string &s = g_editor.lines[y];
+        ViCharClass cls = viClassAt(s, x);
+        if (big) {
+            while (true) {
+                int n = utf8Next(s, x);
+                if (n >= (int)s.length() || viSpaceAt(s, n)) break;
+                x = n;
+            }
+        } else if (cls != ViCharClass::Han) {
+            while (true) {
+                int n = utf8Next(s, x);
+                if (n >= (int)s.length() || viClassAt(s, n) != cls) break;
+                x = n;
+            }
+        }
+    }
+}
+
+static void viWordBackward(int &y, int &x, int times, bool big) {
+    for (int t = 0; t < times; t++) {
+        if (y <= 0 && x <= 0) return;  // 已在文首, 超大 count 不必空转
+        viStepPrev(y, x);
+        // 跳过空白(向前)
+        while (true) {
+            if (y < 0) return;
+            const std::string &s = g_editor.lines[y];
+            while (x > 0 && viSpaceAt(s, x)) x = utf8Prev(s, x);
+            if (x > 0) break;
+            if (viSpaceAt(s, 0) && y > 0) { y--; x = (int)g_editor.lines[y].length(); continue; }
+            break;
+        }
+        const std::string &s = g_editor.lines[y];
+        if (x >= (int)s.length()) continue;
+        ViCharClass cls = viClassAt(s, x);
+        if (big) {
+            while (x > 0) {
+                int p = utf8Prev(s, x);
+                if (viSpaceAt(s, p)) break;
+                x = p;
+            }
+        } else if (cls != ViCharClass::Han) {
+            while (x > 0) {
+                int p = utf8Prev(s, x);
+                if (p < 0 || viClassAt(s, p) != cls) break;
+                x = p;
+            }
+        }
+    }
+}
+
+// ── 动作计算 ─────────────────────────────────────────────────────────────
+static bool viLineRelMotion(int dir, int count, ViMotion &m) {
+    if (dir == 0 || count <= 0) return false;
+    int cy = g_editor.cy;
+    int col = g_editor.targetCx;
+    if (col < 0) col = byteToCells(g_editor.lines[cy], g_editor.cx);
+    int ny = cy + dir * count;
+    if (ny < 0) ny = 0;
+    if (ny >= (int)g_editor.lines.size()) ny = (int)g_editor.lines.size() - 1;
+    m.ok = true;
+    m.linewise = true;
+    m.keepCol = true;
+    m.cy = ny;
+    const std::string &s = g_editor.lines[ny];
+    m.cx = cellsToByte(s, 0, (int)s.length(), col);
+    return true;
+}
+
+static bool viFindMotion(int cmd, char target, int count, ViMotion &m) {
+    if (target == 0 || count <= 0) return false;
+    const std::string &s = g_editor.lines[g_editor.cy];
+    int pos = g_editor.cx;
+    int found = -1;
+    if (cmd == 'f' || cmd == 't') {
+        int from = pos;
+        for (int i = 0; i < count; i++) {
+            if (from >= (int)s.length()) return false;
+            size_t p = s.find(target, from + 1);
+            if (p == std::string::npos) return false;
+            found = (int)p;
+            from = found;
+        }
+        if (cmd == 't') found = utf8Prev(s, found);
+    } else {
+        int from = pos;
+        for (int i = 0; i < count; i++) {
+            if (from <= 0) return false;
+            size_t p = s.rfind(target, from - 1);
+            if (p == std::string::npos) return false;
+            found = (int)p;
+            from = found;
+        }
+        if (cmd == 'T') found = utf8Next(s, found);
+    }
+    m.ok = true;
+    m.cy = g_editor.cy;
+    m.cx = found;
+    m.inclusive = (cmd == 'f' || cmd == 'F');
+    return true;
+}
+
+// 括号表用码点, 扫描时直接解码比较; 旧实现为全文每个字符建 std::string,
+// 长文档按 % 会分配数万个短串, 既慢又吃堆。
+static const uint32_t kBrOpenCp[]  = {'(', '[', '{', 0xFF08, 0x3010, 0x300C, 0x300E, 0x300A, 0x3008, 0x3014};
+static const uint32_t kBrCloseCp[] = {')', ']', '}', 0xFF09, 0x3011, 0x300D, 0x300F, 0x300B, 0x3009, 0x3015};
+static const int kBrPairs = 10;
+
+static int viBracketPairOf(uint32_t cp, bool &open) {
+    for (int k = 0; k < kBrPairs; k++) {
+        if (cp == kBrOpenCp[k]) { open = true; return k; }
+        if (cp == kBrCloseCp[k]) { open = false; return k; }
+    }
+    return -1;
+}
+
+// 解码 s[pos] 并给出下一个码点边界; 非法/截断序列退化为前进一个字节。
+static uint32_t viDecodeAt(const std::string &s, int pos, int &next) {
+    const char *p = s.c_str() + pos;
+    uint32_t cp = FontRenderer::utf8Decode(p);
+    int nx = (int)(p - s.c_str());
+    if (nx <= pos) nx = pos + 1;
+    if (nx > (int)s.length()) nx = (int)s.length();
+    next = nx;
+    return cp;
+}
+
+static bool viMatchBracket(ViMotion &m) {
+    const std::string &line = g_editor.lines[g_editor.cy];
+    int atPos = -1, pair = -1;
+    bool open = false;
+    for (int p = g_editor.cx; p < (int)line.length();) {
+        int nx;
+        uint32_t cp = viDecodeAt(line, p, nx);
+        bool o;
+        int k = viBracketPairOf(cp, o);
+        if (k >= 0) { atPos = p; pair = k; open = o; break; }
+        p = nx;
+    }
+    if (atPos < 0) return false;
+
+    int depth = 0;
+    if (open) {
+        for (int y = g_editor.cy; y < (int)g_editor.lines.size(); y++) {
+            const std::string &s = g_editor.lines[y];
+            for (int p = (y == g_editor.cy ? atPos : 0); p < (int)s.length();) {
+                int nx;
+                uint32_t cp = viDecodeAt(s, p, nx);
+                if (cp == kBrOpenCp[pair]) depth++;
+                else if (cp == kBrCloseCp[pair]) {
+                    depth--;
+                    if (depth == 0) {
+                        m.ok = true; m.inclusive = true;
+                        m.cy = y; m.cx = p;
+                        return true;
+                    }
+                }
+                p = nx;
+            }
+        }
+    } else {
+        for (int y = g_editor.cy; y >= 0; y--) {
+            const std::string &s = g_editor.lines[y];
+            for (int p = (y == g_editor.cy ? atPos : (int)s.length()); p > 0;) {
+                p = utf8Prev(s, p);
+                int nx;
+                uint32_t cp = viDecodeAt(s, p, nx);
+                if (cp == kBrCloseCp[pair]) depth++;
+                else if (cp == kBrOpenCp[pair]) {
+                    depth--;
+                    if (depth == 0) {
+                        m.ok = true; m.inclusive = true;
+                        m.cy = y; m.cx = p;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// G 的 count 是绝对行号(1 起); lineNo<=0 表示末行。
+static void viGotoLineMotion(int lineNo, ViMotion &m) {
+    int ny = lineNo > 0 ? lineNo - 1 : (int)g_editor.lines.size() - 1;
+    if (ny < 0) ny = 0;
+    if (ny >= (int)g_editor.lines.size()) ny = (int)g_editor.lines.size() - 1;
+    m.ok = true;
+    m.linewise = true;
+    m.cy = ny;
+    m.cx = viFirstNonBlank(g_editor.lines[ny]);
+}
+
+static bool viMotionKey(int key, int count, ViMotion &m) {
+    if (count <= 0) count = 1;
+    bool vertical = editorVertical();
+    int cy = g_editor.cy, cx = g_editor.cx;
+    const std::string &line = g_editor.lines[cy];
+
+    switch (key) {
+        case 'h': case KEY_LEFT:
+            if (vertical) {
+                int ny = cy - count; if (ny < 0) ny = 0;
+                m.ok = true; m.cy = ny; m.cx = viLastCharPos(g_editor.lines[ny]);
+                return true;
+            }
+            for (int i = 0; i < count; i++) {
+                if (cx <= 0) break;
+                cx = utf8Prev(line, cx);
+            }
+            m.ok = true; m.cy = cy; m.cx = cx; return true;
+        case 'l': case KEY_RIGHT:
+            if (vertical) {
+                int ny = cy + count; if (ny >= (int)g_editor.lines.size()) ny = (int)g_editor.lines.size() - 1;
+                m.ok = true; m.cy = ny; m.cx = viFirstNonBlank(g_editor.lines[ny]);
+                return true;
+            }
+            for (int i = 0; i < count; i++) {
+                if (cx >= (int)line.length()) break;
+                cx = utf8Next(line, cx);
+            }
+            m.ok = true; m.cy = cy; m.cx = cx; return true;
+        case 'j': case KEY_DOWN:
+            if (vertical) {
+                for (int i = 0; i < count; i++) {
+                    const std::string &cur = g_editor.lines[cy];
+                    if (cx >= (int)cur.length() && cy + 1 < (int)g_editor.lines.size()) { cy++; cx = 0; }
+                    else if (cx < (int)cur.length()) cx = utf8Next(cur, cx);
+                }
+                m.ok = true; m.cy = cy; m.cx = cx; return true;
+            }
+            return viLineRelMotion(1, count, m);
+        case 'k': case KEY_UP:
+            if (vertical) {
+                for (int i = 0; i < count; i++) {
+                    if (cx <= 0 && cy > 0) { cy--; cx = (int)g_editor.lines[cy].length(); }
+                    else if (cx > 0) cx = utf8Prev(g_editor.lines[cy], cx);
+                }
+                m.ok = true; m.cy = cy; m.cx = cx; return true;
+            }
+            return viLineRelMotion(-1, count, m);
+        case '0':
+            m.ok = true; m.cy = cy; m.cx = 0; return true;
+        case '^':
+            m.ok = true; m.cy = cy; m.cx = viFirstNonBlank(line); return true;
+        case '$':
+            m.ok = true; m.cy = cy; m.cx = (int)line.length(); m.inclusive = true; return true;
+        case 'w':
+            viWordForward(cy, cx, count, false); m.ok = true; m.cy = cy; m.cx = cx; return true;
+        case 'W':
+            viWordForward(cy, cx, count, true); m.ok = true; m.cy = cy; m.cx = cx; return true;
+        case 'b':
+            viWordBackward(cy, cx, count, false); m.ok = true; m.cy = cy; m.cx = cx; return true;
+        case 'B':
+            viWordBackward(cy, cx, count, true); m.ok = true; m.cy = cy; m.cx = cx; return true;
+        case 'e':
+            viWordEnd(cy, cx, count, false); m.ok = true; m.cy = cy; m.cx = cx; m.inclusive = true; return true;
+        case 'E':
+            viWordEnd(cy, cx, count, true); m.ok = true; m.cy = cy; m.cx = cx; m.inclusive = true; return true;
+        case 'G':
+            // 显式 count 由调用方用 viGotoLineMotion() 处理。
+            viGotoLineMotion(0, m);
+            return true;
+        case 0x0A: case 0x0D: {
+            int ny = cy + count - 1;
+            if (ny >= (int)g_editor.lines.size()) ny = (int)g_editor.lines.size() - 1;
+            m.ok = true; m.linewise = true; m.cy = ny;
+            m.cx = viFirstNonBlank(g_editor.lines[ny]);
+            return true;
+        }
+        case KEY_HOME:
+            m.ok = true; m.cy = cy; m.cx = 0; return true;
+        case KEY_END:
+            m.ok = true; m.cy = cy; m.cx = (int)line.length(); m.inclusive = true; return true;
+        case 0x04: case 0x15: case 0x06: case 0x02:
+        case KEY_PAGE_DOWN: case KEY_PAGE_UP: {
+            int rows = editorPageRows();
+            int amount;
+            if (key == 0x04 || key == 0x15) amount = std::max(1, rows / 2);
+            else amount = rows;
+            int dir = (key == 0x04 || key == 0x06 || key == KEY_PAGE_DOWN) ? 1 : -1;
+            ViMotion tmp;
+            if (!viLineRelMotion(dir, amount * count, tmp)) return false;
+            m = tmp;
+            return true;
+        }
+        case '%':
+            return viMatchBracket(m);
+        case ';': case ',': {
+            char cmd = g_editor.vi.lastFindCmd;
+            char ch = g_editor.vi.lastFindChar;
+            if (cmd == 0 || ch == 0) return false;
+            if (key == ',') {
+                if (cmd == 'f') cmd = 'F';
+                else if (cmd == 'F') cmd = 'f';
+                else if (cmd == 't') cmd = 'T';
+                else if (cmd == 'T') cmd = 't';
+            }
+            return viFindMotion(cmd, ch, count, m);
+        }
+        default:
+            return false;
+    }
+}
+
+static void viApplyMotion(const ViMotion &m) {
+    if (!m.ok) return;
+    if (m.cy < 0) return;
+    if (m.cy >= (int)g_editor.lines.size()) return;
+    g_editor.cy = m.cy;
+    g_editor.cx = m.cx;
+    if (!m.keepCol) g_editor.targetCx = -1;
+    viClampNormal();
+    if (g_editor.vi.mode != ViMode::Normal) g_editor.hasSelection = true;
+}
+
+// ── 插入/普通模式切换 ────────────────────────────────────────────────────
+static void viEnterInsert() {
+    ViState &v = g_editor.vi;
+    v.mode = ViMode::Insert;
+    v.op = ViOperator::None;
+    v.count = v.opCount = 0;
+    v.wantRegister = false;
+    v.reg = 0;
+    v.gPending = false;
+    v.findCmd = 0;
+    v.replacePending = false;
+    v.cmdlineActive = false;
+    g_editor.hasSelection = false;
+    g_editor.targetCx = -1;
+    g_editor.imeActive = v.insertImePref;
+    g_ime.setActive(g_editor.imeActive);
+    if (g_editor.imeActive) g_ime.setDocumentContext(editorImeContextText());
+}
+
+static void viLeaveInsert() {
+    ViState &v = g_editor.vi;
+    v.insertImePref = g_editor.imeActive;
+    g_ime.cancelComposition();
+    g_editor.imeActive = false;
+    g_ime.setActive(false);
+    v.mode = ViMode::Normal;
+    v.count = v.opCount = 0;
+    v.op = ViOperator::None;
+    g_editor.hasSelection = false;
+    g_editor.targetCx = -1;
+    // vim: 退出插入时光标左移一个字符
+    if (g_editor.cx > 0) g_editor.cx = utf8Prev(g_editor.lines[g_editor.cy], g_editor.cx);
+    else if (g_editor.cy > 0) {
+        g_editor.cy--;
+        g_editor.cx = viLastCharPos(g_editor.lines[g_editor.cy]);
+    }
+    viClampNormal();
+}
+
+static void viEnterNormal(bool clearSel) {
+    ViState &v = g_editor.vi;
+    v.mode = ViMode::Normal;
+    v.op = ViOperator::None;
+    v.count = v.opCount = 0;
+    v.wantRegister = false;
+    v.gPending = false;
+    v.findCmd = 0;
+    v.replacePending = false;
+    v.cmdlineActive = false;
+    if (clearSel) g_editor.hasSelection = false;
+    g_editor.targetCx = -1;
+    viClampNormal();
+}
+
+static void viStartVisual(ViMode mode) {
+    ViState &v = g_editor.vi;
+    v.mode = mode;
+    v.op = ViOperator::None;
+    v.count = v.opCount = 0;
+    v.wantRegister = false;
+    v.gPending = false;
+    v.findCmd = 0;
+    v.replacePending = false;
+    g_editor.selAnchorCy = g_editor.cy;
+    g_editor.selAnchorCx = g_editor.cx;
+    g_editor.hasSelection = true;
+    g_editor.targetCx = -1;
+}
+
+// ── 操作符执行 ───────────────────────────────────────────────────────────
+static void viApplyOperator(ViOperator op, const ViMotion &m, bool motionDone) {
+    ViState &v = g_editor.vi;
+    if (!motionDone || !m.ok) { v.op = ViOperator::None; return; }
+    TextPos cur = {g_editor.cy, g_editor.cx};
+    TextPos dst = {m.cy, m.cx};
+    if (op != ViOperator::Yank) recordUndoSnapshot(UndoGroup::Structural);
+
+    if (m.linewise) {
+        int a = std::min(cur.cy, dst.cy);
+        int b = std::max(cur.cy, dst.cy);
+        if (a < 0) a = 0;
+        if (b >= (int)g_editor.lines.size()) b = (int)g_editor.lines.size() - 1;
+        if (op == ViOperator::Yank) {
+            std::string text = viLineRangeText(a, b);
+            viWriteRegister(v.reg, text, true);
+            g_editor.cy = a;
+            g_editor.cx = viFirstNonBlank(g_editor.lines[a]);
+        } else if (op == ViOperator::Delete) {
+            std::string text = viLineRangeText(a, b);
+            viWriteRegister(v.reg, text, true);
+            viDeleteLines(a, b);
+        } else if (op == ViOperator::Change) {
+            std::string text = viLineRangeText(a, b);
+            viWriteRegister(v.reg, text, true);
+            viChangeLines(a, b);
+            viEnterInsert();
+            return;
+        } else {
+            viIndentLines(a, b, op == ViOperator::IndentRight);
+        }
+    } else {
+        TextPos s, e;
+        if (posLess(cur, dst)) { s = cur; e = dst; }
+        else { s = dst; e = cur; }
+        if (m.inclusive && e.cx < (int)g_editor.lines[e.cy].length())
+            e.cx = utf8Next(g_editor.lines[e.cy], e.cx);
+        if (s.cy == e.cy && s.cx == e.cx) { v.op = ViOperator::None; return; }
+        if (op == ViOperator::Yank) {
+            std::string text = viCharRangeText(s, e);
+            viWriteRegister(v.reg, text, false);
+            g_editor.cy = s.cy;
+            g_editor.cx = s.cx;
+        } else if (op == ViOperator::Delete) {
+            std::string text = viCharRangeText(s, e);
+            viWriteRegister(v.reg, text, false);
+            viDeleteCharwise(s, e);
+        } else if (op == ViOperator::Change) {
+            std::string text = viCharRangeText(s, e);
+            viWriteRegister(v.reg, text, false);
+            viDeleteCharwise(s, e);
+            viEnterInsert();
+            return;
+        } else {
+            viIndentLines(s.cy, e.cy, op == ViOperator::IndentRight);
+            return;
+        }
+    }
+    viClampNormal();
+    v.op = ViOperator::None;
+    v.count = v.opCount = 0;
+    v.wantRegister = false;
+    v.reg = 0;
+}
+
+// 双击操作符: 当前行起 count 行的整行操作。
+static ViMotion viDoubleOperatorMotion(int count) {
+    ViMotion m;
+    int a = g_editor.cy;
+    int b = a + (count > 0 ? count : 1) - 1;
+    if (b >= (int)g_editor.lines.size()) b = (int)g_editor.lines.size() - 1;
+    m.ok = true;
+    m.linewise = true;
+    m.cy = b;
+    m.cx = (int)g_editor.lines[b].length();
+    return m;
+}
+
+// ── 普通模式直接命令 ─────────────────────────────────────────────────────
+static void viPaste(bool after) {
+    ViState &v = g_editor.vi;
+    std::string text;
+    bool linewise = false;
+    if (!viReadRegister(v.reg, text, linewise) || text.empty()) {
+        v.reg = 0;
+        return;
+    }
+    recordUndoSnapshot(UndoGroup::Structural);
+    int outCy = g_editor.cy, outCx = g_editor.cx;
+    if (linewise) {
+        std::vector<std::string> ins;
+        size_t pos = 0;
+        while (pos < text.length()) {
+            size_t nl = text.find('\n', pos);
+            ins.push_back(nl == std::string::npos ? text.substr(pos) : text.substr(pos, nl - pos));
+            if (nl == std::string::npos) break;
+            pos = nl + 1;
+        }
+        if (ins.size() > 1 && ins.back().empty()) ins.pop_back();
+        int at = g_editor.cy + (after ? 1 : 0);
+        if (at > (int)g_editor.lines.size()) at = (int)g_editor.lines.size();
+        insertLinesAt(at, ins, outCy, outCx);
+        g_editor.cy = outCy;
+        g_editor.cx = viFirstNonBlank(g_editor.lines[outCy]);
+    } else {
+        int atCx = g_editor.cx;
+        if (after && atCx < (int)g_editor.lines[g_editor.cy].length())
+            atCx = utf8Next(g_editor.lines[g_editor.cy], atCx);
+        insertMultilineAt(g_editor.cy, atCx, text, outCy, outCx);
+        g_editor.cy = outCy;
+        g_editor.cx = outCx;
+        if (g_editor.cx > 0) g_editor.cx = utf8Prev(g_editor.lines[g_editor.cy], g_editor.cx);
+    }
+    viMarkChanged();
+    viClampNormal();
+    v.reg = 0;
+}
+
+static void viJoinLines(int count) {
+    int n = count > 0 ? count : 2;
+    int a = g_editor.cy;
+    int b = std::min(a + n - 1, (int)g_editor.lines.size() - 1);
+    if (b <= a) return;
+    recordUndoSnapshot(UndoGroup::Structural);
+    std::string joined = g_editor.lines[a];
+    int curPos = (int)joined.length();
+    for (int i = a + 1; i <= b; i++) {
+        std::string next = g_editor.lines[i];
+        size_t ws = 0;
+        while (ws < next.length() && (next[ws] == ' ' || next[ws] == '\t')) ws++;
+        next.erase(0, ws);
+        if (!next.empty()) {
+            if (!joined.empty() && joined.back() != ' ') joined += ' ';
+            if (curPos == (int)joined.length()) curPos = (int)joined.length();
+            joined += next;
+        }
+    }
+    g_editor.lines[a] = joined;
+    if (b > a) {
+        g_editor.lines.erase(g_editor.lines.begin() + a + 1, g_editor.lines.begin() + b + 1);
+        foldLinesErased(a + 1, b - a);
+    }
+    g_editor.cy = a;
+    g_editor.cx = curPos > 0 ? utf8Prev(g_editor.lines[a], std::min(curPos, (int)g_editor.lines[a].length())) : 0;
+    viMarkChanged();
+    viClampNormal();
+}
+
+static bool viReplaceChars(int count, int ch) {
+    if (count <= 0) count = 1;
+    if (ch < 0x20 || ch > 0x7E) return false;
+    std::string &line = g_editor.lines[g_editor.cy];
+    int p = g_editor.cx;
+    int end = p;
+    int n = 0;
+    while (n < count && end < (int)line.length()) { end = utf8Next(line, end); n++; }
+    if (n == 0) return false;
+    recordUndoSnapshot(UndoGroup::Structural);
+    std::string repl(n, (char)ch);
+    line = line.substr(0, p) + repl + line.substr(end);
+    g_editor.cx = p + n;
+    if (g_editor.cx > 0) g_editor.cx = utf8Prev(line, g_editor.cx);
+    viMarkChanged();
+    return true;
+}
+
+// ── 搜索 ─────────────────────────────────────────────────────────────────
+// 逐行扫描 term 的所有非重叠匹配(term 不含 '\n'), 不复制整篇文档、
+// 也不为每个匹配建表; 只统计总数并记下光标前/后的首个匹配序号。
+static void viScanMatches(const std::string &term, int curOff, int &total,
+                          int &firstFwd, int &prevBwd) {
+    total = 0;
+    firstFwd = prevBwd = -1;
+    if (term.empty()) return;
+    int cum = 0;
+    for (int y = 0; y < (int)g_editor.lines.size(); y++) {
+        const std::string &s = g_editor.lines[y];
+        size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t f = s.find(term, pos);
+            if (f == std::string::npos) break;
+            int off = cum + (int)f;
+            if (off > curOff && firstFwd < 0) firstFwd = total;
+            if (off < curOff) prevBwd = total;
+            total++;
+            pos = f + term.size();
+        }
+        cum += (int)s.size() + 1;
+    }
+}
+
+// 第二遍取第 idx 个匹配的文档偏移; 调用前已确认 idx < total。
+static int viNthMatchOffset(const std::string &term, int idx) {
+    int cum = 0, seen = 0;
+    for (int y = 0; y < (int)g_editor.lines.size(); y++) {
+        const std::string &s = g_editor.lines[y];
+        size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t f = s.find(term, pos);
+            if (f == std::string::npos) break;
+            if (seen == idx) return cum + (int)f;
+            seen++;
+            pos = f + term.size();
+        }
+        cum += (int)s.size() + 1;
+    }
+    return -1;
+}
+
+static bool viSearchApply(const std::string &term, bool forward, int count) {
+    if (term.empty()) return false;
+    int curOff = posToDocOffset(g_editor.cy, g_editor.cx);
+    int total, firstFwd, prevBwd;
+    viScanMatches(term, curOff, total, firstFwd, prevBwd);
+    if (total == 0) { viSetMsg("未找到: " + term); return false; }
+    int idx = forward ? (firstFwd >= 0 ? firstFwd : 0)
+                      : (prevBwd >= 0 ? prevBwd : total - 1);
+    // count 已夹在 999999 内, 但乘/加仍用 long long 避免溢出。
+    long long t = (long long)idx + (forward ? 1LL : -1LL) * ((long long)count - 1);
+    t %= total;
+    if (t < 0) t += total;
+    int off = viNthMatchOffset(term, (int)t);
+    if (off < 0) { viSetMsg("未找到: " + term); return false; }
+    int ny, nx;
+    docOffsetToPos(off, ny, nx);
+    g_editor.cy = ny;
+    g_editor.cx = nx;
+    g_editor.targetCx = -1;
+    g_editor.hasSelection = false;
+    viClampNormal();
+    return true;
+}
+
+// ── 命令行 ───────────────────────────────────────────────────────────────
+static void viStartCmdline(char type) {
+    ViState &v = g_editor.vi;
+    v.cmdlineActive = true;
+    v.cmdlineType = type;
+    v.cmdline.clear();
+    v.cmdlineCur = 0;
+    v.cmdlineIme = false;
+    g_ime.cancelComposition();
+    g_ime.setActive(false);
+    g_editor.imeActive = false;
+}
+static void viStopCmdline() {
+    ViState &v = g_editor.vi;
+    v.cmdlineActive = false;
+    v.cmdline.clear();
+    v.cmdlineCur = 0;
+    v.cmdlineIme = false;
+    g_ime.cancelComposition();
+    g_ime.setActive(false);
+}
+// 命令栏上限: 按键重复/输入法上屏都可能无限追加, 也会让绘制里的
+// substr+textWidth 循环变成 O(n²)。
+static const size_t kViCmdlineMax = 128;
+static void viCmdlineInsert(const std::string &s) {
+    ViState &v = g_editor.vi;
+    if (v.cmdlineCur < 0) v.cmdlineCur = 0;
+    if (v.cmdlineCur > (int)v.cmdline.length()) v.cmdlineCur = (int)v.cmdline.length();
+    size_t room = v.cmdline.length() >= kViCmdlineMax ? 0 : kViCmdlineMax - v.cmdline.length();
+    if (room == 0) return;
+    size_t take = s.size();
+    if (take > room) {
+        // 按码点边界截断, 不能把 UTF-8 字符切成半个。
+        take = 0;
+        while (take < s.size() && take < room) {
+            int nx = utf8Next(s, (int)take);
+            if ((size_t)nx > room) break;
+            take = (size_t)nx;
+        }
+    }
+    if (take == 0) return;
+    v.cmdline.insert(v.cmdlineCur, s.substr(0, take));
+    v.cmdlineCur += (int)take;
+}
+
+static AppState viQuitEditor(ScreenContext &ctx, bool force) {
+    if (!force && g_editor.modifiedSinceSave) {
+        viSetMsg("有未保存更改 (用 :q!)");
+        return APP_EDITOR;
+    }
+    if (inQuickFileSession() || inFileEditSession()) {
+        ctx.nextState = APP_SETTINGS;
+        return APP_SETTINGS;
+    }
+    ctx.nextState = ctx.prevState;
+    return ctx.prevState;
+}
+
+static AppState viExecCommand(const std::string &raw, ScreenContext &ctx) {
+    std::string cmd = raw;
+    size_t b = cmd.find_first_not_of(" \t");
+    size_t e = cmd.find_last_not_of(" \t");
+    if (b == std::string::npos) cmd.clear();
+    else cmd = cmd.substr(b, e - b + 1);
+
+    if (cmd == "w") {
+        if (saveCurrentContent()) {
+            g_editor.modifiedSinceSave = false;
+            g_editor.autoSaveTime = 0;
+            viSetMsg("已保存");
+        } else {
+            viSetMsg("保存失败");
+        }
+        return APP_EDITOR;
+    }
+    if (cmd == "q") return viQuitEditor(ctx, false);
+    if (cmd == "q!") return viQuitEditor(ctx, true);
+    if (cmd == "wq") {
+        if (!saveCurrentContent()) { viSetMsg("保存失败"); return APP_EDITOR; }
+        g_editor.modifiedSinceSave = false;
+        g_editor.autoSaveTime = 0;
+        return viQuitEditor(ctx, true);
+    }
+    if (cmd == "x") {
+        if (g_editor.modifiedSinceSave) {
+            if (!saveCurrentContent()) { viSetMsg("保存失败"); return APP_EDITOR; }
+            g_editor.modifiedSinceSave = false;
+            g_editor.autoSaveTime = 0;
+        }
+        return viQuitEditor(ctx, true);
+    }
+    if (cmd == "$") {
+        g_editor.cy = (int)g_editor.lines.size() - 1;
+        g_editor.cx = viFirstNonBlank(g_editor.lines[g_editor.cy]);
+        g_editor.targetCx = -1;
+        return APP_EDITOR;
+    }
+    if (!cmd.empty() && cmd.find_first_not_of("0123456789") == std::string::npos) {
+        // atoi 在超长数字串上溢出(UB); 命令栏虽有上限, 仍按 clamp 方式解析。
+        int n = 0;
+        for (char c : cmd) {
+            if (n >= kViMaxCount) break;
+            n = n * 10 + (c - '0');
+            if (n > kViMaxCount) n = kViMaxCount;
+        }
+        if (n > 0) {
+            if (n > (int)g_editor.lines.size()) n = (int)g_editor.lines.size();
+            g_editor.cy = n - 1;
+            g_editor.cx = viFirstNonBlank(g_editor.lines[g_editor.cy]);
+            g_editor.targetCx = -1;
+        }
+        return APP_EDITOR;
+    }
+    if (cmd == "set nu" || cmd == "set number") {
+        g_settings.setString("show_line_numbers", "1");
+        g_editor.cachedGutterCells = -1;
+        markDirty();
+        viSetMsg(editorVertical() ? "竖排不显示行号" : "行号已开启");
+        return APP_EDITOR;
+    }
+    if (cmd == "set nonu" || cmd == "set nonumber") {
+        g_settings.setString("show_line_numbers", "0");
+        g_editor.cachedGutterCells = -1;
+        markDirty();
+        viSetMsg("行号已关闭");
+        return APP_EDITOR;
+    }
+    if (cmd == "set") {
+        viSetMsg(g_settings.showLineNumbers() ? "nu" : "nonu");
+        return APP_EDITOR;
+    }
+    if (cmd.empty()) return APP_EDITOR;
+    viSetMsg("未知命令: " + cmd);
+    return APP_EDITOR;
+}
+
+static AppState viCmdlineKey(int key, ScreenContext &ctx) {
+    ViState &v = g_editor.vi;
+
+    if (key == KEY_IME_TOGGLE) {
+        if (v.cmdlineType == ':') return APP_EDITOR;  // : 命令永远原样 ASCII
+        v.cmdlineIme = !v.cmdlineIme;
+        if (!v.cmdlineIme) g_ime.cancelComposition();
+        g_ime.setActive(v.cmdlineIme);
+        if (v.cmdlineIme) g_ime.setDocumentContext(editorImeContextText());
+        return APP_EDITOR;
+    }
+    if (v.cmdlineIme &&
+        (key == KEY_FULLWIDTH_TOGGLE || key == KEY_TRAD_TOGGLE || key == KEY_LSHIFT_TAP)) {
+        std::string out;
+        g_ime.handleKey(key, out);  // 仅切换输入法状态, 不产生上屏
+        if (!out.empty()) viCmdlineInsert(out);
+        return APP_EDITOR;
+    }
+    if (v.cmdlineIme && g_ime.composing()) {
+        if (key == 0x1B) { g_ime.cancelComposition(); return APP_EDITOR; }
+        if (key == 0x0A || key == 0x0D) {
+            std::string out;
+            g_ime.handleKey(key, out);
+            if (!out.empty()) viCmdlineInsert(out);
+            return APP_EDITOR;
+        }
+        if ((key >= 0x20 && key <= 0x7E) || key == 0x7F || key == 0x08) {
+            std::string out;
+            if (g_ime.handleKey(key, out)) {
+                if (!out.empty()) viCmdlineInsert(out);
+                return APP_EDITOR;
+            }
+        }
+    } else if (v.cmdlineIme && key >= 0x20 && key <= 0x7E) {
+        std::string out;
+        if (g_ime.handleKey(key, out)) {
+            if (!out.empty()) viCmdlineInsert(out);
+            return APP_EDITOR;
+        }
+    }
+
+    if (key == 0x1B) { viStopCmdline(); return APP_EDITOR; }
+    if (key == 0x0A || key == 0x0D) {
+        std::string cmd = v.cmdline;
+        char type = v.cmdlineType;
+        viStopCmdline();
+        if (type == ':') return viExecCommand(cmd, ctx);
+        if (cmd.empty()) cmd = v.lastSearch;
+        if (cmd.empty()) { viSetMsg("无上次搜索"); return APP_EDITOR; }
+        v.lastSearch = cmd;
+        v.lastSearchForward = (type == '/');
+        viSearchApply(cmd, type == '/', 1);
+        return APP_EDITOR;
+    }
+    if (key == 0x7F || key == 0x08) {
+        if (v.cmdlineCur > 0) {
+            int p = utf8Prev(v.cmdline, v.cmdlineCur);
+            v.cmdline.erase(p, v.cmdlineCur - p);
+            v.cmdlineCur = p;
+        }
+        return APP_EDITOR;
+    }
+    if (key == KEY_LEFT) {
+        if (v.cmdlineCur > 0) v.cmdlineCur = utf8Prev(v.cmdline, v.cmdlineCur);
+        return APP_EDITOR;
+    }
+    if (key == KEY_RIGHT) {
+        if (v.cmdlineCur < (int)v.cmdline.length())
+            v.cmdlineCur = utf8Next(v.cmdline, v.cmdlineCur);
+        return APP_EDITOR;
+    }
+    if (key == KEY_HOME) { v.cmdlineCur = 0; return APP_EDITOR; }
+    if (key == KEY_END) { v.cmdlineCur = (int)v.cmdline.length(); return APP_EDITOR; }
+    if (key >= 0x20 && key <= 0x7E) {
+        viCmdlineInsert(std::string(1, (char)key));
+        return APP_EDITOR;
+    }
+    return APP_EDITOR;
+}
+
+// ── 视觉模式命令 ─────────────────────────────────────────────────────────
+static void viVisualDeleteOrChange(bool change) {
+    ViState &v = g_editor.vi;
+    TextPos s, e;
+    viVisualRange(s, e);
+    if (s.cy == e.cy && s.cx == e.cx && v.mode != ViMode::VisualLine) {
+        viEnterNormal(true);
+        return;
+    }
+    recordUndoSnapshot(UndoGroup::Structural);
+    if (v.mode == ViMode::VisualLine) {
+        int b = e.cy;
+        if (b < s.cy) b = s.cy;
+        std::string text = viLineRangeText(s.cy, b);
+        viWriteRegister(v.reg, text, true);
+        if (change) {
+            viChangeLines(s.cy, b);
+            viEnterInsert();
+            return;
+        }
+        viDeleteLines(s.cy, b);
+    } else {
+        std::string text = viCharRangeText(s, e);
+        viWriteRegister(v.reg, text, false);
+        if (change) {
+            viDeleteCharwise(s, e);
+            viEnterInsert();
+            return;
+        }
+        viDeleteCharwise(s, e);
+    }
+    viEnterNormal(true);
+    v.reg = 0;
+}
+
+static void viVisualYank() {
+    ViState &v = g_editor.vi;
+    TextPos s, e;
+    viVisualRange(s, e);
+    if (v.mode == ViMode::VisualLine) {
+        int b = e.cy;
+        if (b < s.cy) b = s.cy;
+        viWriteRegister(v.reg, viLineRangeText(s.cy, b), true);
+    } else {
+        viWriteRegister(v.reg, viCharRangeText(s, e), false);
+    }
+    int y = s.cy, x = s.cx;
+    viEnterNormal(true);
+    g_editor.cy = y;
+    g_editor.cx = x;
+    viClampNormal();
+    v.reg = 0;
+}
+
+static void viVisualReplace() {
+    ViState &v = g_editor.vi;
+    std::string text;
+    bool linewise = false;
+    if (!viReadRegister(v.reg, text, linewise) || text.empty()) { v.reg = 0; return; }
+    TextPos s, e;
+    viVisualRange(s, e);
+    recordUndoSnapshot(UndoGroup::Structural);
+    if (linewise) {
+        std::vector<std::string> ins;
+        size_t pos = 0;
+        while (pos < text.length()) {
+            size_t nl = text.find('\n', pos);
+            ins.push_back(nl == std::string::npos ? text.substr(pos) : text.substr(pos, nl - pos));
+            if (nl == std::string::npos) break;
+            pos = nl + 1;
+        }
+        // 行寄存器的尾随换行拆出一个空串; 但 "\n"(单个空行)要保留成一行。
+        if (ins.size() > 1 && ins.back().empty()) ins.pop_back();
+        int b = e.cy;
+        if (b < s.cy) b = s.cy;
+        g_editor.lines.erase(g_editor.lines.begin() + s.cy, g_editor.lines.begin() + b + 1);
+        foldLinesErased(s.cy, b - s.cy + 1);
+        if (g_editor.lines.empty()) g_editor.lines.push_back("");
+        int outCy = s.cy, outCx = 0;
+        insertLinesAt(s.cy, ins, outCy, outCx);
+        g_editor.cy = outCy;
+        g_editor.cx = viFirstNonBlank(g_editor.lines[outCy]);
+    } else if (v.mode == ViMode::VisualLine) {
+        int b = e.cy;
+        if (b < s.cy) b = s.cy;
+        g_editor.lines.erase(g_editor.lines.begin() + s.cy, g_editor.lines.begin() + b + 1);
+        foldLinesErased(s.cy, b - s.cy + 1);
+        if (g_editor.lines.empty()) g_editor.lines.push_back("");
+        int outCy = s.cy, outCx = 0;
+        if (s.cy >= (int)g_editor.lines.size()) {
+            // 选区在文档末尾: 在最后一行之后另起一行粘贴。
+            int last = (int)g_editor.lines.size() - 1;
+            insertMultilineAt(last, (int)g_editor.lines[last].length(), "\n" + text, outCy, outCx);
+        } else {
+            insertMultilineAt(s.cy, 0, text, outCy, outCx);
+        }
+        g_editor.cy = outCy;
+        g_editor.cx = outCx;
+    } else {
+        viDeleteCharwise(s, e);
+        int outCy = g_editor.cy, outCx = g_editor.cx;
+        insertMultilineAt(g_editor.cy, g_editor.cx, text, outCy, outCx);
+        g_editor.cy = outCy;
+        g_editor.cx = outCx;
+        if (outCx > 0) g_editor.cx = utf8Prev(g_editor.lines[outCy], outCx);
+    }
+    viMarkChanged();
+    viEnterNormal(true);
+    v.reg = 0;
+}
+
+// 视觉模式下的按键处理。
+static void viVisualKey(int key, bool &needDraw, bool &handled) {
+    ViState &v = g_editor.vi;
+    needDraw = true;
+    int count = v.count > 0 ? v.count : 1;
+
+    if (key >= '1' && key <= '9') {
+        viCountDigit(v.count, key - '0');
+        return;
+    }
+    if (key == '0' && v.count > 0) { viCountDigit(v.count, 0); return; }
+    if (key == '"') { v.wantRegister = true; return; }
+
+    if (v.wantRegister) {
+        v.reg = ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
+                 (key >= '0' && key <= '9') || key == '+' || key == '*') ? (char)key : 0;
+        v.wantRegister = false;
+        return;
+    }
+    if (v.findCmd) {
+        ViMotion m;
+        if (key >= 0x20 && key <= 0x7E && viFindMotion(v.findCmd, (char)key, count, m)) {
+            v.lastFindCmd = v.findCmd;
+            v.lastFindChar = (char)key;
+            viApplyMotion(m);
+        }
+        v.findCmd = 0;
+        v.count = 0;
+        return;
+    }
+
+    switch (key) {
+        case 0x1B:
+            viEnterNormal(true);
+            return;
+        case 'v':
+            if (v.mode == ViMode::VisualLine) { v.mode = ViMode::Visual; return; }
+            viEnterNormal(true);
+            return;
+        case 'V':
+            if (v.mode == ViMode::Visual) { v.mode = ViMode::VisualLine; return; }
+            viEnterNormal(true);
+            return;
+        case 'o': {
+            int ay = g_editor.selAnchorCy, ax = g_editor.selAnchorCx;
+            g_editor.selAnchorCy = g_editor.cy;
+            g_editor.selAnchorCx = g_editor.cx;
+            g_editor.cy = ay;
+            g_editor.cx = ax;
+            viClampNormal();
+            return;
+        }
+        case 'd': case 'x': viVisualDeleteOrChange(false); return;
+        case 'c': viVisualDeleteOrChange(true); return;
+        case 'y': viVisualYank(); return;
+        case 'p': case 'P': viVisualReplace(); return;
+        case '>': case '<': {
+            TextPos s, e;
+            viVisualRange(s, e);
+            int b = e.cy;
+            if (b < s.cy) b = s.cy;
+            recordUndoSnapshot(UndoGroup::Structural);
+            viIndentLines(s.cy, b, key == '>');
+            viEnterNormal(true);
+            return;
+        }
+        case '~': {
+            TextPos s, e;
+            viVisualRange(s, e);
+            recordUndoSnapshot(UndoGroup::Structural);
+            viToggleCaseRange(s, e);
+            viEnterNormal(true);
+            return;
+        }
+        case 0x03: viVisualYank(); return;      // Ctrl+C
+        case 0x18: viVisualDeleteOrChange(false); return;  // Ctrl+X
+        case 0x16: viVisualReplace(); return;   // Ctrl+V
+        case 0x01: {                            // Ctrl+A: 全选
+            v.mode = ViMode::Visual;
+            g_editor.selAnchorCy = 0;
+            g_editor.selAnchorCx = 0;
+            g_editor.cy = (int)g_editor.lines.size() - 1;
+            g_editor.cx = viLastCharPos(g_editor.lines[g_editor.cy]);
+            viClampNormal();
+            g_editor.hasSelection = true;
+            return;
+        }
+        default: break;
+    }
+
+    ViMotion m;
+    if (key == 'G' && v.count > 0) { viGotoLineMotion(v.count, m); }
+    else if (key == KEY_SHIFT_LEFT) { viMotionKey(KEY_LEFT, count, m); }
+    else if (key == KEY_SHIFT_RIGHT) { viMotionKey(KEY_RIGHT, count, m); }
+    else if (key == KEY_SHIFT_UP) { viMotionKey(KEY_UP, count, m); }
+    else if (key == KEY_SHIFT_DOWN) { viMotionKey(KEY_DOWN, count, m); }
+    else if (viMotionKey(key, count, m)) { /* handled below */ }
+    else {
+        v.count = 0;
+        // 未列出的 Ctrl 键交回原快捷键(Ctrl+S/Q/O 等), 与 normal 一致。
+        if (key > 0 && key < 0x20) handled = false;
+        return;
+    }
+    if (m.ok) viApplyMotion(m);
+    v.count = 0;
+}
+
+// ── 普通模式按键 ─────────────────────────────────────────────────────────
+static void viNormalKey(int key, ScreenContext &ctx, bool &needDraw, AppState &out,
+                        bool &handled) {
+    ViState &v = g_editor.vi;
+    needDraw = true;
+    int count = v.count > 0 ? v.count : 1;
+
+    // 数字计数
+    if (key >= '1' && key <= '9') { viCountDigit(v.count, key - '0'); return; }
+    if (key == '0' && v.count > 0) { viCountDigit(v.count, 0); return; }
+
+    // 寄存器前缀
+    if (v.wantRegister) {
+        v.reg = ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') ||
+                 (key >= '0' && key <= '9') || key == '+' || key == '*') ? (char)key : 0;
+        v.wantRegister = false;
+        return;
+    }
+    if (key == '"') { v.wantRegister = true; return; }
+
+    // g 前缀
+    if (v.gPending) {
+        v.gPending = false;
+        if (key == 'g') {
+            int n = v.count > 0 ? v.count : 1;
+            if (n > (int)g_editor.lines.size()) n = (int)g_editor.lines.size();
+            g_editor.cy = n - 1;
+            g_editor.cx = viFirstNonBlank(g_editor.lines[g_editor.cy]);
+            g_editor.targetCx = -1;
+            v.count = 0;
+        }
+        return;
+    }
+    if (key == 'g') { v.gPending = true; return; }
+
+    // f/t 等待目标字符
+    if (v.findCmd) {
+        char cmd = v.findCmd;
+        v.findCmd = 0;
+        if (key < 0x20 || key > 0x7E) { v.count = 0; return; }
+        ViMotion m;
+        if (viFindMotion(cmd, (char)key, count, m)) {
+            v.lastFindCmd = cmd;
+            v.lastFindChar = (char)key;
+            viApplyMotion(m);
+        }
+        v.count = 0;
+        return;
+    }
+    if (key == 'f' || key == 'F' || key == 't' || key == 'T') {
+        v.findCmd = (char)key;
+        return;
+    }
+
+    // r 等待替换字符
+    if (v.replacePending) {
+        v.replacePending = false;
+        if (key >= 0x20 && key <= 0x7E) viReplaceChars(count, key);
+        v.count = 0;
+        return;
+    }
+    if (key == 'r') { v.replacePending = true; return; }
+
+    // 操作符待决
+    if (v.op != ViOperator::None) {
+        if (key == '"') { v.wantRegister = true; return; }
+        if (key == 'd' || key == 'c' || key == 'y' || key == '>' || key == '<') {
+            ViOperator same = v.op;
+            bool matches = (key == 'd' && same == ViOperator::Delete) ||
+                           (key == 'c' && same == ViOperator::Change) ||
+                           (key == 'y' && same == ViOperator::Yank) ||
+                           (key == '>' && same == ViOperator::IndentRight) ||
+                           (key == '<' && same == ViOperator::IndentLeft);
+            if (matches) {
+                int n = viCountMul(v.opCount > 0 ? v.opCount : 1, count);
+                viApplyOperator(same, viDoubleOperatorMotion(n), true);
+                v.count = v.opCount = 0;
+                v.reg = 0;
+                return;
+            }
+            v.op = ViOperator::None;
+            v.count = v.opCount = 0;
+            return;
+        }
+        if (key >= '1' && key <= '9') {
+            viCountDigit(v.count, key - '0');
+            return;
+        }
+        if (key == '0' && v.count > 0) {
+            viCountDigit(v.count, 0);
+            return;
+        }
+        ViMotion m;
+        int eff = viCountMul(v.opCount > 0 ? v.opCount : 1, count);
+        int motionKey = key;
+        if (key == KEY_SHIFT_LEFT) motionKey = KEY_LEFT;
+        else if (key == KEY_SHIFT_RIGHT) motionKey = KEY_RIGHT;
+        else if (key == KEY_SHIFT_UP) motionKey = KEY_UP;
+        else if (key == KEY_SHIFT_DOWN) motionKey = KEY_DOWN;
+        // cw 在非空白字符上等价 ce; dw/yw/cw 在行内最后一个词时不吞下一行换行。
+        bool ok;
+        if (key == 'G' && (v.count > 0 || v.opCount > 0)) {
+            viGotoLineMotion(eff, m);
+            ok = true;
+        } else if ((key == 'w' || key == 'W') && v.op == ViOperator::Change &&
+                   !viSpaceAt(g_editor.lines[g_editor.cy], g_editor.cx)) {
+            ok = viMotionKey(key == 'w' ? 'e' : 'E', eff, m);
+        } else {
+            ok = viMotionKey(motionKey, eff, m);
+        }
+        if (ok && (key == 'w' || key == 'W') && eff == 1 && !m.linewise &&
+            m.cy > g_editor.cy) {
+            m.cy = g_editor.cy;
+            m.cx = (int)g_editor.lines[g_editor.cy].length();
+            m.inclusive = false;
+        }
+        if (ok) {
+            viApplyOperator(v.op, m, true);
+            v.count = v.opCount = 0;
+            v.reg = 0;
+        } else {
+            v.op = ViOperator::None;
+            v.count = v.opCount = 0;
+        }
+        return;
+    }
+
+    // 操作符前缀
+    if (key == 'd' || key == 'c' || key == 'y' || key == '>' || key == '<') {
+        v.op = (key == 'd') ? ViOperator::Delete :
+               (key == 'c') ? ViOperator::Change :
+               (key == 'y') ? ViOperator::Yank :
+               (key == '>') ? ViOperator::IndentRight : ViOperator::IndentLeft;
+        v.opCount = v.count;
+        v.count = 0;
+        return;
+    }
+
+    switch (key) {
+        case 0x1B:
+            viEnterNormal(true);
+            v.count = v.opCount = 0;
+            v.reg = 0;
+            return;
+        case 'i':
+            viEnterInsert();
+            return;
+        case 'a':
+            if (g_editor.cx < (int)g_editor.lines[g_editor.cy].length())
+                g_editor.cx = utf8Next(g_editor.lines[g_editor.cy], g_editor.cx);
+            viEnterInsert();
+            return;
+        case 'I':
+            g_editor.cx = viFirstNonBlank(g_editor.lines[g_editor.cy]);
+            viEnterInsert();
+            return;
+        case 'A':
+            g_editor.cx = (int)g_editor.lines[g_editor.cy].length();
+            viEnterInsert();
+            return;
+        case 'o': {
+            recordUndoSnapshot(UndoGroup::Structural);
+            std::vector<std::string> ins(1, "");
+            int outCy = 0, outCx = 0;
+            int at = g_editor.cy + 1;
+            if (at > (int)g_editor.lines.size()) at = (int)g_editor.lines.size();
+            insertLinesAt(at, ins, outCy, outCx);
+            g_editor.cy = outCy;
+            g_editor.cx = 0;
+            viMarkChanged();
+            viEnterInsert();
+            return;
+        }
+        case 'O': {
+            recordUndoSnapshot(UndoGroup::Structural);
+            std::vector<std::string> ins(1, "");
+            int outCy = 0, outCx = 0;
+            insertLinesAt(g_editor.cy, ins, outCy, outCx);
+            g_editor.cy = outCy;
+            g_editor.cx = 0;
+            viMarkChanged();
+            viEnterInsert();
+            return;
+        }
+        case 'v': viStartVisual(ViMode::Visual); return;
+        case 'V': viStartVisual(ViMode::VisualLine); return;
+        case 'x': {
+            std::string &line = g_editor.lines[g_editor.cy];
+            int end = g_editor.cx;
+            for (int i = 0; i < count && end < (int)line.length(); i++) end = utf8Next(line, end);
+            if (end > g_editor.cx) {
+                recordUndoSnapshot(UndoGroup::Delete);
+                std::string text = line.substr(g_editor.cx, end - g_editor.cx);
+                viWriteRegister(v.reg, text, false);
+                viDeleteCharwise({g_editor.cy, g_editor.cx}, {g_editor.cy, end});
+                viClampNormal();
+            }
+            v.reg = 0; v.count = 0;
+            return;
+        }
+        case 'X': {
+            std::string &line = g_editor.lines[g_editor.cy];
+            int start = g_editor.cx;
+            for (int i = 0; i < count && start > 0; i++) start = utf8Prev(line, start);
+            if (start < g_editor.cx) {
+                recordUndoSnapshot(UndoGroup::Delete);
+                std::string text = line.substr(start, g_editor.cx - start);
+                viWriteRegister(v.reg, text, false);
+                viDeleteCharwise({g_editor.cy, start}, {g_editor.cy, g_editor.cx});
+                viClampNormal();
+            }
+            v.reg = 0; v.count = 0;
+            return;
+        }
+        case 's': {
+            std::string &line = g_editor.lines[g_editor.cy];
+            int end = g_editor.cx;
+            for (int i = 0; i < count && end < (int)line.length(); i++) end = utf8Next(line, end);
+            if (end > g_editor.cx) {
+                recordUndoSnapshot(UndoGroup::Structural);
+                std::string text = line.substr(g_editor.cx, end - g_editor.cx);
+                viWriteRegister(v.reg, text, false);
+                viDeleteCharwise({g_editor.cy, g_editor.cx}, {g_editor.cy, end});
+            }
+            v.reg = 0; v.count = 0;
+            viEnterInsert();
+            return;
+        }
+        case 'S': {
+            recordUndoSnapshot(UndoGroup::Structural);
+            viWriteRegister(v.reg, viLineRangeText(g_editor.cy, g_editor.cy), true);
+            viChangeLines(g_editor.cy, g_editor.cy);
+            v.reg = 0; v.count = 0;
+            viEnterInsert();
+            return;
+        }
+        case 'D': {
+            recordUndoSnapshot(UndoGroup::Delete);
+            std::string &line = g_editor.lines[g_editor.cy];
+            if (g_editor.cx < (int)line.length()) {
+                viWriteRegister(v.reg, line.substr(g_editor.cx), false);
+                viDeleteCharwise({g_editor.cy, g_editor.cx}, {g_editor.cy, (int)line.length()});
+                viClampNormal();
+            }
+            v.reg = 0; v.count = 0;
+            return;
+        }
+        case 'C': {
+            recordUndoSnapshot(UndoGroup::Structural);
+            std::string &line = g_editor.lines[g_editor.cy];
+            if (g_editor.cx < (int)line.length()) {
+                viWriteRegister(v.reg, line.substr(g_editor.cx), false);
+                viDeleteCharwise({g_editor.cy, g_editor.cx}, {g_editor.cy, (int)line.length()});
+            }
+            v.reg = 0; v.count = 0;
+            viEnterInsert();
+            return;
+        }
+        case 'Y':
+            viWriteRegister(v.reg, viLineRangeText(g_editor.cy,
+                std::min(g_editor.cy + count - 1, (int)g_editor.lines.size() - 1)), true);
+            v.reg = 0; v.count = 0;
+            return;
+        case 'p': viPaste(true); v.count = 0; return;
+        case 'P': viPaste(false); v.count = 0; return;
+        case 'u':
+            undoEditor();
+            viEnterNormal(true);
+            v.count = 0;
+            return;
+        case 0x12: case KEY_REDO:
+            redoEditor();
+            viEnterNormal(true);
+            v.count = 0;
+            return;
+        case '~': {
+            std::string &line = g_editor.lines[g_editor.cy];
+            int end = g_editor.cx;
+            for (int i = 0; i < count && end < (int)line.length(); i++) end = utf8Next(line, end);
+            if (end > g_editor.cx) {
+                recordUndoSnapshot(UndoGroup::Structural);
+                viToggleCaseRange({g_editor.cy, g_editor.cx}, {g_editor.cy, end});
+            }
+            v.count = 0;
+            return;
+        }
+        case 'J':
+            viJoinLines(count);
+            v.count = 0;
+            return;
+        case '/': case '?': case ':':
+            viStartCmdline((char)key);
+            v.count = 0;
+            return;
+        case 'n':
+        case 'N': {
+            if (v.lastSearch.empty()) { viSetMsg("无上次搜索"); v.count = 0; return; }
+            bool forward = (key == 'n') ? v.lastSearchForward : !v.lastSearchForward;
+            viSearchApply(v.lastSearch, forward, count);
+            v.count = 0;
+            return;
+        }
+        case 0x01: {  // Ctrl+A 全选并进入 Visual
+            g_editor.vi.mode = ViMode::Visual;
+            g_editor.selAnchorCy = 0;
+            g_editor.selAnchorCx = 0;
+            g_editor.cy = (int)g_editor.lines.size() - 1;
+            g_editor.cx = viLastCharPos(g_editor.lines[g_editor.cy]);
+            viClampNormal();
+            g_editor.hasSelection = true;
+            v.count = 0;
+            return;
+        }
+        case 0x16: viPaste(true); v.count = 0; return;  // Ctrl+V = p
+        case 0x03: case 0x18: v.count = 0; return;      // normal 下无操作
+        case KEY_SHIFT_LEFT: case KEY_SHIFT_RIGHT: case KEY_SHIFT_UP: case KEY_SHIFT_DOWN: {
+            viStartVisual(ViMode::Visual);
+            ViMotion m;
+            int mk = key == KEY_SHIFT_LEFT ? KEY_LEFT : key == KEY_SHIFT_RIGHT ? KEY_RIGHT :
+                     key == KEY_SHIFT_UP ? KEY_UP : KEY_DOWN;
+            if (viMotionKey(mk, count, m)) viApplyMotion(m);
+            v.count = 0;
+            return;
+        }
+        case KEY_IME_TOGGLE:
+            v.count = 0;
+            return;
+        default: break;
+    }
+
+    ViMotion m;
+    if (viMotionKey(key, count, m)) {
+        viApplyMotion(m);
+        v.count = 0;
+        return;
+    }
+
+    // 未列出的 Ctrl 键交回原快捷键(Ctrl+S/Q/O/E/Y/Z 等)
+    if (key > 0 && key < 0x20) {
+        handled = false;
+        return;
+    }
+    // 其他可打印/特殊键在 normal 下吞掉, 不进入正文
+    v.count = 0;
+}
+
+// ── vi 分发入口 ──────────────────────────────────────────────────────────
+static AppState screen_editor_vi_handle(int key, ScreenContext &ctx, bool &handled) {
+    handled = false;
+    if (!g_settings.viMode() || key == 0) return APP_EDITOR;
+    ViState &v = g_editor.vi;
+
+    if (v.cmdlineActive) {
+        handled = true;
+        return viCmdlineKey(key, ctx);
+    }
+
+    if (v.mode == ViMode::Insert) {
+        if (key == 0x1B) {
+            handled = true;
+            if (g_ime.composing()) g_ime.cancelComposition();
+            else viLeaveInsert();
+        }
+        return APP_EDITOR;
+    }
+
+    // normal / visual: 输入法一律关闭
+    handled = true;
+    if (g_editor.imeActive) {
+        g_editor.imeActive = false;
+        g_ime.setActive(false);
+    }
+    g_editor.hasSelection = (v.mode == ViMode::Visual || v.mode == ViMode::VisualLine);
+
+    bool needDraw = true;
+    AppState out = APP_EDITOR;
+    if (v.mode == ViMode::Normal) {
+        viNormalKey(key, ctx, needDraw, out, handled);
+    } else {
+        viVisualKey(key, needDraw, handled);
+    }
+    return out;
+}
+
 // ── Screen entry points ──────────────────────────────────────────────────
 void screen_editor_init(ScreenContext &ctx) {
     g_editor.lines.clear();
@@ -1925,6 +3938,15 @@ void screen_editor_init(ScreenContext &ctx) {
     g_ime.setEnglish(false);
     g_ime.setActive(true);
     g_ime.setDocumentContext(editorImeContextText());
+    g_editor.vi = ViState{};
+    g_editor.cachedGutterCells = -1;
+    if (g_settings.viMode()) {
+        g_editor.vi.mode = ViMode::Normal;
+        g_editor.vi.insertImePref = g_editor.imeActive;
+        g_editor.imeActive = false;
+        g_ime.setActive(false);
+        if (g_editor.cx > 0) g_editor.cx = utf8Prev(g_editor.lines[g_editor.cy], g_editor.cx);
+    }
     g_editor.confirmSave = false;
     g_editor.modifiedSinceSave = false;
     g_editor.drawnOnce = false;
@@ -1946,6 +3968,7 @@ void screen_editor_init(ScreenContext &ctx) {
     g_editor.helpScroll = 0;
     g_editor.fileMgr.active = false;
     g_editor.fileMgr.mode = FileMgrMode::Browse;
+    g_editor.cachedGutterCells = -1;
     clearUndoHistory();
 
     std::string recoveryContent, recoveryMeta;
@@ -2062,6 +4085,17 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.helpScroll = 0;
         ui_clear(); drawHelpPanel(); ui_commit();
         return APP_EDITOR;
+    }
+
+    // vi 模式: 必须在裸 Esc 退出与 IME 门之前分发。
+    if (g_settings.viMode()) {
+        bool viHandled = false;
+        AppState st = screen_editor_vi_handle(key, ctx, viHandled);
+        if (viHandled) {
+            if (st != APP_EDITOR) return st;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
     }
 
     if (key == 0x1B) {
@@ -2328,8 +4362,10 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             if (g_editor.hasSelection) {
                 deleteSelection(); // removes selection, then paste at cursor
             }
-            g_editor.lines[g_editor.cy].insert(g_editor.cx, g_clipboard);
-            g_editor.cx += (int)g_clipboard.length();
+            int outCy = g_editor.cy, outCx = g_editor.cx;
+            insertMultilineAt(g_editor.cy, g_editor.cx, g_clipboard, outCy, outCx);
+            g_editor.cy = outCy;
+            g_editor.cx = outCx;
             g_editor.targetCx = -1;
             markDirty();
             g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
@@ -2408,7 +4444,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             auto &prev = vrows[curVR - 1];
             if (g_editor.targetCx < 0)
                 g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
-            int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
+            int visualCol = g_editor.targetCx % editorTextCells();
             g_editor.cy = prev.lineIdx;
             int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], prev.start);
             int targetCells = vrowStartCells + visualCol;
@@ -2431,7 +4467,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             auto &next = vrows[curVR + 1];
             if (g_editor.targetCx < 0)
                 g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
-            int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
+            int visualCol = g_editor.targetCx % editorTextCells();
             g_editor.cy = next.lineIdx;
             int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], next.start);
             int targetCells = vrowStartCells + visualCol;
@@ -2556,7 +4592,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             auto &prev = vrows[curVR - 1];
             if (g_editor.targetCx < 0)
                 g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
-            int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
+            int visualCol = g_editor.targetCx % editorTextCells();
             g_editor.cy = prev.lineIdx;
             int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], prev.start);
             int targetCells = vrowStartCells + visualCol;
@@ -2574,7 +4610,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             auto &next = vrows[curVR + 1];
             if (g_editor.targetCx < 0)
                 g_editor.targetCx = byteToCells(g_editor.lines[g_editor.cy], g_editor.cx);
-            int visualCol = g_editor.targetCx % EDITOR_MAX_CELLS;
+            int visualCol = g_editor.targetCx % editorTextCells();
             g_editor.cy = next.lineIdx;
             int vrowStartCells = byteToCells(g_editor.lines[g_editor.cy], next.start);
             int targetCells = vrowStartCells + visualCol;
@@ -2700,6 +4736,19 @@ bool app_editor_help_active() {
     return g_editor.helpActive;
 }
 
+// vi normal/visual 或命令行激活时, 全局 Ctrl+Space 不得偷偷打开输入法;
+// '/' '?' 命令栏自己的 Ctrl+Space 由编辑器处理。
+bool app_editor_vi_ime_blocked() {
+    if (!g_settings.viMode() || s_skipStatusBarAndIme) return false;
+    if (g_editor.vi.cmdlineActive) return true;
+    return g_editor.vi.mode != ViMode::Insert;
+}
+
+// 命令行激活时, 物理按键浮层与全局 Ctrl+I 不应抢键。
+bool app_editor_vi_cmdline_active() {
+    return g_settings.viMode() && g_editor.vi.cmdlineActive;
+}
+
 // ── App-level helpers ────────────────────────────────────────────────────
 bool app_ime_active() {
     return g_editor.imeActive;
@@ -2770,13 +4819,73 @@ std::string app_get_editor_text() {
     return currentEditorText();
 }
 
+// 在 (cy,cx) 插入可含 '\n' 的文本, 跨行时拆成多条硬行。不记撤销、不置脏、不设
+// 自动保存, 由调用方负责; 行数变化自动平移折叠标题。
+static void insertMultilineAt(int cy, int cx, const std::string &text,
+                              int &outCy, int &outCx) {
+    if (cy < 0 || cy >= (int)g_editor.lines.size()) {
+        outCy = cy < 0 ? 0 : (int)g_editor.lines.size() - 1;
+        outCx = 0;
+        return;
+    }
+    // 防御越界: std::string::insert 的 pos 超过长度会抛异常并直接 abort。
+    if (cx < 0) cx = 0;
+    if (cx > (int)g_editor.lines[cy].length()) cx = (int)g_editor.lines[cy].length();
+    outCy = cy;
+    outCx = cx;
+    if (text.empty()) return;
+    if (text.find('\n') == std::string::npos) {
+        g_editor.lines[cy].insert(cx, text);
+        outCx = cx + (int)text.length();
+        return;
+    }
+    std::vector<std::string> ins;
+    size_t pos = 0;
+    while (pos < text.length()) {
+        size_t nl = text.find('\n', pos);
+        ins.push_back(nl == std::string::npos ? text.substr(pos) : text.substr(pos, nl - pos));
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+    }
+    if (ins.empty()) return;
+    if (ins.size() > 1 && ins.back().empty()) ins.pop_back();
+
+    std::string tail = g_editor.lines[cy].substr(cx);
+    g_editor.lines[cy] = g_editor.lines[cy].substr(0, cx) + ins[0];
+    if (ins.size() == 1) {
+        g_editor.lines[cy] += tail;
+        outCx = cx + (int)ins[0].length();
+        return;
+    }
+    int insertAt = cy + 1;
+    for (size_t i = 1; i + 1 < ins.size(); i++)
+        g_editor.lines.insert(g_editor.lines.begin() + insertAt++, ins[i]);
+    g_editor.lines.insert(g_editor.lines.begin() + insertAt, ins.back() + tail);
+    foldLinesInserted(cy + 1, (int)ins.size() - 1);
+    outCy = insertAt;
+    outCx = (int)ins.back().length();
+}
+
+// 在硬行索引 at 处插入若干整行。不记撤销、不置脏; 光标落到首条插入行行首。
+static void insertLinesAt(int at, const std::vector<std::string> &lines,
+                          int &outCy, int &outCx) {
+    if (at < 0) at = 0;
+    if (at > (int)g_editor.lines.size()) at = (int)g_editor.lines.size();
+    g_editor.lines.insert(g_editor.lines.begin() + at, lines.begin(), lines.end());
+    if (!lines.empty()) foldLinesInserted(at, (int)lines.size());
+    outCy = at;
+    outCx = 0;
+}
+
 // Insert text at the cursor, shared by IME commit and voice dictation.
 void editorInsertText(const std::string &text) {
     if (text.empty()) return;
     recordUndoSnapshot(UndoGroup::Typing);
     if (g_editor.hasSelection) deleteSelection();
-    g_editor.lines[g_editor.cy].insert(g_editor.cx, text);
-    g_editor.cx += (int)text.length();
+    int outCy = g_editor.cy, outCx = g_editor.cx;
+    insertMultilineAt(g_editor.cy, g_editor.cx, text, outCy, outCx);
+    g_editor.cy = outCy;
+    g_editor.cx = outCx;
     g_editor.targetCx = -1;
     markDirty();
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
@@ -2808,32 +4917,10 @@ void editorReplaceSelection(const std::string &text) {
     recordUndoSnapshot(UndoGroup::Structural);
     if (g_editor.hasSelection) deleteSelection();
     if (!text.empty()) {
-        // Split on '\n' (drop a trailing empty segment, like loadLinesIntoEditor)
-        // so a multi-line polish result splits cleanly across lines.
-        std::vector<std::string> ins;
-        size_t pos = 0;
-        while (pos < text.length()) {
-            size_t nl = text.find('\n', pos);
-            ins.push_back(nl == std::string::npos ? text.substr(pos) : text.substr(pos, nl - pos));
-            if (nl == std::string::npos) break;
-            pos = nl + 1;
-        }
-        if (ins.size() > 1 && ins.back().empty()) ins.pop_back();
-
-        std::string tail = g_editor.lines[g_editor.cy].substr(g_editor.cx);
-        g_editor.lines[g_editor.cy] = g_editor.lines[g_editor.cy].substr(0, g_editor.cx) + ins[0];
-        if (ins.size() == 1) {
-            g_editor.lines[g_editor.cy] += tail;
-            g_editor.cx = (int)g_editor.lines[g_editor.cy].length() - (int)tail.length();
-        } else {
-            int insertAt = g_editor.cy + 1;
-            for (size_t i = 1; i < ins.size() - 1; i++)
-                g_editor.lines.insert(g_editor.lines.begin() + insertAt++, ins[i]);
-            g_editor.lines.insert(g_editor.lines.begin() + insertAt, ins.back() + tail);
-            foldLinesInserted(g_editor.cy + 1, (int)ins.size() - 1);
-            g_editor.cy = insertAt;
-            g_editor.cx = (int)ins.back().length();
-        }
+        int outCy = g_editor.cy, outCx = g_editor.cx;
+        insertMultilineAt(g_editor.cy, g_editor.cx, text, outCy, outCx);
+        g_editor.cy = outCy;
+        g_editor.cx = outCx;
     }
     g_editor.targetCx = -1;
     markDirty();

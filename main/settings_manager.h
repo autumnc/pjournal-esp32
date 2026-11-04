@@ -36,6 +36,8 @@ public:
     bool sleepScreen();
     bool markdownRender();
     bool firstLineIndent();
+    bool showLineNumbers();  // 编辑区左侧显示绝对行号，默认关
+    bool viMode();           // vi 键位模式，默认关
     bool versionHistory();
     bool recoveryDraft();
     bool verticalReferenceLine();

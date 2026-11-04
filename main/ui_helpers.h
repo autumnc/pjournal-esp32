@@ -66,7 +66,8 @@ std::string battery_icon_status_text();
 // defaults).
 std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
                              const std::vector<MdLineInfo> *mdInfoIn = nullptr,
-                             const std::set<int> *foldedHeadings = nullptr);
+                             const std::set<int> *foldedHeadings = nullptr,
+                             int reserveCells = 0);
 
 // IME drawing helpers
 int imeStatusPanelTopY();

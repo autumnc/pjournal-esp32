@@ -72,4 +72,4 @@ void drawVerticalCols(const std::vector<std::string> &lines, const VerticalData 
 
 void drawVerticalCursor(const std::vector<std::string> &lines, const VerticalData &data,
                         int scrollCol, const VerticalLayoutMetrics &m,
-                        int lineIdx, int bytePos);
+                        int lineIdx, int bytePos, bool block = false);

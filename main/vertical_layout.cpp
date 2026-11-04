@@ -7,6 +7,7 @@
 extern "C" {
     extern void u8g2_SetDrawColor(void *u8g2, int color);
     extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
+    extern void u8g2_DrawFrame(void *u8g2, int x, int y, int w, int h);
     extern void u8g2_DrawVLine(void *u8g2, int x, int y, int h);
     extern void u8g2_DrawPixel(void *u8g2, int x, int y);
 }
@@ -407,7 +408,7 @@ void drawVerticalCols(const std::vector<std::string> &lines, const VerticalData 
 
 void drawVerticalCursor(const std::vector<std::string> &lines, const VerticalData &data,
                         int scrollCol, const VerticalLayoutMetrics &m,
-                        int lineIdx, int bytePos) {
+                        int lineIdx, int bytePos, bool block) {
     (void)lines;
     if (lineIdx < 0 || lineIdx >= (int)data.cells.size()) return;
     int colIdx = verticalFindCol(data, lines, lineIdx, bytePos);
@@ -419,6 +420,10 @@ void drawVerticalCursor(const std::vector<std::string> &lines, const VerticalDat
     int x = m.x + m.w - m.colAdvance - ci * m.colAdvance;
     int y = m.y + row * m.rowAdvance;
     u8g2_SetDrawColor(g_u8g2, 0);
-    u8g2_DrawBox(g_u8g2, x + 2, y + m.rowAdvance - 4, g_font.lineHeight() - 4, 3);
+    if (block) {
+        u8g2_DrawFrame(g_u8g2, x + 1, y, g_font.lineHeight() - 2, m.rowAdvance);
+    } else {
+        u8g2_DrawBox(g_u8g2, x + 2, y + m.rowAdvance - 4, g_font.lineHeight() - 4, 3);
+    }
     u8g2_SetDrawColor(g_u8g2, 1);
 }
