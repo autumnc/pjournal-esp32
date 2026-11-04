@@ -41,59 +41,91 @@ static std::string nextAppMode(const std::string &mode) {
 }
 
 // ── Settings state ────────────────────────────────────────────────────────
-struct SettingField { const char *key; const char *label; bool masked; bool action; };
+// 设置项按分组排列; 分组标题只占一行显示, 不参与选择。
+enum SettingsGroup {
+    SG_MODE, SG_EDITOR, SG_IME, SG_FILE, SG_CONNECT, SG_ACCOUNT, SG_PERSONAL, SG_COUNT
+};
+
+struct SettingField {
+    const char *key;
+    const char *label;
+    bool masked;
+    bool action;
+    SettingsGroup group;
+};
+
 static const SettingField SETTINGS_FIELDS[] = {
-    {"_app_mode", "工作模式", false, true},
-    {"_home_view", "主页视图", false, true},
-    {"_editor_orientation", "文字方向", false, true},
-    {"vertical_ref_line", "竖排参考线", false, false},
-    {"_vertical_ref_line_style", "参考线样式", false, true},
-    {"_input_mode", "输入模式", false, true},
-    {"_ime_fuzzy", "拼音模糊音", false, true},
-    {"_ime_predict_mode", "联想候选", false, true},
-    {"ime_candidate_highlight", "候选高亮", false, false},
-    {"ime_sentence", "整句候选", false, false},
-    {"ime_doc_context", "正文词优先", false, false},
-    {"_letter_sel_key", "字母选字按键", false, true},
-    {"click_enabled", "打字音效", false, false},
-    {"_click_chinese", "中文音效触发", false, true},
-    {"_click_volume", "打字音效音量", false, true},
-    {"_click_timbre", "打字音效音色", false, true},
-    {"_file_mgr", "文件管理", false, true},
-    {"_usb_msc", "U盘模式", false, true},
-    {"_dict_mgr", "词库管理", false, true},
-    {"file_mgr_token", "文件管理密码", true, false},
-    {"_bt_manage", "蓝牙设备管理", false, true},
-    {"_voice_asr_service", "语音识别服务", false, true},
-    {"baidu_asr_api_key", "百度Api Key", false, false},
-    {"baidu_asr_secret_key", "百度Secret Key", true, false},
-    {"deepseek_key", "Deepseek Key", false, false},
-    {"_polish_prompt", "润色提示词", false, true},
-    {"flomo_email", "Flomo 邮箱", false, false},
-    {"flomo_pass", "Flomo 密码", false, false},
-    {"_flomo_token", "生成Flomo Token", false, true},
-    {"webdav_url", "WebDAV URL", false, false},
-    {"webdav_user", "WebDAV 用户", false, false},
-    {"webdav_pass", "WebDAV 密码", false, false},
-    {"personal_exp", "个人经历", false, false},
-    {"personal_hob", "个人爱好", false, false},
-    {"wifi_ssid", "WiFi SSID", false, false},
-    {"wifi_pass", "WiFi 密码", false, false},
-    {"timezone", "时区(如CST-8)", false, false},
-    {"ntp_server", "NTP服务器", false, false},
-    {"auto_save", "自动保存", false, false},
-    {"recovery_draft", "恢复草稿", false, false},
-    {"version_history", "版本历史", false, false},
-    {"auto_sleep", "自动休眠", false, false},
-    {"sleep_screen", "休眠保留画面", false, false},
-    {"md_render", "Markdown渲染", false, false},
-    {"first_line_indent", "首行缩进", false, false},
-    {"show_line_numbers", "显示行号", false, false},
-    {"vi_mode", "Vi 模式", false, false},
-    {"_font_size", "字体大小", false, true},
-    {"_sync_time", "网络同步时间", false, true},
+    // 模式设置
+    {"_app_mode", "工作模式", false, true, SG_MODE},
+    {"_home_view", "主页视图", false, true, SG_MODE},
+    {"_input_mode", "输入模式", false, true, SG_MODE},
+    {"click_enabled", "打字音效", false, false, SG_MODE},
+    {"_click_chinese", "中文音效触发", false, true, SG_MODE},
+    {"_click_volume", "打字音效音量", false, true, SG_MODE},
+    {"_click_timbre", "打字音效音色", false, true, SG_MODE},
+    {"auto_sleep", "自动休眠", false, false, SG_MODE},
+    {"sleep_screen", "休眠保留画面", false, false, SG_MODE},
+    // 文本编辑器
+    {"_editor_orientation", "文字方向", false, true, SG_EDITOR},
+    {"vertical_ref_line", "竖排参考线", false, false, SG_EDITOR},
+    {"_vertical_ref_line_style", "参考线样式", false, true, SG_EDITOR},
+    {"auto_save", "自动保存", false, false, SG_EDITOR},
+    {"recovery_draft", "恢复草稿", false, false, SG_EDITOR},
+    {"version_history", "版本历史", false, false, SG_EDITOR},
+    {"md_render", "Markdown渲染", false, false, SG_EDITOR},
+    {"first_line_indent", "首行缩进", false, false, SG_EDITOR},
+    {"show_line_numbers", "显示行号", false, false, SG_EDITOR},
+    {"vi_mode", "Vi 模式", false, false, SG_EDITOR},
+    {"_font_size", "字体大小", false, true, SG_EDITOR},
+    // 输入法
+    {"_ime_fuzzy", "拼音模糊音", false, true, SG_IME},
+    {"_ime_predict_mode", "联想候选", false, true, SG_IME},
+    {"ime_candidate_highlight", "候选高亮", false, false, SG_IME},
+    {"ime_sentence", "整句候选", false, false, SG_IME},
+    {"ime_doc_context", "正文词优先", false, false, SG_IME},
+    {"_letter_sel_key", "字母选字按键", false, true, SG_IME},
+    {"_dict_mgr", "词库管理", false, true, SG_IME},
+    // 文件管理
+    {"_file_mgr", "文件管理", false, true, SG_FILE},
+    {"_usb_msc", "U盘模式", false, true, SG_FILE},
+    {"file_mgr_token", "文件管理密码", true, false, SG_FILE},
+    // 连接管理
+    {"_bt_manage", "蓝牙设备管理", false, true, SG_CONNECT},
+    {"wifi_ssid", "WiFi SSID", false, false, SG_CONNECT},
+    {"wifi_pass", "WiFi 密码", false, false, SG_CONNECT},
+    {"timezone", "时区(如CST-8)", false, false, SG_CONNECT},
+    {"ntp_server", "NTP服务器", false, false, SG_CONNECT},
+    {"_sync_time", "网络同步时间", false, true, SG_CONNECT},
+    // 账号相关
+    {"_voice_asr_service", "语音识别服务", false, true, SG_ACCOUNT},
+    {"baidu_asr_api_key", "百度Api Key", false, false, SG_ACCOUNT},
+    {"baidu_asr_secret_key", "百度Secret Key", true, false, SG_ACCOUNT},
+    {"deepseek_key", "Deepseek Key", false, false, SG_ACCOUNT},
+    {"_polish_prompt", "润色提示词", false, true, SG_ACCOUNT},
+    {"flomo_email", "Flomo 邮箱", false, false, SG_ACCOUNT},
+    {"flomo_pass", "Flomo 密码", false, false, SG_ACCOUNT},
+    {"_flomo_token", "生成Flomo Token", false, true, SG_ACCOUNT},
+    {"webdav_url", "WebDAV URL", false, false, SG_ACCOUNT},
+    {"webdav_user", "WebDAV 用户", false, false, SG_ACCOUNT},
+    {"webdav_pass", "WebDAV 密码", false, false, SG_ACCOUNT},
+    // 个人信息
+    {"personal_exp", "个人经历", false, false, SG_PERSONAL},
+    {"personal_hob", "个人爱好", false, false, SG_PERSONAL},
 };
 static const int NUM_SETTINGS = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);
+
+static const char *settingsGroupLabel(SettingsGroup g) {
+    switch (g) {
+        case SG_MODE: return "模式设置";
+        case SG_EDITOR: return "文本编辑器";
+        case SG_IME: return "输入法设置";
+        case SG_FILE: return "文件管理";
+        case SG_CONNECT: return "连接管理";
+        case SG_ACCOUNT: return "账号相关";
+        case SG_PERSONAL: return "个人信息";
+        default: return "";
+    }
+}
 
 // 打字音效与输入模式无关,只要音效打开就显示细项;竖排参考线仅在竖排时显示。
 static bool fieldHidden(int idx) {
@@ -216,23 +248,35 @@ static const char *letterSelNext(int idx) {
     int n = (int)(sizeof(LETTER_SEL_OPTS) / sizeof(LETTER_SEL_OPTS[0]));
     return LETTER_SEL_OPTS[(idx + 1) % n].key;
 }
-// UI 序号(跳过隐藏行)→ SETTINGS_FIELDS 真实下标;越界返回最后一个可见行
-static int fieldAt(int sel) {
-    int lastVisible = -1, vis = 0;
+
+// 浏览列表的行模型: 每个分组前插一行可折叠的组标题, 默认全部折叠。
+// selection / scroll 都是行号(含组标题)。
+struct SettingsRow { bool header; SettingsGroup group; int field; };
+static const int MAX_SETTINGS_ROWS = NUM_SETTINGS + SG_COUNT;
+
+static bool s_groupExpanded[SG_COUNT];  // 默认 false = 折叠
+
+static int settingsBuildRows(SettingsRow *out, int max) {
+    int n = 0;
+    SettingsGroup prev = SG_COUNT;
+    bool open = false;
     for (int i = 0; i < NUM_SETTINGS; i++) {
         if (fieldHidden(i)) continue;
-        if (vis == sel) return i;
-        lastVisible = i;
-        vis++;
+        SettingsGroup g = SETTINGS_FIELDS[i].group;
+        if (g != prev) {
+            if (n < max) out[n] = {true, g, -1};
+            n++;
+            prev = g;
+            open = s_groupExpanded[g];
+        }
+        if (!open) continue;
+        if (n < max) out[n] = {false, g, i};
+        n++;
     }
-    return lastVisible >= 0 ? lastVisible : 0;
-}
-static int fieldVisibleCount() {
-    int n = 0;
-    for (int i = 0; i < NUM_SETTINGS; i++)
-        if (!fieldHidden(i)) n++;
     return n;
 }
+
+static int settingsRowCount() { return settingsBuildRows(nullptr, 0); }
 
 // 布尔型开关项:显示 开/关,Enter 在 "0"/"1" 间切换
 static bool isToggleField(const char *key) {
@@ -270,6 +314,7 @@ static struct {
     int selection = 0;
     int scroll = 0;
     bool editing = false;
+    int editField = -1;  // 正在编辑的 SETTINGS_FIELDS 下标
     std::string editBuffer;
     int editCursor = 0;
     bool imeActive = false;
@@ -293,6 +338,13 @@ static struct {
     std::vector<IME::UserEntryView> dictEntriesCache;
     std::vector<int> dictFilteredCache;
 } g_settingsState;
+
+// 展开/隐藏子项后把选中行夹回有效范围
+static void settingsClampSelection() {
+    int rows = settingsRowCount();
+    if (g_settingsState.selection > rows - 1)
+        g_settingsState.selection = rows > 0 ? rows - 1 : 0;
+}
 
 static const char *dictKindLabel(IME::UserDictKind kind) {
     if (kind == IME::FIXED_DICT) return "固定词库";
@@ -628,7 +680,9 @@ static bool connect_wifi_from_settings() {
 // ── Screen entry points ──────────────────────────────────────────────────
 void screen_settings_init() {
     g_settingsState.selection = g_settingsState.scroll = 0;
+    for (int i = 0; i < SG_COUNT; i++) s_groupExpanded[i] = false;
     g_settingsState.editing = false;
+    g_settingsState.editField = -1;
     g_settingsState.editBuffer.clear();
     g_settingsState.editCursor = 0;
     g_settingsState.imeActive = false;
@@ -833,7 +887,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                     g_settingsState.editCursor += (int)imeOut.length();
                 }
                 ui_clear();
-                auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
+                auto &f = SETTINGS_FIELDS[g_settingsState.editField];
                 ui_draw_text_centered(28, f.label, false, true);
                 int sepY = 28 + g_font.descent() + 4;
                 u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
@@ -872,7 +926,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settingsState.imeActive = false;
             g_ime.setActive(false);
         } else if (key == 0x0A || key == 0x0D) {
-            auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
+            auto &f = SETTINGS_FIELDS[g_settingsState.editField];
             g_settings.setString(f.key, g_settingsState.editBuffer);
             g_settingsState.editing = false;
             g_settingsState.editBuffer.clear();
@@ -907,7 +961,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         }
 
         ui_clear();
-        auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
+        auto &f = SETTINGS_FIELDS[g_settingsState.editField];
         ui_draw_text_centered(28, f.label, false, true);
         int sepY = 28 + g_font.descent() + 4;
         u8g2_DrawHLine(g_u8g2, 0, sepY, SCREEN_W);
@@ -976,13 +1030,30 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         return ctx.nextState;
     }
     if (key == 'k' || key == KEY_UP) { if (g_settingsState.selection > 0) g_settingsState.selection--; }
-    if (key == 'j' || key == KEY_DOWN) { if (g_settingsState.selection < fieldVisibleCount()-1) g_settingsState.selection++; }
+    if (key == 'j' || key == KEY_DOWN) {
+        int rows = settingsRowCount();
+        if (g_settingsState.selection < rows - 1) g_settingsState.selection++;
+    }
     if (key == 'd' || key == 'D') {
-        auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
-        if (!f.action) g_settings.erase(SETTINGS_FIELDS[fieldAt(g_settingsState.selection)].key);
+        SettingsRow rows[MAX_SETTINGS_ROWS];
+        int n = settingsBuildRows(rows, MAX_SETTINGS_ROWS);
+        int sel = g_settingsState.selection;
+        if (sel >= 0 && sel < n && !rows[sel].header) {
+            auto &f = SETTINGS_FIELDS[rows[sel].field];
+            if (!f.action) g_settings.erase(f.key);
+        }
     }
     if (key == 0x0A || key == 0x0D) {
-        auto &f = SETTINGS_FIELDS[fieldAt(g_settingsState.selection)];
+        SettingsRow rows[MAX_SETTINGS_ROWS];
+        int n = settingsBuildRows(rows, MAX_SETTINGS_ROWS);
+        if (g_settingsState.selection >= n) g_settingsState.selection = n > 0 ? n - 1 : 0;
+        if (g_settingsState.selection < 0) g_settingsState.selection = 0;
+        SettingsRow selRow = rows[g_settingsState.selection];
+        if (selRow.header) {
+            s_groupExpanded[selRow.group] = !s_groupExpanded[selRow.group];
+            return APP_SETTINGS;
+        }
+        auto &f = SETTINGS_FIELDS[selRow.field];
         if (f.action) {
             if (strcmp(f.key, "_app_mode") == 0) {
                 g_settings.setString("app_mode", nextAppMode(g_settings.appMode()));
@@ -997,8 +1068,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "_editor_orientation") == 0) {
                 std::string next = (g_settings.editorOrientation() == "vertical") ? "horizontal" : "vertical";
                 g_settings.setString("editor_orientation", next);
-                if (g_settingsState.selection > fieldVisibleCount() - 1)
-                    g_settingsState.selection = fieldVisibleCount() - 1;
+                settingsClampSelection();
                 return APP_SETTINGS;
             }
             if (strcmp(f.key, "_flomo_token") == 0) {
@@ -1107,8 +1177,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "_voice_asr_service") == 0) {
                 g_settings.setString("voice_asr_service",
                     voiceAsrServiceNext(voiceAsrServiceIndex(g_settings.voiceAsrService().c_str())));
-                if (g_settingsState.selection > fieldVisibleCount() - 1)
-                    g_settingsState.selection = fieldVisibleCount() - 1;
+                settingsClampSelection();
                 return APP_SETTINGS;
             }
             if (strcmp(f.key, "_polish_prompt") == 0) {
@@ -1124,8 +1193,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "_input_mode") == 0) {
                 std::string next = (g_settings.inputMode() == "typewriter") ? "normal" : "typewriter";
                 g_settings.setString("input_mode", next);
-                if (g_settingsState.selection > fieldVisibleCount() - 1)
-                    g_settingsState.selection = fieldVisibleCount() - 1;
+                settingsClampSelection();
                 return APP_SETTINGS;
             }
             if (strcmp(f.key, "_ime_fuzzy") == 0) {
@@ -1172,10 +1240,10 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             g_settings.setString(f.key, next ? "1" : "0");
             if (strcmp(f.key, "click_enabled") == 0) {
                 if (!next) typingClickRelease();
-                if (g_settingsState.selection > fieldVisibleCount() - 1)
-                    g_settingsState.selection = fieldVisibleCount() - 1;
+                settingsClampSelection();
             }
         } else {
+            g_settingsState.editField = selRow.field;
             g_settingsState.editBuffer = g_settings.getString(f.key);
             g_settingsState.editCursor = (int)g_settingsState.editBuffer.length();
             g_settingsState.editing = true;
@@ -1184,16 +1252,38 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     }
 
     ui_clear(); int y = FONT_H;
-    ui_draw_text_centered(y, "设置", false, true); y += FONT_H;
-    int visible = (SCREEN_H - y + FONT_H - 1) / FONT_H;
-    if (g_settingsState.selection < g_settingsState.scroll) g_settingsState.scroll = g_settingsState.selection;
-    if (g_settingsState.selection >= g_settingsState.scroll + visible)
-        g_settingsState.scroll = g_settingsState.selection - visible + 1;
+    ui_draw_text_centered(y, "设置", false, true);
+    y += FONT_H;
+    // 标题下加分隔线, 与标题/首行各留约 3px 空白
+    u8g2_DrawHLine(g_u8g2, 8, y - 14, SCREEN_W - 16);
+    y += 6;
+    // 每行在字高外多留 5px, 22pt 字体挤在一起时太难分辨
+    const int rowH = FONT_H + 5;
+    int visible = (SCREEN_H - g_font.descent() - y) / rowH + 1;
+    int rowCount = settingsRowCount();
+    if (g_settingsState.selection >= rowCount)
+        g_settingsState.selection = rowCount > 0 ? rowCount - 1 : 0;
+    int selRow = g_settingsState.selection;
+    if (selRow < g_settingsState.scroll) g_settingsState.scroll = selRow;
+    if (selRow >= g_settingsState.scroll + visible)
+        g_settingsState.scroll = selRow - visible + 1;
+    if (g_settingsState.scroll > rowCount - visible)
+        g_settingsState.scroll = rowCount > visible ? rowCount - visible : 0;
 
-    int rowCount = fieldVisibleCount();
+    SettingsRow rows[MAX_SETTINGS_ROWS];
+    settingsBuildRows(rows, MAX_SETTINGS_ROWS);
     for (int i = 0; i < visible && (g_settingsState.scroll + i) < rowCount; i++) {
-        bool sel = (g_settingsState.scroll + i == g_settingsState.selection);
-        int idx = fieldAt(g_settingsState.scroll + i); auto &f = SETTINGS_FIELDS[idx];
+        int row = g_settingsState.scroll + i;
+        bool sel = (row == selRow);
+        if (rows[row].header) {
+            char hdr[64];
+            snprintf(hdr, sizeof(hdr), "%s %s",
+                     s_groupExpanded[rows[row].group] ? "▼" : "+",
+                     settingsGroupLabel(rows[row].group));
+            ui_draw_text(8, y + i * rowH, hdr, sel, true);
+            continue;
+        }
+        auto &f = SETTINGS_FIELDS[rows[row].field];
         char buf[80];
         if (f.action) {
             if (strcmp(f.key, "_font_size") == 0) {
@@ -1251,7 +1341,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             else display = value;
             snprintf(buf, sizeof(buf), "%s:%s", f.label, display.c_str());
         }
-        ui_draw_text(8, y + i * FONT_H, buf, sel);
+        ui_draw_text(8, y + i * rowH, buf, sel);
     }
     ui_commit();
     return APP_SETTINGS;
