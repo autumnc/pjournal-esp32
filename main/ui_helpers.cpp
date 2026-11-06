@@ -305,6 +305,101 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
     return vrows;
 }
 
+// ── 横排段落间距 ──────────────────────────────────────────────────────────
+// 日记段落之间不加空行,硬换行即段落边界。相邻两个非空普通正文行之间额外
+// 留 PARAGRAPH_GAP;空行自身已占一行,Markdown 结构行(标题/列表/引用/代码/
+// 分隔线)保持紧凑,避免多类间距叠加。
+static bool mdProseLine(const MdLineInfo &i) {
+    return i.headingLevel == 0 && !i.list && !i.task && !i.quote &&
+           !i.inCodeBlock && !i.hr;
+}
+
+int vrowGapBefore(const std::vector<VRow> &vrows, int idx,
+                  const std::vector<MdLineInfo> *mdInfo) {
+    if (idx <= 0 || idx >= (int)vrows.size()) return 0;
+    const VRow &cur = vrows[idx];
+    const VRow &prev = vrows[idx - 1];
+    if (cur.start != 0 || cur.lineIdx == prev.lineIdx) return 0;  // 段内折行
+    if (cur.end <= cur.start || prev.end <= prev.start) return 0;  // 相邻有空行
+    if (mdInfo) {
+        if (cur.lineIdx >= (int)mdInfo->size() || prev.lineIdx >= (int)mdInfo->size())
+            return PARAGRAPH_GAP;
+        if (!mdProseLine((*mdInfo)[cur.lineIdx]) || !mdProseLine((*mdInfo)[prev.lineIdx]))
+            return 0;
+    }
+    return PARAGRAPH_GAP;
+}
+
+// 第 idx 行基线相对第 anchor 行基线(两者均 >= 0)的距离。
+static int vrowOffset(const std::vector<VRow> &vrows, int anchor, int idx,
+                      const std::vector<MdLineInfo> *mdInfo) {
+    int off = 0;
+    for (int k = anchor + 1; k <= idx; k++)
+        off += LINE_SPACING + vrowGapBefore(vrows, k, mdInfo);
+    return off;
+}
+
+int vrowOffsetFrom(const std::vector<VRow> &vrows, int scroll, int idx,
+                   const std::vector<MdLineInfo> *mdInfo) {
+    if (idx <= scroll) return 0;
+    int lead = scroll < 0 ? -scroll : 0;
+    int base = scroll < 0 ? 0 : scroll;
+    return lead * LINE_SPACING + vrowOffset(vrows, base, idx, mdInfo);
+}
+
+// 可视判据:基线离顶部 off 的行,其字身下缘 off+descent 仍在 height 内。
+static bool vrowFits(int off, int height) {
+    return off + g_font.descent() <= height;
+}
+
+int vrowFitCount(const std::vector<VRow> &vrows, int scroll, int height,
+                 const std::vector<MdLineInfo> *mdInfo) {
+    int lead = scroll < 0 ? -scroll : 0;
+    int base = scroll < 0 ? 0 : scroll;
+    int rem = height - lead * LINE_SPACING;
+    int n = lead;
+    int off = 0;
+    int idx = base;
+    while (rem > 0 && idx < (int)vrows.size()) {
+        if (!vrowFits(off, rem)) break;
+        n++;
+        idx++;
+        off += LINE_SPACING + vrowGapBefore(vrows, idx, mdInfo);
+    }
+    return n < 1 ? 1 : n;
+}
+
+int vrowScrollToShow(const std::vector<VRow> &vrows, int idx, int height,
+                     const std::vector<MdLineInfo> *mdInfo) {
+    if (idx < 0) return 0;
+    if (idx >= (int)vrows.size()) idx = (int)vrows.size() - 1;
+    int s = idx, off = 0;
+    while (s > 0) {
+        int step = LINE_SPACING + vrowGapBefore(vrows, s, mdInfo);
+        if (!vrowFits(off + step, height)) break;
+        off += step;
+        s--;
+    }
+    return s;
+}
+
+int vrowScrollCenter(const std::vector<VRow> &vrows, int idx, int height,
+                     const std::vector<MdLineInfo> *mdInfo) {
+    if (idx < 0) return 0;
+    int half = height / 2;
+    int s = idx, off = 0;
+    while (s > 0) {
+        int step = LINE_SPACING + vrowGapBefore(vrows, s, mdInfo);
+        if (off + step > half) break;
+        off += step;
+        s--;
+    }
+    // 光标上方不足半屏时用负 slot 补足顶部留白(保留打字机模式原有观感)
+    if (s == 0 && off < half)
+        return -((half - off + LINE_SPACING - 1) / LINE_SPACING);
+    return s;
+}
+
 // ── IME singleton ─────────────────────────────────────────────────────────
 IME &g_ime = IME::getInstance();
 

@@ -1850,8 +1850,11 @@ static void drawEditor() {
     bool reserveIME = !s_skipStatusBarAndIme &&
         (g_editor.imeActive || (g_editor.vi.cmdlineActive && g_editor.vi.cmdlineIme));
     int contentEndY = reserveIME ? imeStatusPanelTopY() : STATUS_Y;
-    int visibleVrows = (contentEndY - y + LINE_SPACING - 1) / LINE_SPACING;
-    if (visibleVrows < 1) visibleVrows = 1;
+    bool mdOn = g_settings.markdownRender();
+    mdSetRenderEnabled(mdOn);
+    const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
+    const int normalHeight = STATUS_Y - y;       // 无候选条时的可视高度
+    const int visibleHeight = contentEndY - y;   // 当前可视高度
 
     int cursorVR = -1;
     for (int vi = 0; vi < (int)vrows.size(); vi++) {
@@ -1861,41 +1864,39 @@ static void drawEditor() {
         }
     }
 
-    int normalVisibleVrows = (STATUS_Y - y + LINE_SPACING - 1) / LINE_SPACING;
-    int effectiveVisibleVrows = reserveIME ? (normalVisibleVrows - 2) : normalVisibleVrows;
-    if (effectiveVisibleVrows < 1) effectiveVisibleVrows = 1;
-
     if (editorTypewriter() && cursorVR >= 0) {
-        // 打字机模式:光标始终钉在可视区中间行。居中按「未弹出候选区」的行数
-        // (normalVisibleVrows)计算,滚动与 IME 候选面板的弹出/消失无关,光标屏上
-        // 位置稳定不动(候选面板压在底部约 2 行,居中光标不受影响)。scroll 不设
-        // clamp,文首/文末及短文档经下方绘制循环对越界下标跳过 → 自然留白。
-        int rows = normalVisibleVrows; if (rows < 1) rows = 1;
-        g_editor.scroll = cursorVR - rows / 2;
+        // 打字机模式:光标钉在可视区中间。居中按「未弹出候选区」的高度计算,
+        // 段落间距计入,滚动与 IME 候选面板的弹出/消失无关;scroll 允许为负,
+        // 文首/短文档由负 slot 补足顶部留白(绘制循环跳过越界下标)。
+        g_editor.scroll = vrowScrollCenter(vrows, cursorVR, normalHeight, &mdInfo);
         // 极端小屏兜底:候选区几乎占满内容区时,保证光标仍落在候选条上方的可视行,
         // 不因居中而藏到候选面板之下。
-        if (composing && cursorVR - g_editor.scroll >= visibleVrows) {
-            g_editor.scroll = cursorVR - visibleVrows + 1;
-            if (g_editor.scroll < 0) g_editor.scroll = 0;
-        }
+        if (composing && vrowOffsetFrom(vrows, g_editor.scroll, cursorVR, &mdInfo) >=
+                             visibleHeight)
+            g_editor.scroll = vrowScrollToShow(vrows, cursorVR, visibleHeight, &mdInfo);
     } else {
         if (cursorVR < g_editor.scroll) g_editor.scroll = cursorVR;
-        if (cursorVR >= g_editor.scroll + effectiveVisibleVrows)
-            g_editor.scroll = cursorVR - effectiveVisibleVrows + 1;
+        else if (cursorVR >= 0 &&
+                 vrowOffsetFrom(vrows, g_editor.scroll, cursorVR, &mdInfo) >= visibleHeight)
+            g_editor.scroll = vrowScrollToShow(vrows, cursorVR, visibleHeight, &mdInfo);
         if (g_editor.scroll < 0) g_editor.scroll = 0;
     }
 
-    bool mdOn = g_settings.markdownRender();
-    mdSetRenderEnabled(mdOn);
-    const std::vector<MdLineInfo> &mdInfo = getMdInfo(mdOn);
+    int visibleVrows = vrowFitCount(vrows, g_editor.scroll, visibleHeight, &mdInfo);
+    if (visibleVrows < 1) visibleVrows = 1;
+    // 负 scroll 时首行不落在 y,而是下方 lead*LINE_SPACING 处
+    const int drawBase = g_editor.scroll < 0 ? 0 : g_editor.scroll;
     int textX = editorTextX();
     bool gutter = editorLineNumbersOn();
     int gutterDigits = editorGutterDigits();
+    int ly = y + (drawBase - g_editor.scroll) * LINE_SPACING;
+    int prevDrawn = -1;
     for (int i = 0; i < visibleVrows; i++) {
         int idx = g_editor.scroll + i;
         if (idx < 0 || idx >= (int)vrows.size()) continue;  // 打字机留白行
+        if (prevDrawn >= 0) ly += LINE_SPACING + vrowGapBefore(vrows, idx, &mdInfo);
+        prevDrawn = idx;
         auto &vr = vrows[idx];
-        int ly = y + i * LINE_SPACING;
         // 行号只标在硬行首行的视觉行, 续行留空; 右对齐在槽内
         if (gutter && vr.start == 0) {
             char num[16];
@@ -1918,9 +1919,13 @@ static void drawEditor() {
         TextPos selStart, selEnd;
         if (viVisual) viVisualRange(selStart, selEnd);
         else getSelRange(selStart, selEnd);
+        int selLy = y + (drawBase - g_editor.scroll) * LINE_SPACING;
+        int prevSel = -1;
         for (int i = 0; i < visibleVrows; i++) {
             int vrIdx = g_editor.scroll + i;
             if (vrIdx < 0 || vrIdx >= (int)vrows.size()) continue;  // 打字机留白行
+            if (prevSel >= 0) selLy += LINE_SPACING + vrowGapBefore(vrows, vrIdx, &mdInfo);
+            prevSel = vrIdx;
             auto &vr = vrows[vrIdx];
             int lineIdx = vr.lineIdx;
             int rowStart = vr.start, rowEnd = vr.end;
@@ -1940,7 +1945,7 @@ static void drawEditor() {
             int selEndX = textX + mdVrowX(g_editor.lines[lineIdx], mdi, hlEnd, rowStart,
                                           vr.indentCells, mdCursor, folded);
             int selW = selEndX - xOff;
-            int ly = y + i * LINE_SPACING;
+            int ly = selLy;
             u8g2_SetDrawColor(g_u8g2, 2);  // XOR mode
             u8g2_DrawBox(g_u8g2, xOff, ly - g_font.ascent(), selW, FONT_H);
             u8g2_SetDrawColor(g_u8g2, 1);  // restore
@@ -1955,7 +1960,7 @@ static void drawEditor() {
                       g_editor.foldedHeadings.count(vr.lineIdx);
         int cx = textX + mdVrowX(line, mdi, g_editor.cx, vr.start, vr.indentCells,
                                  g_editor.cx, folded);
-        int cy_draw = y + (cursorVR - g_editor.scroll) * LINE_SPACING;
+        int cy_draw = y + vrowOffsetFrom(vrows, g_editor.scroll, cursorVR, &mdInfo);
         int cw = g_font.halfAdvance();
         if (g_editor.cx < (int)line.length()) {
             const char *cp = line.c_str() + g_editor.cx;

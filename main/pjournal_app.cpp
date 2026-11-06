@@ -587,11 +587,14 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     }
 
     const auto& vrows = getViewerVrows();
+    bool mdOn = g_settings.markdownRender();
+    mdSetRenderEnabled(mdOn);
+    const auto& mdInfo = getViewerMdInfo(mdOn);
+    const int viewH = contentMaxY - contentY;
     if (key == 'j' || key == KEY_DOWN) g_viewer.scroll++;
     if (key == 'k' || key == KEY_UP) { if (g_viewer.scroll > 0) g_viewer.scroll--; }
-    int visible = (contentMaxY - contentY + LINE_SPACING - 1) / LINE_SPACING;
-    if (visible < 1) visible = 1;
-    int maxScroll = (int)vrows.size() - visible;
+    int maxScroll = vrows.empty() ? 0 :
+        vrowScrollToShow(vrows, (int)vrows.size() - 1, viewH, &mdInfo);
     if (maxScroll < 0) maxScroll = 0;
     if (g_viewer.scroll > maxScroll) g_viewer.scroll = maxScroll;
 
@@ -604,12 +607,14 @@ AppState screen_viewer_handle(int key, ScreenContext &ctx) {
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
 
-    bool mdOn = g_settings.markdownRender();
-    mdSetRenderEnabled(mdOn);
-    const auto& mdInfo = getViewerMdInfo(mdOn);
-    for (int i = 0; i < visible && (g_viewer.scroll + i) < (int)vrows.size(); i++) {
-        auto &vr = vrows[g_viewer.scroll + i];
-        mdDrawVrow(4, contentY + i * LINE_SPACING, g_viewer.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
+    int ly = contentY;
+    for (int idx = g_viewer.scroll; idx < (int)vrows.size(); idx++) {
+        if (idx > g_viewer.scroll) {
+            ly += LINE_SPACING + vrowGapBefore(vrows, idx, &mdInfo);
+            if (ly + g_font.descent() > contentMaxY) break;
+        }
+        auto &vr = vrows[idx];
+        mdDrawVrow(4, ly, g_viewer.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
     }
 
     if (g_viewer.scroll > 0 && maxScroll > 0) {
@@ -735,9 +740,12 @@ static void drawHistoryPreview() {
     }
 
     const auto& vrows = getHistoryVrows();
-    int visible = (contentMaxY - contentY + LINE_SPACING - 1) / LINE_SPACING;
-    if (visible < 1) visible = 1;
-    int maxScroll = (int)vrows.size() - visible;
+    bool mdOn = g_settings.markdownRender();
+    mdSetRenderEnabled(mdOn);
+    const auto& mdInfo = getHistoryMdInfo(mdOn);
+    const int viewH = contentMaxY - contentY;
+    int maxScroll = vrows.empty() ? 0 :
+        vrowScrollToShow(vrows, (int)vrows.size() - 1, viewH, &mdInfo);
     if (maxScroll < 0) maxScroll = 0;
     if (g_history.previewScroll > maxScroll) g_history.previewScroll = maxScroll;
 
@@ -748,12 +756,14 @@ static void drawHistoryPreview() {
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
 
-    bool mdOn = g_settings.markdownRender();
-    mdSetRenderEnabled(mdOn);
-    const auto& mdInfo = getHistoryMdInfo(mdOn);
-    for (int i = 0; i < visible && (g_history.previewScroll + i) < (int)vrows.size(); i++) {
-        auto &vr = vrows[g_history.previewScroll + i];
-        mdDrawVrow(4, contentY + i * LINE_SPACING, g_history.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
+    int ly = contentY;
+    for (int idx = g_history.previewScroll; idx < (int)vrows.size(); idx++) {
+        if (idx > g_history.previewScroll) {
+            ly += LINE_SPACING + vrowGapBefore(vrows, idx, &mdInfo);
+            if (ly + g_font.descent() > contentMaxY) break;
+        }
+        auto &vr = vrows[idx];
+        mdDrawVrow(4, ly, g_history.lines[vr.lineIdx], vr.start, vr.end, mdInfo[vr.lineIdx], vr.indentCells);
     }
     ui_draw_status("r恢复 d删除 q返回", "");
     ui_commit();
@@ -838,9 +848,13 @@ AppState screen_history_handle(int key, ScreenContext &ctx) {
             maxScroll = (int)data.cols.size() - visible;
         } else {
             const auto& vrows = getHistoryVrows();
-            visible = (STATUS_Y - (FONT_H + g_font.descent() + 26) + LINE_SPACING - 1) / LINE_SPACING;
+            bool mdOn = g_settings.markdownRender();
+            const auto& mdInfo = getHistoryMdInfo(mdOn);
+            int viewH = STATUS_Y - (FONT_H + g_font.descent() + 26);
+            visible = vrowFitCount(vrows, g_history.previewScroll, viewH, &mdInfo);
             if (visible < 1) visible = 1;
-            maxScroll = (int)vrows.size() - visible;
+            maxScroll = vrows.empty() ? 0 :
+                vrowScrollToShow(vrows, (int)vrows.size() - 1, viewH, &mdInfo);
         }
         if (maxScroll < 0) maxScroll = 0;
         if (key == 'q' || key == 'Q' || key == 0x1B) {

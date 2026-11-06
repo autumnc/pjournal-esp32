@@ -69,6 +69,33 @@ std::vector<VRow> buildVrows(const std::vector<std::string> &lines,
                              const std::set<int> *foldedHeadings = nullptr,
                              int reserveCells = 0);
 
+// ── Vertical placement for horizontal (横排) layout ───────────────────────
+// 日记格式段落之间不加空行:每个硬换行就是一个段落。相邻两行都是非空普通
+// 正文时,第二个段落在正常行距之外再多留 PARAGRAPH_GAP,否则(空行/Markdown
+// 结构行/段内折行)保持原行距。以下函数把这一额外间距计入行位置与滚动。
+#define PARAGRAPH_GAP ((g_font.lineHeight() + 1) / 2)
+
+// 第 idx 个 vrow 前额外留出的像素(0 = 正常行距)。
+int vrowGapBefore(const std::vector<VRow> &vrows, int idx,
+                  const std::vector<MdLineInfo> *mdInfo);
+
+// 从 slot `scroll` 起能完整放入 height 像素的 vrow 槽数。scroll 可为负
+// (打字机模式顶部留白),负槽按固定行距占位。
+int vrowFitCount(const std::vector<VRow> &vrows, int scroll, int height,
+                 const std::vector<MdLineInfo> *mdInfo);
+
+// 让第 idx 行成为可视区末行的最小起始 slot(末尾恰好填满 height)。
+int vrowScrollToShow(const std::vector<VRow> &vrows, int idx, int height,
+                     const std::vector<MdLineInfo> *mdInfo);
+
+// 让第 idx 行尽量居于 height 像素正中,返回起始 slot(可为负,补足顶部留白)。
+int vrowScrollCenter(const std::vector<VRow> &vrows, int idx, int height,
+                     const std::vector<MdLineInfo> *mdInfo);
+
+// 第 idx 行基线相对 slot scroll 的像素偏移(计入段落间距与负 scroll 留白)。
+int vrowOffsetFrom(const std::vector<VRow> &vrows, int scroll, int idx,
+                   const std::vector<MdLineInfo> *mdInfo);
+
 // IME drawing helpers
 int imeStatusPanelTopY();
 int imeFullscreenPanelTopY();
