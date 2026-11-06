@@ -147,11 +147,15 @@ static const MainMenuAction kMainActions[] = {
     {'w', "同步WebDAV", &MAIN_ICON_SYNC},
     {'t', "GTD任务管理", &MAIN_ICON_GTD},
     {'o', "大纲写作", &MAIN_ICON_OUTLINE},
+    {'n', "Flomo笔记", &MAIN_ICON_FLOMO},
     {'s', "设置", &MAIN_ICON_SETTINGS},
+    {'?', "使用说明", &MAIN_ICON_HELP},
 };
 
+#define MAIN_MENU_ICON_SLOT_W 56
+
 static int mainMenuVisibleCount(bool hasEntries) {
-    return hasEntries ? 7 : 6;
+    return hasEntries ? 9 : 8;
 }
 
 static int mainMenuActionIndex(int visibleIndex, bool hasEntries) {
@@ -193,8 +197,14 @@ static void mainMenuActivate(const MainMenuAction &action, ScreenContext &ctx) {
     case 'o':
         ctx.nextState = APP_OUTLINE;
         break;
+    case 'n':
+        ctx.nextState = APP_FLOMO;
+        break;
     case 's':
         ctx.nextState = APP_SETTINGS;
+        break;
+    case '?':
+        ctx.nextState = APP_HELP;
         break;
     default:
         break;
@@ -360,13 +370,29 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 24, dividerY, SCREEN_W - 48);
 
-    int slotW = SCREEN_W / actionCount;
+    // 图标一行放不下就横向滚动：选中项尽量居中，首尾夹住。方向键/字母直达选中的
+    // 那一项都会带动视口，所以只需要按当前 selection 算滚动量，不另存状态。
+    const int slotW = MAIN_MENU_ICON_SLOT_W;
+    const int totalW = actionCount * slotW;
+    const int baseX = totalW < SCREEN_W ? (SCREEN_W - totalW) / 2 : 0;  // 放得下就居中
+    int scrollX = g_mainMenu.selection * slotW + slotW / 2 - SCREEN_W / 2;
+    if (scrollX > totalW - SCREEN_W) scrollX = totalW - SCREEN_W;
+    if (scrollX < 0) scrollX = 0;
+    const bool moreLeft = scrollX > 0;
+    const bool moreRight = scrollX < totalW - SCREEN_W;
+
     // 月视图:底部要容纳 图标+22pt动作标签,图标距分割线更近
     int iconTop = dividerY + (monthView ? 4 : 14);
     for (int i = 0; i < actionCount; i++) {
         const MainMenuAction &action = kMainActions[mainMenuActionIndex(i, hasEntries)];
-        int cx = i * slotW + slotW / 2;
+        int cx = baseX + i * slotW + slotW / 2 - scrollX;
         drawMainMenuIcon(cx, iconTop, action.icon, i == g_mainMenu.selection);
+    }
+    // 两侧的滚动提示
+    if (moreLeft) g_font.drawText(2, iconTop + 24 + g_font.ascent() / 2, "<");
+    if (moreRight) {
+        int w = g_font.textWidth(">");
+        g_font.drawText(SCREEN_W - w - 2, iconTop + 24 + g_font.ascent() / 2, ">");
     }
     const MainMenuAction &selected = kMainActions[mainMenuActionIndex(g_mainMenu.selection, hasEntries)];
     if (!monthView) {

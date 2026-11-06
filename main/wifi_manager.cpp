@@ -4,9 +4,20 @@
 #include <esp_wifi.h>
 #include <esp_event.h>
 #include <esp_netif.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 static const char *TAG = "WiFi";
 WifiManager g_wifi;
+
+// 现在有后台任务也会用 WiFi（Flomo 同步互 Esc 退出后 worker 还在跑），主任务
+// 可能同时在设置里测网、开 Web 文件管理或做 WebDAV —— 两条任务同时 begin()/
+// connect() 会把 esp_netif/事件处理器初始化两遍。所有改 WiFi 状态的入口串起来。
+static SemaphoreHandle_t s_wifiMux = xSemaphoreCreateMutex();
+struct WifiLock {
+    WifiLock()  { if (s_wifiMux) xSemaphoreTake(s_wifiMux, portMAX_DELAY); }
+    ~WifiLock() { if (s_wifiMux) xSemaphoreGive(s_wifiMux); }
+};
 
 static bool s_connected = false;
 static bool s_auto_reconnect = false;
@@ -33,6 +44,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
 }
 
 bool WifiManager::begin() {
+    WifiLock lock;
     if (_inited) return true;
     esp_netif_init();
     // 事件循环可能已创建，忽略已存在错误
@@ -55,6 +67,7 @@ bool WifiManager::begin() {
 }
 
 bool WifiManager::connect(const char *ssid, const char *password) {
+    WifiLock lock;
     if (!ssid || !*ssid) return false;
     // 先抑制自动重连：esp_wifi_start() 会触发 STA_START，若此处 auto_reconnect
     // 已为 true，处理器会用旧配置抢先连接，导致下方的 set_config 报
@@ -89,6 +102,7 @@ bool WifiManager::connect(const char *ssid, const char *password) {
 bool WifiManager::isConnected() { return s_connected; }
 
 void WifiManager::disconnect() {
+    WifiLock lock;
     s_auto_reconnect = false;
     esp_wifi_disconnect();
     s_connected = false;

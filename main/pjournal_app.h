@@ -19,10 +19,12 @@ enum AppState {
     APP_GTD,
     APP_OUTLINE,
     APP_INSPIRATION,
+    APP_FLOMO,
     APP_VOICE,
     APP_POLISH,
     APP_POLISH_PROMPT,
     APP_USB_MSC,
+    APP_HELP,
     APP_QUIT,
 };
 

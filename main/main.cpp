@@ -14,6 +14,8 @@
 #include "screen_settings.h"
 #include "screen_gtd.h"
 #include "screen_outline.h"
+#include "screen_flomo.h"
+#include "screen_help.h"
 #include "screen_bt_manage.h"
 #include "screen_file_manager.h"
 #include "screen_usb_msc.h"
@@ -1028,6 +1030,16 @@ extern "C" void app_main() {
             break;
         }
 
+        case APP_HELP: {
+            g_font.setSize(22);
+            static bool helpInited = false;
+            if (!helpInited) { screen_help_init(); helpInited = true; }
+            if (key > 0) currentState = screen_help_handle(key, ctx);
+            else { screen_help_handle(0, ctx); }
+            if (currentState != APP_HELP) helpInited = false;
+            break;
+        }
+
         case APP_GTD: {
             g_font.setSize(22);
             IME::getInstance().setPageSize(7);
@@ -1047,6 +1059,17 @@ extern "C" void app_main() {
             if (key > 0) currentState = screen_outline_handle(key, ctx);
             else { screen_outline_handle(0, ctx); }
             if (currentState != APP_OUTLINE) outlineInited = false;
+            break;
+        }
+
+        case APP_FLOMO: {
+            g_font.setSize(22);
+            IME::getInstance().setPageSize(7);
+            static bool flomoInited = false;
+            if (!flomoInited) { screen_flomo_init(APP_MAIN); flomoInited = true; }
+            if (key > 0) currentState = screen_flomo_handle(key, ctx);
+            else { screen_flomo_handle(0, ctx); }
+            if (currentState != APP_FLOMO) flomoInited = false;
             break;
         }
 
