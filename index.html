@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>正经人日记 · 网页刷机</title>
+<meta name="description" content="在浏览器里给「正经人日记」（ESP32-S3 · 4.2″ RLCD）刷写固件，不用装 ESP-IDF、esptool 或任何工具。">
+<meta name="color-scheme" content="light">
+<!-- 空 data: 图标，免得 404 干扰日志 -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<div class="banner err" id="env-banner" hidden></div>
+
+<header class="top">
+  <div class="brand">
+    <div class="mark" aria-hidden="true">正</div>
+    <div>
+      <h1>正经人日记</h1>
+      <p class="sub">ESP32-S3 · 4.2″ RLCD 电子纸固件刷写</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button class="ghost" id="btn-help" type="button">使用帮助</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="card">
+    <h2>固件</h2>
+    <p class="hint">本页只刷当前 Release 的整包（引导程序 + 分区表 + 应用，写到 <code>0x0</code>）。</p>
+    <dl class="kv">
+      <dt>版本</dt>      <dd id="fw-version">—</dd>
+      <dt>发布</dt>      <dd id="fw-tag">—</dd>
+      <dt>大小</dt>      <dd id="fw-size">—</dd>
+      <dt>sha256</dt>    <dd id="fw-sha">—</dd>
+    </dl>
+    <p id="fw-state">正在读取固件清单…</p>
+
+    <details class="local">
+      <summary>或：用本地 / 其它版本的固件文件</summary>
+      <p class="hint">
+        选一个整包 <code>.bin</code>，形如 <code>pjournal-&lt;版本&gt;-merged.bin</code>（旧版本、自己编的、
+        别人 fork 的都可以）。会在这里就地重跑和线上固件<strong>完全相同的闸</strong>，不合格不写入。
+      </p>
+      <div class="local-row">
+        <label class="filebtn" for="file-input">选择 .bin 文件</label>
+        <input type="file" id="file-input" accept=".bin,application/octet-stream" hidden>
+        <button class="link" id="btn-use-online" type="button" hidden>改回用线上固件</button>
+      </div>
+      <p class="hint">
+        校验（可选）：粘贴预期的 sha256 或 md5，写前几位就够
+        <input type="text" id="expect-hash" placeholder="例如 419caee3" spellcheck="false" autocomplete="off">
+      </p>
+      <p id="file-state">未选择文件 —— 当前用线上固件。</p>
+      <dl class="kv" id="file-kv" hidden>
+        <dt>文件</dt>   <dd id="file-name">—</dd>
+        <dt>大小</dt>   <dd id="file-size">—</dd>
+        <dt>sha256</dt> <dd id="file-sha">—</dd>
+        <dt>md5</dt>    <dd id="file-md5">—</dd>
+      </dl>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>刷机</h2>
+    <p class="hint">Chrome / Edge（桌面版）打开本页 → 用 Type-C <strong>数据线</strong>连上设备 → 按顺序点两个按钮。</p>
+
+    <div class="step" id="step-1">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <p>连接设备。浏览器会弹出串口选择框，选中 <code>USB JTAG/serial debug unit</code>。</p>
+        <button id="btn-connect" type="button">连接设备</button>
+      </div>
+    </div>
+
+    <div class="step" id="step-2">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <p id="dev-info">开始刷写：写入固件 → 读回比对 MD5 → 重启进新固件。约 1 分钟，过程中<strong>不要拔线</strong>。</p>
+        <button class="primary" id="btn-flash" type="button" disabled>开始刷写</button>
+        <button class="ghost" id="btn-disconnect" type="button" hidden>断开</button>
+      </div>
+    </div>
+
+    <p id="status"></p>
+    <div class="bar idle" id="bar"><i id="bar-fill"></i></div>
+
+    <details class="log">
+      <summary>详细日志</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+
+  <p class="note">
+    <strong>刷机不碰 SD 卡：设置、日记、大纲、GTD、灵感、蓝牙配对都不动。</strong>
+    这些东西全在卡上，而这次只写 flash 里的固件区。
+    刷完想回到出厂状态是另一回事，见「使用帮助 → 刷机不会丢什么」。
+  </p>
+
+</main>
+
+<footer>
+  <span>固件来源：<a id="link-release" href="https://github.com/autumnc/pjournal-esp32/releases/latest" rel="noopener">GitHub Releases</a></span>
+  <span><a id="link-repo" href="https://github.com/autumnc/pjournal-esp32" rel="noopener">项目主页</a></span>
+  <button class="link" id="btn-help-2" type="button">使用帮助</button>
+</footer>
+
+<!-- ══════════════════════ 使用帮助 ══════════════════════ -->
+
+<aside class="overlay" id="help" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
+<div class="sheet">
+  <div class="sheet-head">
+    <h2 id="help-title">使用帮助</h2>
+    <button class="ghost" id="btn-help-close" type="button" style="margin-left:auto">关闭</button>
+  </div>
+  <div class="sheet-body">
+
+    <h3>一、这是什么</h3>
+    <p>
+      <strong>正经人日记</strong>是跑在 ESP32-S3 上的个人日记固件（4.2″ RLCD 黑白全反射屏、蓝牙键盘输入）：
+      自由写作与提示写作、拼音输入法、GTD 任务、大纲写作、灵感面板、AI 润色、语音听写、WebDAV / Flomo 同步、
+      Web 文件管理。
+      这个页面把它刷进设备 —— 不用装 ESP-IDF、esptool 或 Python，也不要用命令行。
+    </p>
+
+    <h3>二、浏览器要求</h3>
+    <ul>
+      <li>需要 <strong>Chrome 或 Edge</strong>（桌面版）；<strong>Android Chrome</strong> 也可以。</li>
+      <li><strong>Safari、Firefox、iOS 上任何浏览器都用不了</strong> —— 它们没有 WebSerial 接口，这是浏览器层面的限制。</li>
+      <li>页面必须是 <code>https://</code> 或 <code>localhost</code>（本站在 GitHub Pages 上是 https，满足）。</li>
+      <li>手机 / 平板需要一根 <strong>OTG 转接线</strong>才能接设备。</li>
+    </ul>
+
+    <h3>三、刷机步骤</h3>
+    <ol>
+      <li>用 <strong>Type-C 数据线</strong>把设备连到电脑。<em>纯充电线不行</em> —— 线里没有数据线芯，电脑根本看不到设备。</li>
+      <li>点「<strong>连接设备</strong>」，在弹出的串口列表里选
+        <code>USB JTAG/serial debug unit</code>（就是设备本身；它内置 USB，不需要额外驱动）。</li>
+      <li>连上后会显示芯片型号、flash 大小、MAC。确认是 <strong>ESP32-S3</strong> 再往下走。</li>
+      <li>点「<strong>开始刷写</strong>」，等进度条走满（约 1 分钟；写入之后还会读回 flash 比对 MD5，
+        这段进度条停在 100% 不动是正常的）。</li>
+      <li>出现「✓ 刷写完成」后设备会自己重启进主界面，<strong>不用手动断电</strong>。
+        若 5 秒内屏幕毫无反应，拔掉 USB 线再插上即可（固件已经写进去了）。</li>
+    </ol>
+    <p><strong>刷写过程中不要拔线、不要关页面</strong>（页面会拦你一下）。中途断掉不会变砖 —— 再刷一遍就行。</p>
+    <p>
+      想刷<strong>别的版本</strong>（旧版本、自己编的、别人 fork 的）：在「固件」卡片里展开
+      「<strong>或：用本地 / 其它版本的固件文件</strong>」，选一个整包
+      <code>pjournal-&lt;版本&gt;-merged.bin</code>。页面会就地重跑同样的闸（长度 / 三处魔数 /
+      你填的校验位），并且把算出来的 <code>sha256</code>、<code>md5</code> 显示出来给你核对。
+      <strong>别选 <code>pjournal-&lt;版本&gt;.bin</code></strong> —— 那是纯应用镜像，闸门会挡下它。
+    </p>
+
+    <h3>四、刷机不会丢什么</h3>
+    <ul>
+      <li>这次写入的是 flash 里的固件区（引导程序 + 分区表 + 应用）。<strong>SD 卡完全不参与</strong>，
+        所以卡上的东西一样不动：设置、日记正文、历史快照、GTD、大纲、灵感、词库导入导出、蓝牙配对信息。
+        拔卡刷机也不影响。</li>
+      <li>WiFi 凭据、Flomo / WebDAV / Deepseek 的 Key 也都存在 SD 卡上，同样保留。</li>
+      <li>刷完屏幕没变化是正常的 —— 设备本来就在跑同一个固件。</li>
+      <li>真要「恢复出厂设置」，得另外抹掉 flash（<strong>不可撤销</strong>）：
+        <pre><code>esptool.py --chip esp32s3 erase_flash</code></pre>
+        抹完再插上 SD 卡，用本页面刷一遍固件。</li>
+    </ul>
+
+    <h3>五、刷完第一次开机</h3>
+    <ol>
+      <li>插一张 <strong>FAT32</strong> microSD 卡（设备没有内置存储，日记和设置都在卡上）。</li>
+      <li>开机后默认进<strong>个人日记</strong>模式：主界面按 <code>f</code> 自由写作、<code>p</code> 提示写作、
+        <code>v</code> 翻过往日记、<code>t</code> GTD、<code>o</code> 大纲、<code>s</code> 设置。</li>
+      <li>进 <strong>设置</strong>（主界面按 <code>s</code>）连 WiFi —— 联网后才能对时（RTC）和做 WebDAV / Flomo 同步。</li>
+      <li>同一份设置里可以把「工作模式」切成<strong>快捷编辑</strong>：开机直接进编辑器编辑卡根目录的
+        <code>0.txt</code>–<code>9.txt</code>（切换后需重启生效）。</li>
+      <li>设置里还有 <strong>Web 文件管理</strong>：用浏览器打开设备地址就能管理 SD 卡文件
+        （可设访问令牌）。</li>
+    </ol>
+
+    <h3>六、物理按键</h3>
+    <p>设备只有两个物理按键：<strong>BOOT（GPIO0）</strong>和<strong>用户按键（GPIO18）</strong>。日常操作靠蓝牙键盘。</p>
+    <table class="keys">
+      <tr><th>按键</th><th>单击</th><th>双击</th><th>长按</th></tr>
+      <tr>
+        <td><strong>用户按键</strong></td>
+        <td>蓝牙管理 / GTD 列表：<code>↑</code></td>
+        <td>蓝牙管理：添加（管理模式）或返回（扫描模式）；GTD 列表：切换平铺 / 项目树，项目列表进入选中项目</td>
+        <td>蓝牙管理：连接选中设备；GTD 列表：切换标签；<strong>其它界面：进入蓝牙管理</strong></td>
+      </tr>
+      <tr>
+        <td><strong>BOOT</strong></td>
+        <td>蓝牙管理 / GTD 列表：<code>↓</code></td>
+        <td>蓝牙管理：删除（管理模式）或返回（扫描模式）；GTD 项目树：返回项目选择菜单</td>
+        <td>蓝牙管理：返回；<strong>其它界面：进入休眠</strong></td>
+      </tr>
+    </table>
+    <p>
+      在不是上面那些列表的界面里，双击还有两个直达动作：
+      <strong>双击 BOOT = AI 全文润色</strong>，<strong>双击用户按键 = 语音听写</strong>。
+    </p>
+    <p>
+      <strong>休眠</strong>：长按 BOOT 进入（之后单击不再休眠）；休眠期间按任意物理按键唤醒，唤醒后立刻回到休眠前那一屏。
+      设置里开「自动休眠」后，键盘 / 按键空闲 10 分钟自己进 light sleep。
+      「休眠保留画面」决定睡时留着最后画面还是白屏（更省电）。
+    </p>
+
+    <h3>七、蓝牙键盘</h3>
+    <ul>
+      <li>配对入口：<strong>长按用户按键</strong>进蓝牙管理 → 双击添加 → 蓝牙键盘进入配对模式 → 长按用户按键连接选中设备。</li>
+      <li>配对信息存在 SD 卡的 <code>/sdcard/pjournal/bt_paired.dat</code>，刷机不影响。</li>
+      <li>开机和休眠唤醒后会自动重连：60 秒内每 5 秒重试一次，期间按一下键盘任意键（把它自己也唤醒）通常就接上了。</li>
+    </ul>
+
+    <h3>八、SD 卡目录</h3>
+    <pre><code>/sdcard/
+├── 0.txt ~ 9.txt       # 快捷编辑文件（快捷编辑模式）
+├── .quick_history/     # 快捷编辑历史快照（开启版本历史后生成）
+├── pjournal/           # 日记
+│   ├── entries/        # 日记文件 (YYYY-MM-DD_HHMMSS.txt)
+│   ├── .history/       # 日记历史快照（每篇一个子目录，保留最近 10 个）
+│   ├── settings.json   # 设置
+│   └── bt_paired.dat   # 蓝牙配对信息
+├── settings/           # 词库导入导出文件（userdict_* / userpredict_*）
+├── gtd/                # GTD 任务管理
+│   ├── gtd.json        # 任务数据
+│   └── gtd_export_*.md # 任务导出
+└── outline/            # 大纲写作 + 灵感面板
+    ├── *.json          # 大纲项目
+    └── inspiration.json  # 灵感数据</code></pre>
+    <p>要备份，把整张卡拷走即可 —— 换机、重刷都不影响这些文件。</p>
+
+    <h3>九、常见问题</h3>
+    <h4>点「连接设备」没反应 / 列表里没有设备</h4>
+    <ul>
+      <li>确认用的是 <strong>Chrome 或 Edge</strong>（Safari / Firefox 没有 WebSerial，点了也不会有反应）。</li>
+      <li>确认是<strong>数据线</strong>而不是纯充电线。</li>
+      <li>关掉所有占用串口的程序：<code>idf.py monitor</code>、串口监视器、串口助手，
+        以及本机的 <code>cat /dev/ttyACM0</code>。同一时刻只能有一个程序打开串口。</li>
+      <li>列表里选的是 <code>USB JTAG/serial debug unit</code>；如果同时插了别的 USB 串口设备，注意别选错。</li>
+    </ul>
+    <h4>刷到一半失败 / 校验不通过</h4>
+    <ul>
+      <li>不会有问题，重新刷一遍即可（固件是整包写入，没有"刷一半"的中间状态）。</li>
+      <li>连续失败就换一根线、换一个 USB 口（尽量直插主板，别走 USB hub）。</li>
+    </ul>
+    <h4>刷完屏幕没变 / 设备不亮</h4>
+    <ul>
+      <li>「屏幕没变」多半是正常的：设置、日记、SD 卡内容都不参与刷机，画面当然一样。</li>
+      <li>刷完设备会重新枚举 USB，<strong>串口节点名会变</strong>（<code>/dev/ttyACM0</code> 可能变成
+        <code>/dev/ttyACM1</code>），之前开着的 <code>idf.py monitor</code> 会失效，要重新开一个。</li>
+      <li>真黑屏：按任意物理按键唤醒看看（可能只是睡过去了）；仍然不行就重刷一遍，或用
+        <code>erase_flash</code> 抹掉后插卡重刷。</li>
+    </ul>
+    <h4>设备进入下载模式不自启</h4>
+    <p>刷完应当自己重启。万一没有（页面会提示），拔掉 USB 线再插上即可 —— 固件已经写进去了。</p>
+
+    <h3>十、不用网页、走命令行</h3>
+    <p>装了 Python 的话，也可以直接从 <a href="https://github.com/autumnc/pjournal-esp32/releases" rel="noopener">Releases</a> 下载整包手动刷：</p>
+    <pre><code>pip install esptool
+
+# 整包（引导程序 + 分区表 + 应用）→ 0x0
+esptool.py --chip esp32s3 -b 460800 write_flash 0x0 pjournal-&lt;版本&gt;-merged.bin
+
+# 或者只更新应用、不动引导程序 / 分区表 → 0x10000
+esptool.py --chip esp32s3 -b 460800 write_flash 0x10000 pjournal-&lt;版本&gt;.bin</code></pre>
+    <p><strong>不要把 <code>pjournal-&lt;版本&gt;.bin</code> 刷到 <code>0x0</code></strong>（它是纯应用镜像，
+    刷错地址设备起不来）。本页面的固件闸口会挡掉这种误操作。</p>
+    <p>接串口看日志（空闲时固件不打日志，按一下按键才有输出）：</p>
+    <pre><code>cat /dev/ttyACM0</code></pre>
+    <p>烧完之后想开着串口观察，用 <code>idf.py monitor</code> 更好 —— 它会一直挂着，<code>cat</code> 会立刻 EOF。</p>
+
+    <h3>十一、硬件与说明</h3>
+    <table class="keys">
+      <tr><th>主控</th><td>ESP32-S3（双核 240MHz，16MB flash，8MB+ PSRAM）</td></tr>
+      <tr><th>屏幕</th><td>4.2″ RLCD 黑白全反射屏 400 × 300，ST7305 驱动（SPI）</td></tr>
+      <tr><th>RTC</th><td>PCF85063（I2C），带 CR2032 备份电池</td></tr>
+      <tr><th>键盘</th><td>蓝牙 HID（BLE）</td></tr>
+      <tr><th>按键</th><td>BOOT（GPIO0）+ 用户按键（GPIO18）</td></tr>
+      <tr><th>电池</th><td>单节锂电池 3.7V，ADC 分压检测</td></tr>
+      <tr><th>存储</th><td>microSD，SDMMC 1-line，FAT32</td></tr>
+    </table>
+    <p class="note">
+      刷机有风险（但随时可以用同一个页面重刷）。本页面的固件与工具全部同源托管，
+      刷前会校验长度、三处镜像魔数和 sha256 / md5。
+    </p>
+
+  </div>
+</div>
+</aside>
+
+<script type="module" src="./flasher.js"></script>
+</body>
+</html>
