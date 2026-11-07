@@ -40,6 +40,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>   // xTaskCreateWithCaps: 同步任务栈放 PSRAM
 
 extern u8g2_t *g_u8g2;
 extern "C" {
@@ -261,20 +262,29 @@ static std::vector<std::string> wrapText(const std::string &text, int maxW) {
 }
 
 // 详情页折行缓存：正文 + 宽度 + 当前字号不变就复用。
+// 放在文件作用域而不是函数内 static，是为了退屏时能显式释放（见 releaseDetailCache）。
+static std::string s_detailSrc;
+static int s_detailW = -1;
+static int s_detailPx = -1;
+static std::vector<std::string> s_detailLines;
+
 static const std::vector<std::string> &detailLines(const std::string &text) {
-    static std::string s_src;
-    static int s_w = -1;
-    static int s_px = -1;
-    static std::vector<std::string> s_lines;
     const int w = SCREEN_W - 16;
     const int px = g_font.fontSize();
-    if (s_w != w || s_px != px || s_src != text) {
-        s_src = text;
-        s_w = w;
-        s_px = px;
-        s_lines = wrapText(s_src, w);
+    if (s_detailW != w || s_detailPx != px || s_detailSrc != text) {
+        s_detailSrc = text;
+        s_detailW = w;
+        s_detailPx = px;
+        s_detailLines = wrapText(s_detailSrc, w);
     }
-    return s_lines;
+    return s_detailLines;
+}
+
+static void releaseDetailCache() {
+    std::string().swap(s_detailSrc);
+    std::vector<std::string>().swap(s_detailLines);
+    s_detailW = -1;
+    s_detailPx = -1;
 }
 
 // ── 同步：跑在后台任务里 ──────────────────────────────────────────────────
@@ -620,7 +630,7 @@ static void flomoSyncBody() {
 static void flomoSyncTask(void *arg) {
     (void)arg;
     flomoSyncBody();
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);   // 栈是 xTaskCreateWithCaps 分配的
 }
 
 // 手动同步的入口（S 键）：只起任务，这一拍就回来。
@@ -639,7 +649,12 @@ static void flomoTriggerSync() {
     TaskHandle_t h = nullptr;
     // 优先级 1（与 flomo_send 一致）；栈 8192 与 flomo_send 相同（同样走 HTTPS）。
     // 本任务多出来的是整库 load/save，而 flomo_json 是堆上 DOM、递归只有嵌套层数。
-    if (xTaskCreate(flomoSyncTask, "flomo_sync", 8192, nullptr, 1, &h) != pdPASS) {
+    // 栈放 PSRAM：同步本身已经在搬整库，内部 RAM 正是最紧的时候，别再要一块连续内部内存。
+    if (xTaskCreateWithCaps(flomoSyncTask, "flomo_sync", 8192, nullptr, 1,
+                            &h, MALLOC_CAP_SPIRAM) != pdPASS) {
+        ESP_LOGE("Flomo", "flomo_sync create failed: internal largest=%u psram largest=%u",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         syncLock();
         s_syncResult = "系统繁忙,请重试";
         s_syncOk = false;
@@ -1045,6 +1060,26 @@ void screen_flomo_init(AppState returnTo) {
     g.sel = 0;
     g.scroll = 0;
     rebuildFilter();
+}
+
+// 离开 Flomo 屏时释放整库。整库在内存里是几百上千条 Memo：每条 slug/时间戳都是
+// 16~30 字符的 std::string，按 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512 这类小分配
+// 全落在内部 RAM。以千条计就是上百 KB、几千个 32~64B 的堆块 —— 退出后不还给系统，
+// 紧接着开 WebDAV 连一个 12KB 的内部连续任务栈都建不出来（"系统繁忙"）。
+//
+// 下次进屏 screen_flomo_init 会从 SD 卡重新 load，所以这里可以整个丢掉。
+// pendingTemp/pendingSlug 是往返写作编辑器的路条，必须保留；后台同步任务用的是
+// 自己 load 的库快照（见 flomoSyncBody），不碰 g.store，也可以照常释放。
+void screen_flomo_release() {
+    g.store = Store();
+    std::vector<int>().swap(g.filtered);
+    std::vector<FlomoTagEntry>().swap(g.tagList);
+    releaseDetailCache();
+    ESP_LOGI("Flomo", "退屏释放整库: 内部 free %u largest %u | PSRAM free %u largest %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
 }
 
 static void deleteCurrent() {

@@ -35,11 +35,13 @@
 #include <esp_timer.h>
 #include <esp_pm.h>
 #include <esp_sleep.h>
+#include <esp_heap_caps.h>
 #include <nvs_flash.h>
 #include <esp_sntp.h>
 #include <driver/gpio.h>
 #include <sys/time.h>
 #include <freertos/semphr.h>
+#include <freertos/idf_additions.h>   // xTaskCreateWithCaps: 网络任务栈放 PSRAM
 #include <cstdio>
 
 static const char *TAG = "Main";
@@ -130,7 +132,7 @@ static void webdavSyncTask(void *arg) {
     s_webdavResult = result;
     unlockAsyncResult();
     s_webdavState = AsyncUiState::Done;
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);   // 栈是 xTaskCreateWithCaps 分配的
 }
 
 static void flomoSendTask(void *arg) {
@@ -151,7 +153,7 @@ static void flomoSendTask(void *arg) {
     s_flomoResult = result;
     unlockAsyncResult();
     s_flomoState = AsyncUiState::Done;
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);   // 栈是 xTaskCreateWithCaps 分配的
 }
 
 // BLE stack init + auto-connect in a background task so the main UI
@@ -1069,7 +1071,12 @@ extern "C" void app_main() {
             if (!flomoInited) { screen_flomo_init(APP_MAIN); flomoInited = true; }
             if (key > 0) currentState = screen_flomo_handle(key, ctx);
             else { screen_flomo_handle(0, ctx); }
-            if (currentState != APP_FLOMO) flomoInited = false;
+            if (currentState != APP_FLOMO) {
+                flomoInited = false;
+                // 整库是几百上千条 Memo 的小字符串分配，全在内部 RAM。退屏就还回去，
+                // 否则紧接着开 WebDAV/语音等要连续内部内存的操作会因碎片/余量不足失败。
+                screen_flomo_release();
+            }
             break;
         }
 
@@ -1126,7 +1133,14 @@ extern "C" void app_main() {
                 s_webdavResultUntil = 0;
                 s_webdavState = AsyncUiState::Running;
                 TaskHandle_t h = nullptr;
-                if (xTaskCreate(webdavSyncTask, "webdav_sync", 12288, nullptr, 1, &h) != pdPASS) {
+                // 栈放 PSRAM：TLS/HTTP 只用栈上变量，不拿它做 DMA，而内部 RAM 要留给
+                // WiFi/显示/IME。这样 Flomo 退屏后的内部碎片再多，也不至于连任务都起不来；
+                // 大块缓冲本来就 >512B 走 PSRAM，不受内部碎片影响。
+                if (xTaskCreateWithCaps(webdavSyncTask, "webdav_sync", 12288, nullptr, 1,
+                                        &h, MALLOC_CAP_SPIRAM) != pdPASS) {
+                    ESP_LOGE(TAG, "webdav_sync create failed: internal largest=%u psram largest=%u",
+                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
                     s_webdavResult = {false, "系统繁忙,请重试"};
                     s_webdavState = AsyncUiState::Done;
                 }
@@ -1172,7 +1186,11 @@ extern "C" void app_main() {
                 s_flomoResultUntil = 0;
                 s_flomoState = AsyncUiState::Running;
                 TaskHandle_t h = nullptr;
-                if (xTaskCreate(flomoSendTask, "flomo_send", 8192, nullptr, 1, &h) != pdPASS) {
+                if (xTaskCreateWithCaps(flomoSendTask, "flomo_send", 8192, nullptr, 1,
+                                        &h, MALLOC_CAP_SPIRAM) != pdPASS) {
+                    ESP_LOGE(TAG, "flomo_send create failed: internal largest=%u psram largest=%u",
+                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
                     s_flomoResult = {false, "系统繁忙,请重试"};
                     s_flomoState = AsyncUiState::Done;
                 }

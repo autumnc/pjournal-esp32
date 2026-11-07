@@ -6,3 +6,5 @@
 // 正文编辑借用本仓写作编辑器。
 void screen_flomo_init(AppState returnTo);
 AppState screen_flomo_handle(int key, ScreenContext &ctx);
+// 退屏时释放内存里的整库（下次进屏会从 SD 卡重新 load）。
+void screen_flomo_release();
