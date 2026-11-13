@@ -71,6 +71,18 @@ static bool splitExplicit(const std::string &code, bool allowPartial, PinyinSpli
     return !out.tokens.empty();
 }
 
+// 整段是否能用完整音节切完(不留 partial)。只给下面的 qiang 歧义偏好用,
+// 候选分支很少(单字母音节只有 a/e/o), 不会比主 DFS 更贵。
+static bool hasExactSplit(const std::string &code, size_t pos) {
+    if (pos >= code.size()) return true;
+    int maxLen = std::min<int>(6, (int)code.size() - (int)pos);
+    for (int len = maxLen; len >= 1; len--) {
+        if (!PinyinEngine::isValidSyllable(code.substr(pos, (size_t)len))) continue;
+        if (hasExactSplit(code, pos + (size_t)len)) return true;
+    }
+    return false;
+}
+
 static void enumerateSplits(const std::string &code, size_t pos, bool allowPartial,
                             PinyinSplit &cur, std::vector<PinyinSplit> &out,
                             int maxVariants) {
@@ -94,6 +106,25 @@ static void enumerateSplits(const std::string &code, size_t pos, bool allowParti
         bestExact[bestCount] = exact;
         bestLens[bestCount++] = len;
         if (bestCount >= (int)(sizeof(bestLens) / sizeof(bestLens[0]))) break;
+    }
+    // "qian|g..." 与 "qiang|<零声母音节>" 同时成立时优先前者:
+    // qiangou 应切 千沟/前功, qiangai 应切 千改/前盖, 而不是 强偶/强爱。
+    // 实际词库里 qiang 后接 a/e/o/u 起头的零声母音节几乎没有词条, 而 qian+g
+    // 是常见组合(千古/前功/千感/钱给/前港...); 真要打"强啊/枪啊"可以用
+    // 撇号 qiang'a 明确切分。把 qian(4) 提到 qiang(5) 前面, DFS 先走
+    // qian 分支, 分支走不通时照常回溯到 qiang。只在 qian 分支能完整切完时
+    // 换序, 所以打到一半的 qiango(qiangou 的前缀)仍按 qiang|o 处理。
+    if (pos == 0 && code.size() > 5 && code.compare(0, 5, "qiang") == 0 &&
+        std::strchr("aeiou", code[5]) && hasExactSplit(code, 4)) {
+        int i4 = -1, i5 = -1;
+        for (int i = 0; i < bestCount; i++) {
+            if (bestLens[i] == 4) i4 = i;
+            else if (bestLens[i] == 5) i5 = i;
+        }
+        if (i4 >= 0 && i5 >= 0 && i4 > i5) {
+            std::swap(bestLens[i4], bestLens[i5]);
+            std::swap(bestExact[i4], bestExact[i5]);
+        }
     }
     for (int i = 0; i < bestCount; i++) {
         int len = bestLens[i];

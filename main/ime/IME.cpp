@@ -4299,11 +4299,25 @@ void IME::lookup() {
         // qian|guang(回溯后才成立), 但字符串本身能凑出的最长合法音节是 qiang;
         // prefixMatchLengths() 按最长优先返回 [5,4,...], 先试 qiang 就搜到 强/抢/枪
         // 并提前 break, 前/钱/千 永远排不上。先用 primarySplit 的首音节边界。
-        std::vector<int> tryLens;
-        if (!primarySplit.tokens.empty() && !primarySplit.tokens[0].partial) {
-            int firstLen = (int)primarySplit.tokens[0].text.length();
-            if (firstLen >= 1 && firstLen < qlen) tryLens.push_back(firstLen);
+        int primaryLen = 0;
+        if (!primarySplit.tokens.empty() && !primarySplit.tokens[0].partial)
+            primaryLen = (int)primarySplit.tokens[0].text.length();
+
+        // 另一种完整切分的首音节更长时(qiangou 的 qian|gou 与 qiang|ou),
+        // 首选分词那组先出, 这组长边界那组随后补上, 强/抢/枪排在千/前/钱之后。
+        // 只有长边界能完整切完剩余码才算(qianguang 的 qiang|uang 不合法, 不会补)。
+        int altLen = 0;
+        if (primaryLen >= 1 && primaryLen < qlen) {
+            int scanMax = std::min(6, qlen - 1);
+            for (int len = scanMax; len > primaryLen; len--) {
+                if (!ime::PinyinEngine::isValidSyllable(std::string(q, len))) continue;
+                if (ime::PinyinEngine::isValidCode(std::string(q + len, qlen - len))) altLen = len;
+                break;  // 只认最长的那条长边界
+            }
         }
+
+        std::vector<int> tryLens;
+        if (primaryLen >= 1 && primaryLen < qlen) tryLens.push_back(primaryLen);
         for (int len : ime::PinyinEngine::prefixMatchLengths(std::string(q, qlen)))
             if (std::find(tryLens.begin(), tryLens.end(), len) == tryLens.end())
                 tryLens.push_back(len);
@@ -4315,6 +4329,7 @@ void IME::lookup() {
         }
         for (int tryLen : tryLens) {
             if (tryLen >= qlen || tryLen < 1 || _all.size() >= _candidateLimit) continue;
+            bool isAlt = (altLen != 0 && tryLen == altLen);
             searchWindow(q, tryLen, zlo, zhi);
             uint32_t sEnd = zhi;
             int bcount = 0;
@@ -4332,12 +4347,15 @@ void IME::lookup() {
                 uint8_t f = readRecordFlag(i);
                 if (f & (_trad ? 0x01 : 0x02)) continue;
                 char hz[4]; if (!readHanzi(i, hz)) break;
-                appendCandidate(std::string(hz), 0);
+                // 两组切分的剩余码不同, 候选取自己的消费长度(见 commit 逐字分支)。
+                // 兜底边界(qia/q 这类前缀)不是完整切分, 仍按旧的共用剩余码处理。
+                bool fullSplit = (tryLen == primaryLen || isAlt);
+                appendCandidate(std::string(hz), (altLen != 0 && fullSplit) ? tryLen : 0);
             }
             if (_all.size() > (size_t)_partialStart) {
-                _remainder = _code.substr(tryLen);
-                break;
+                if (_remainder.empty()) _remainder = _code.substr(tryLen);
             }
+            if (!altLen || isAlt) break;
         }
         perf.partialUs += IME_PERF_NOW() - t;
     }
@@ -5206,9 +5224,13 @@ bool IME::commit(int idx, std::string &out, bool bySpace) {
     bool prefixMatchedPhrase = consumedLen > (int)_code.length() &&
                                utf8TextCharCount(out) > 1;
     if (partial || candContinue) {
-        if (!partial)
-            _remainder = _code.substr(consumedLen);
-        if (_remainder.length() == 0 || _remainder.length() >= _code.length()) {
+        // 逐字候选可能来自不同切分(qiangou 的 千=qian、强=qiang), 每组的
+        // 消费长度不同; candLen>0 时按它自己算剩余码, 旧的逐字候选(candLen=0)
+        // 才共用 _remainder。
+        std::string rest = _remainder;
+        if (consumedLen > 0 && consumedLen < (int)_code.length())
+            rest = _code.substr(consumedLen);
+        if (rest.length() == 0 || rest.length() >= _code.length()) {
             _prefix.clear();
             _displayCodeDirty = true;
             _remainder.clear();
@@ -5217,7 +5239,7 @@ bool IME::commit(int idx, std::string &out, bool bySpace) {
         }
         _prefix += out;
         _displayCodeDirty = true;
-        _code = _remainder;
+        _code = rest;
         _remainder.clear();
         _partialStart = 0;
         _maxMatchLen = 0;
