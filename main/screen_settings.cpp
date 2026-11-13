@@ -59,6 +59,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_app_mode", "工作模式", false, true, SG_MODE},
     {"_home_view", "主页视图", false, true, SG_MODE},
     {"_input_mode", "输入模式", false, true, SG_MODE},
+    {"night_mode", "夜间模式", false, false, SG_MODE},
     {"click_enabled", "打字音效", false, false, SG_MODE},
     {"_click_chinese", "中文音效触发", false, true, SG_MODE},
     {"_click_volume", "打字音效音量", false, true, SG_MODE},
@@ -285,7 +286,8 @@ static bool isToggleField(const char *key) {
            strcmp(key, "first_line_indent") == 0 || strcmp(key, "show_line_numbers") == 0 ||
            strcmp(key, "vi_mode") == 0 || strcmp(key, "version_history") == 0 ||
            strcmp(key, "recovery_draft") == 0 || strcmp(key, "vertical_ref_line") == 0 ||
-           strcmp(key, "click_enabled") == 0 || strcmp(key, "ime_sentence") == 0 ||
+           strcmp(key, "click_enabled") == 0 || strcmp(key, "night_mode") == 0 ||
+           strcmp(key, "ime_sentence") == 0 ||
            strcmp(key, "ime_doc_context") == 0 || strcmp(key, "ime_candidate_highlight") == 0;
 }
 
@@ -1241,6 +1243,11 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             if (strcmp(f.key, "click_enabled") == 0) {
                 if (!next) typingClickRelease();
                 settingsClampSelection();
+            } else if (strcmp(f.key, "night_mode") == 0) {
+                // 整帧发送前反转缓冲,立即生效无需重启。逻辑画面可能逐字节不变,
+                // 丢弃快照强制下一次 ui_commit 重发,否则屏幕不会切过去。
+                ui_set_night_mode(next);
+                ui_invalidate_snapshot();
             }
         } else {
             g_settingsState.editField = selRow.field;

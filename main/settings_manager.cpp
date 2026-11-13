@@ -156,6 +156,7 @@ bool SettingsManager::viMode() { return get("vi_mode") == "1"; }  // default off
 bool SettingsManager::versionHistory() { return get("version_history") == "1"; }  // default off
 bool SettingsManager::recoveryDraft() { return get("recovery_draft") != "0"; }  // default on
 bool SettingsManager::verticalReferenceLine() { return get("vertical_ref_line") == "1"; }  // default off
+bool SettingsManager::nightMode() { return get("night_mode") == "1"; }  // default off
 
 int SettingsManager::fontSize() {
     std::string v = get("font_size");

@@ -601,6 +601,29 @@ void ui_clear() {
     u8g2_SetDrawColor(g_u8g2, 0);
 }
 
+// ── 夜间模式(黑底白字) ────────────────────────────────────────────────────
+// 面板是单色 1bpp, 所有界面都按"白底黑字(缓冲里 1=白)"绘制。夜间模式不改
+// 任何绘制代码, 只在整帧发送前往缓冲里逐字节取反: 白底变黑底、黑字变白字,
+// 整屏自然相反。取反就地做、发完立即还原, 所以快照(s_frame_snapshot)和所有
+// 绘制逻辑看到的始终是逻辑画面, 与是否夜间无关。
+static bool s_night_mode = false;
+
+void ui_set_night_mode(bool on) { s_night_mode = on; }
+bool ui_night_mode() { return s_night_mode; }
+
+static void ui_send_frame() {
+    if (!g_u8g2) return;
+    uint8_t *buf = u8g2_GetBufferPtr(g_u8g2);
+    size_t size = u8g2_GetBufferSize(g_u8g2);
+    if (s_night_mode && buf != nullptr && size > 0) {
+        for (size_t i = 0; i < size; i++) buf[i] = (uint8_t)~buf[i];
+        u8g2_SendBuffer(g_u8g2);
+        for (size_t i = 0; i < size; i++) buf[i] = (uint8_t)~buf[i];
+    } else {
+        u8g2_SendBuffer(g_u8g2);
+    }
+}
+
 // ── Idle refresh optimization ─────────────────────────────────────────────
 // 空闲时屏幕内容逐字节不变(仅键盘输入/日期翻页/电量变化会改变内容),
 // 通过快照对比跳过重复的 SPI 刷新。ST7305 是 GRAM 型控制器,图像可长期
@@ -618,22 +641,22 @@ void ui_commit() {
     if (!s_frame_snapshot) {
         s_frame_snapshot = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_frame_snapshot) {
-            u8g2_SendBuffer(g_u8g2);  // 无快照时退回无条件发送
+            ui_send_frame();  // 无快照时退回无条件发送
             return;
         }
         memcpy(s_frame_snapshot, buf, size);
-        u8g2_SendBuffer(g_u8g2);
+        ui_send_frame();
         s_last_send_us = esp_timer_get_time();
         return;
     }
 
     int64_t now = esp_timer_get_time();
     if (memcmp(buf, s_frame_snapshot, size) != 0) {
-        u8g2_SendBuffer(g_u8g2);
+        ui_send_frame();
         memcpy(s_frame_snapshot, buf, size);
         s_last_send_us = now;
     } else if (now - s_last_send_us >= KEEPALIVE_US) {
-        u8g2_SendBuffer(g_u8g2);
+        ui_send_frame();
         s_last_send_us = now;
     }
 }
@@ -650,13 +673,13 @@ void ui_invalidate_snapshot() {
 
 void ui_send_buffer() {
     if (!g_u8g2) return;
-    u8g2_SendBuffer(g_u8g2);
+    ui_send_frame();
 }
 
 void ui_restore_snapshot() {
     if (!g_u8g2 || !s_frame_snapshot) return;
     memcpy(u8g2_GetBufferPtr(g_u8g2), s_frame_snapshot, u8g2_GetBufferSize(g_u8g2));
-    u8g2_SendBuffer(g_u8g2);
+    ui_send_frame();
     s_last_send_us = esp_timer_get_time();
 }
 

@@ -421,6 +421,8 @@ extern "C" void app_main() {
 
     // Initialize settings (stored on SD card)
     g_settings.begin();
+    // 夜间模式(黑底白字):整帧发送前反转缓冲,须在任何界面首绘前设置
+    ui_set_night_mode(g_settings.nightMode());
 
     // 工作模式: "journal"(个人日记)、"quick"(快捷编辑) 或 "file"(文件编辑), 重启生效
     g_quickEdit = (g_settings.appMode() == "quick");

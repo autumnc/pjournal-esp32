@@ -41,6 +41,7 @@ public:
     bool versionHistory();
     bool recoveryDraft();
     bool verticalReferenceLine();
+    bool nightMode();        // 夜间模式(黑底白字),默认关
     int fontSize();
     std::string appMode();  // "journal"(个人日记)、"quick"(快捷编辑) 或 "file"(文件编辑)
     std::string homeView();  // "week"(周视图) 或 "month"(月视图)

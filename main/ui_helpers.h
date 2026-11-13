@@ -38,6 +38,10 @@ void ui_draw_status(const char *left, const char *right);
 void ui_draw_title(const char *title);
 void ui_clear();
 void ui_commit();
+// 夜间模式:1bpp 缓冲在整帧发送前逐字节取反,全局变成黑底白字。
+// 开关即时生效;调用后需让当前界面重绘(或 ui_invalidate_snapshot)才会重发。
+void ui_set_night_mode(bool on);
+bool ui_night_mode();
 // 只发送缓冲不更新快照(休眠提示用:唤醒后需按快照恢复,快照须保持提示前画面)
 void ui_send_buffer();
 // 用快照恢复缓冲并整屏发送(休眠唤醒后清除"休眠中"提示)
