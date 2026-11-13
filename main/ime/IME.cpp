@@ -4295,7 +4295,18 @@ void IME::lookup() {
     if (qlen > 1 && _all.size() < _candidateLimit && (!incompletePinyinInput || _all.empty())) {
         int64_t t = IME_PERF_NOW();
         uint32_t zlo, zhi;
-        std::vector<int> tryLens = ime::PinyinEngine::prefixMatchLengths(std::string(q, qlen));
+        // 逐字相位只消费首音节, 长度必须跟首选分词走。"qianguang" 的首选切分是
+        // qian|guang(回溯后才成立), 但字符串本身能凑出的最长合法音节是 qiang;
+        // prefixMatchLengths() 按最长优先返回 [5,4,...], 先试 qiang 就搜到 强/抢/枪
+        // 并提前 break, 前/钱/千 永远排不上。先用 primarySplit 的首音节边界。
+        std::vector<int> tryLens;
+        if (!primarySplit.tokens.empty() && !primarySplit.tokens[0].partial) {
+            int firstLen = (int)primarySplit.tokens[0].text.length();
+            if (firstLen >= 1 && firstLen < qlen) tryLens.push_back(firstLen);
+        }
+        for (int len : ime::PinyinEngine::prefixMatchLengths(std::string(q, qlen)))
+            if (std::find(tryLens.begin(), tryLens.end(), len) == tryLens.end())
+                tryLens.push_back(len);
         int maxTry = qlen - 1;
         if (_maxMatchLen > 0 && _maxMatchLen < maxTry) maxTry = _maxMatchLen - 1;
         for (int len = maxTry; len >= 1; len--) {
