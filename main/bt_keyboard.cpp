@@ -62,6 +62,7 @@ struct BtSdLock {
 #define KEY_SEARCH     0xA2
 #define KEY_HELP       0xA3
 #define KEY_REDO       0xA4
+#define KEY_WIN_V      0xA5  // 与 pjournal_app.h 保持一致
 // 字母选字触发键里修饰键的"单击"事件。必须与 pjournal_app.h 的同名宏一致。
 #define KEY_MOD_TAP_LCTRL 0xB0
 #define KEY_MOD_TAP_LGUI  0xB1
@@ -391,6 +392,14 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                 // Ctrl modifier handling
                 bool ctrl = (mod & 0x11) != 0;
                 bool shift = (mod & 0x22) != 0;
+                // Win+V 或 Alt+V → 剪贴板历史菜单 (HID usage 25 = 'v')。
+                // 有些自定义键盘把 Win 做成切层键, Win+V 到不了主机, 所以同时支持 Alt+V。
+                bool menuMod = (mod & 0xCC) != 0;  // LGUI=0x08 RGUI=0x80 LAlt=0x04 RAlt=0x40
+                if (menuMod && kc == 25) {
+                    uint8_t wv = KEY_WIN_V;
+                    xQueueSendToBack(s_queue, &wv, 0);
+                    continue;
+                }
                 if (ctrl && shift && kc == 9) {
                     // Ctrl+Shift+F → simplified/traditional toggle (before generic Ctrl+letter)
                     uint8_t tt = KEY_TRAD_TOGGLE;
@@ -1090,7 +1099,10 @@ void BtKeyboard::checkKeyRepeat() {
             if (now >= s_last_repeat_time[i] + interval_us) {
                 // Ctrl modifier handling for repeat
                 bool ctrl = (s_last_mod & 0x11) != 0;
-                if (ctrl && (s_last_mod & 0x22) && kc == 9) {
+                bool menuMod = (s_last_mod & 0xCC) != 0;
+                if (menuMod && kc == 25) {
+                    // Win+V / Alt+V → 按住不重复, 也不回退成 'v'
+                } else if (ctrl && (s_last_mod & 0x22) && kc == 9) {
                     // Ctrl+Shift+F → trad toggle; consume repeat
                 } else if (ctrl && kc == 12) {
                     uint8_t ci = KEY_CTRL_I;

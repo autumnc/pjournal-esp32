@@ -49,6 +49,10 @@ std::string app_get_editor_text();
 // Insert text at the cursor (shared by IME commit and voice dictation)
 void editorInsertText(const std::string &text);
 
+// 剪贴板历史菜单粘贴入口：把 text 插到当前输入焦点（插入模式/查找替换/
+// 文件改名/vi 搜索命令行，vi normal/visual 按 p/P 语义）。返回是否插入。
+bool app_editor_paste_text(const std::string &text);
+
 // Replace the entire editor text (used by AI polish confirm). Cursor → end.
 void editorReplaceAllText(const std::string &text);
 

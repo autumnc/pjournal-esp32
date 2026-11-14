@@ -1,4 +1,5 @@
 #include "screen_outline.h"
+#include "clipboard.h"
 #include "font_renderer.h"
 #include "json_parser.h"
 #include "journal_storage.h"
@@ -2109,4 +2110,53 @@ AppState screen_outline_handle(int key, ScreenContext &ctx) {
     // Fallback
     drawOutline(); ui_commit();
     return APP_OUTLINE;
+}
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+static void outlineInsertIntoNote(const std::string &text) {
+    int pos = 0;
+    while (pos <= (int)text.size()) {
+        size_t nl = text.find('\n', pos);
+        size_t end = (nl == std::string::npos) ? text.size() : nl;
+        std::string piece = text.substr(pos, end - pos);
+        if (!piece.empty() && piece.back() == '\r') piece.pop_back();
+        if (!piece.empty()) {
+            g.noteLines[g.noteRow].insert(g.noteCol, piece);
+            g.noteCol += (int)piece.size();
+        }
+        if (nl == std::string::npos) break;
+        std::string rest = g.noteLines[g.noteRow].substr(g.noteCol);
+        g.noteLines[g.noteRow].erase(g.noteCol);
+        g.noteLines.insert(g.noteLines.begin() + g.noteRow + 1, rest);
+        g.noteRow++;
+        g.noteCol = 0;
+        pos = (int)nl + 1;
+    }
+    g.noteVrowsDirty = true;
+}
+
+bool screen_outline_paste_text(const std::string &text) {
+    if (text.empty()) return false;
+    switch (g.mode) {
+    case M_ADD_PROJECT:
+    case M_ADD_HEADING:
+    case M_ADD_SUB:
+    case M_EDIT_NOTE:
+    case M_ADD_TAG:
+    case M_RENAME_TAG: {
+        std::string ins = clipboardFlattenSingleLine(text);
+        g.editBuf.insert(g.editCur, ins);
+        g.editCur += (int)ins.length();
+        return true;
+    }
+    case M_FILTER:
+        g.filterText += clipboardFlattenSingleLine(text);
+        rebuildFilter();
+        return true;
+    case M_EDIT_NOTE_ML:
+        outlineInsertIntoNote(text);
+        return true;
+    default:
+        return false;
+    }
 }

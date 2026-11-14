@@ -1347,7 +1347,7 @@ AppState screen_flomo_handle(int key, ScreenContext &ctx) {
         }
         if (key == 'c' || key == 'C') {
             if (!g.filtered.empty()) {
-                g_clipboard = g.store.memos[g.filtered[g.sel]].contentText;
+                clipboardSet(g.store.memos[g.filtered[g.sel]].contentText, false);
                 g.status = "已复制到粘贴板";
                 drawDetail();
                 return APP_FLOMO;
@@ -1409,7 +1409,7 @@ AppState screen_flomo_handle(int key, ScreenContext &ctx) {
         }
     } else if (key == 'c' || key == 'C') {
         if (!g.filtered.empty()) {
-            g_clipboard = g.store.memos[g.filtered[g.sel]].contentText;
+            clipboardSet(g.store.memos[g.filtered[g.sel]].contentText, false);
             g.status = "已复制到粘贴板";
         }
     } else if (key == 'd' || key == 'D') {
@@ -1458,4 +1458,18 @@ AppState screen_flomo_handle(int key, ScreenContext &ctx) {
 
     drawList();
     return APP_FLOMO;
+}
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+bool screen_flomo_paste_text(const std::string &text) {
+    if (text.empty() || g.mode != FM_SEARCH) return false;
+    std::string ins = clipboardFlattenSingleLine(text);
+    g.searchBuf.insert(g.searchCur, ins);
+    g.searchCur += (int)ins.length();
+    g.query = g.searchBuf;
+    rebuildFilter();
+    g.sel = 0;
+    g.scroll = 0;
+    g.drawn = false;   // 空拍时也要重绘搜索页
+    return true;
 }

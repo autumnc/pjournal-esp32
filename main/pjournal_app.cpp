@@ -1,5 +1,6 @@
 #include "pjournal_app.h"
 #include "clipboard.h"
+#include "clip_history.h"
 #include "font_renderer.h"
 #include "journal_storage.h"
 #include "builtin_prompts.h"
@@ -18,6 +19,22 @@
 extern u8g2_t *g_u8g2;
 
 std::string g_clipboard;  // global clipboard definition
+bool g_clipboard_linewise = false;
+
+void clipboardSet(const std::string &text, bool linewise, bool recordHistory) {
+    g_clipboard = text;
+    g_clipboard_linewise = linewise;
+    if (recordHistory) cliphist_record(text, linewise);
+}
+
+std::string clipboardFlattenSingleLine(const std::string &text) {
+    std::string out = text;
+    for (char &c : out) {
+        if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+    }
+    return out;
+}
+
 std::string g_flomoPendingText;
 AppState g_flomoReturnTo = APP_EDITOR;
 

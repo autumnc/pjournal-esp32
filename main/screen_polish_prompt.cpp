@@ -214,3 +214,11 @@ AppState screen_polish_prompt_handle(int key, ScreenContext &ctx) {
     drawPromptEditor();
     return APP_POLISH_PROMPT;
 }
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+bool screen_polish_prompt_paste_text(const std::string &text) {
+    if (text.empty()) return false;
+    g.buf.insert(g.cur, text);
+    g.cur += (int)text.length();
+    return true;
+}

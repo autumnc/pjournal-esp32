@@ -529,7 +529,7 @@ AppState screen_inspiration_handle(int key, ScreenContext &ctx) {
         g.mode = IM_EDIT_KEYWORD;
     } else if ((key == 'c' || key == 'C') && g.sel >= 0 && g.sel < (int)g.itemCount) {
         // Copy to clipboard
-        g_clipboard = (*g.items)[g.sel]["content"].asString();
+        clipboardSet((*g.items)[g.sel]["content"].asString(), false);
         ctx.statusMessage = "已复制到剪贴板";
         ctx.statusDuration = 30;
     } else if ((key == 'f' || key == 'F') && g.sel >= 0 && g.sel < (int)g.itemCount) {
@@ -564,4 +564,25 @@ AppState screen_inspiration_handle(int key, ScreenContext &ctx) {
 
     drawList();
     return APP_INSPIRATION;
+}
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+bool screen_inspiration_paste_text(const std::string &text) {
+    if (text.empty()) return false;
+    if (g.mode == IM_EDIT_KEYWORD) {
+        std::string ins = clipboardFlattenSingleLine(text);
+        g.editBuf.insert(g.editCur, ins);
+        g.editCur += (int)ins.length();
+        return true;
+    }
+    if (g.mode == IM_SEARCH) {
+        std::string ins = clipboardFlattenSingleLine(text);
+        g.searchBuf.insert(g.searchCur, ins);
+        g.searchCur += (int)ins.length();
+        doSearch();
+        g.sel = 0;
+        g.scroll = 0;
+        return true;
+    }
+    return false;
 }

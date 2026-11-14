@@ -187,8 +187,6 @@ static EditorState s_stashedEditor;
 static bool s_hasStashedEditor = false;
 // 语音听写背景模式:只画正文,不画状态栏/候选条/行号。
 static bool s_skipStatusBarAndIme = false;
-// 全局剪贴板内容是否为整行(vi linewise), 与 g_clipboard 配套, 跨编辑器重开保留。
-static bool s_clipboardLinewise = false;
 
 static volatile bool s_promptTaskDone = false;
 static DeepseekResult s_promptTaskResult = {false, ""};
@@ -2244,7 +2242,7 @@ static bool viRegAppend(char reg) { return reg >= 'A' && reg <= 'Z'; }
 static bool viReadRegister(char reg, std::string &text, bool &linewise) {
     if (reg == 0 || reg == '+' || reg == '*' || (reg >= '0' && reg <= '9')) {
         text = g_clipboard;
-        linewise = s_clipboardLinewise;
+        linewise = g_clipboard_linewise;
         return !text.empty();
     }
     if (viRegNamed(reg)) {
@@ -2277,13 +2275,10 @@ static void viWriteRegister(char reg, const std::string &text, bool linewise) {
             r.linewise = linewise;
         }
         viCapRegister(r);
-        // unnamed 寄存器仍保留完整文本, 命名寄存器超限只影响 "a 这类显式引用。
-        g_clipboard = text;
-        s_clipboardLinewise = linewise;
-    } else {
-        g_clipboard = text;
-        s_clipboardLinewise = linewise;
     }
+    // unnamed 寄存器仍保留完整文本, 命名寄存器超限只影响 "a 这类显式引用。
+    // 所有 vi yank/删除/修改都经由这里写全局剪贴板并进入历史。
+    clipboardSet(text, linewise);
 }
 static std::string viLineRangeText(int a, int b) {
     std::string out;
@@ -4348,7 +4343,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     // ── Clipboard operations (Ctrl+C, Ctrl+X, Ctrl+V) ────────────────
     if (key == 0x03) { // Ctrl+C — copy
         if (g_editor.hasSelection) {
-            g_clipboard = getSelectedText();
+            clipboardSet(getSelectedText(), false);
             clearSelection();
         }
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
@@ -4356,7 +4351,7 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
     if (key == 0x18) { // Ctrl+X — cut
         if (g_editor.hasSelection) {
             recordUndoSnapshot(UndoGroup::Structural);
-            g_clipboard = getSelectedText();
+            clipboardSet(getSelectedText(), false);
             deleteSelection();
         }
         ui_clear(); drawEditor(); ui_commit(); return APP_EDITOR;
@@ -4895,6 +4890,61 @@ void editorInsertText(const std::string &text) {
     markDirty();
     g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
     g_editor.modifiedSinceSave = true;
+}
+
+bool app_editor_paste_text(const std::string &text) {
+    if (text.empty()) return false;
+    // 模态对话框只接受自己的按键，不往里塞文字。
+    if (g_editor.promptGenerating || g_editor.recoveryPrompt ||
+        g_editor.confirmSave || g_editor.helpActive) {
+        return false;
+    }
+
+    if (g_editor.fileMgr.active) {
+        auto &fm = g_editor.fileMgr;
+        if (fm.mode != FileMgrMode::NewName && fm.mode != FileMgrMode::RenameName) return false;
+        fileMgrInsertNameText(clipboardFlattenSingleLine(text));
+        return true;
+    }
+
+    if (g_editor.search.active) {
+        auto &sh = g_editor.search;
+        searchInsertFocused(clipboardFlattenSingleLine(text));
+        if (!sh.focusRep) searchAfterTermChange();
+        return true;
+    }
+
+    if (g_settings.viMode()) {
+        ViState &v = g_editor.vi;
+        if (v.cmdlineActive) {
+            // ':' 命令行只接受 ASCII 命令，不粘贴。
+            if (v.cmdlineType == ':') return false;
+            viCmdlineInsert(clipboardFlattenSingleLine(text));
+            return true;
+        }
+        // 清掉半截操作符/寄存器前缀，确保粘贴的是刚选中的历史条目。
+        v.reg = 0;
+        v.wantRegister = false;
+        v.count = 0;
+        v.op = ViOperator::None;
+        v.gPending = false;
+        v.replacePending = false;
+        if (v.mode == ViMode::Normal) {
+            viPaste(true);
+        } else if (v.mode == ViMode::Visual || v.mode == ViMode::VisualLine) {
+            viVisualReplace();
+        } else {
+            g_ime.cancelComposition();
+            editorInsertText(text);
+        }
+        screen_editor_reset_drawn();
+        return true;
+    }
+
+    g_ime.cancelComposition();
+    editorInsertText(text);
+    screen_editor_reset_drawn();
+    return true;
 }
 
 // Replace the entire editor text (AI polish confirm). Cursor moves to the end.

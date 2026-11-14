@@ -1,4 +1,5 @@
 #include "screen_settings.h"
+#include "clipboard.h"
 #include "font_renderer.h"
 #include "settings_manager.h"
 #include "journal_storage.h"
@@ -1352,4 +1353,31 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
     }
     ui_commit();
     return APP_SETTINGS;
+}
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+bool screen_settings_paste_text(const std::string &text) {
+    if (text.empty()) return false;
+    if (g_settingsState.mode == SETTINGS_DICT_LIST && g_settingsState.dictSearching) {
+        std::string ins = clipboardFlattenSingleLine(text);
+        g_settingsState.dictSearchBuffer.insert(g_settingsState.dictSearchCursor, ins);
+        g_settingsState.dictSearchCursor += (int)ins.length();
+        g_settingsState.dictSelection = 0;
+        g_settingsState.dictScroll = 0;
+        g_settingsState.dictFilterCacheValid = false;
+        return true;
+    }
+    if (g_settingsState.mode == SETTINGS_DICT_ADD) {
+        std::string ins = clipboardFlattenSingleLine(text);
+        g_settingsState.dictAddBuffer.insert(g_settingsState.dictAddCursor, ins);
+        g_settingsState.dictAddCursor += (int)ins.length();
+        return true;
+    }
+    if (g_settingsState.editing) {
+        std::string ins = clipboardFlattenSingleLine(text);
+        g_settingsState.editBuffer.insert(g_settingsState.editCursor, ins);
+        g_settingsState.editCursor += (int)ins.length();
+        return true;
+    }
+    return false;
 }

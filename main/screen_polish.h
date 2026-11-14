@@ -12,3 +12,5 @@ void screen_polish_set_scope(PolishScope scope);
 
 void screen_polish_init();
 AppState screen_polish_handle(int key, ScreenContext &ctx);
+// 剪贴板历史菜单粘贴入口（自定义润色指令输入框）
+bool screen_polish_paste_text(const std::string &text);

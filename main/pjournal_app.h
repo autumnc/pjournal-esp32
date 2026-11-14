@@ -64,6 +64,7 @@ struct ScreenContext {
 #define KEY_SEARCH     0xA2
 #define KEY_HELP       0xA3
 #define KEY_REDO       0xA4
+#define KEY_WIN_V      0xA5
 // 字母选字触发键里修饰键的"单击"事件(左/右 Ctrl/Win/Alt)。Tab 走 0x09。
 // 必须与 bt_keyboard.cpp 的同名宏一致。
 #define KEY_MOD_TAP_LCTRL 0xB0
@@ -98,6 +99,8 @@ AppState screen_outline_handle(int key, ScreenContext &ctx);
 // Inspiration screen
 void screen_inspiration_init(AppState returnTo, AppState editorReturnTo);
 AppState screen_inspiration_handle(int key, ScreenContext &ctx);
+// 剪贴板历史菜单粘贴入口（关键词/搜索框）
+bool screen_inspiration_paste_text(const std::string &text);
 
 // Voice dictation screen
 void screen_voice_init();

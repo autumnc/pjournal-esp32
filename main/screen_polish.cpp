@@ -1,5 +1,6 @@
 #include "pjournal_app.h"
 #include "screen_polish.h"
+#include "clipboard.h"
 #include "screen_editor.h"
 #include "deepseek_client.h"
 #include "font_renderer.h"
@@ -352,4 +353,13 @@ AppState screen_polish_handle(int key, ScreenContext &ctx) {
 
     drawResult();
     return APP_POLISH;
+}
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+bool screen_polish_paste_text(const std::string &text) {
+    if (text.empty() || g.phase != P_EDIT_INSTR) return false;
+    std::string ins = clipboardFlattenSingleLine(text);
+    g.instrBuf.insert(g.instrCur, ins);
+    g.instrCur += (int)ins.length();
+    return true;
 }

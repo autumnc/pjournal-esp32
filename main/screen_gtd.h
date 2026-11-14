@@ -10,3 +10,5 @@ bool screen_gtd_accept_physical_buttons();
 bool screen_gtd_in_project_list();
 // 物理按键双击 BOOT: 项目树内返回项目选择菜单; 其他视图无动作
 void screen_gtd_physical_double_boot();
+// 剪贴板历史菜单粘贴入口（标题/字段/筛选/备注）
+bool screen_gtd_paste_text(const std::string &text);

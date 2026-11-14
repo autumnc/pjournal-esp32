@@ -8,3 +8,5 @@ void screen_flomo_init(AppState returnTo);
 AppState screen_flomo_handle(int key, ScreenContext &ctx);
 // 退屏时释放内存里的整库（下次进屏会从 SD 卡重新 load）。
 void screen_flomo_release();
+// 剪贴板历史菜单粘贴入口（搜索框）
+bool screen_flomo_paste_text(const std::string &text);

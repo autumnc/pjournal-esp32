@@ -9,6 +9,7 @@
 #include "webdav_client.h"
 #include "flomo_client.h"
 #include "ime/IME.h"
+#include "clip_menu.h"
 #include "pjournal_app.h"
 #include "screen_editor.h"
 #include "screen_settings.h"
@@ -607,6 +608,23 @@ extern "C" void app_main() {
 
         // Check for key repeat events
         g_bt.checkKeyRepeat();
+
+        // ── Win+V 剪贴板历史浮层 ─────────────────────────────────────────
+        // 菜单打开期间吞掉所有按键（包括空闲节拍），并刷新活动时间防止
+        // 自动休眠；关闭后底层界面在下一个空闲节拍自行重绘。
+        if (clip_menu_active()) {
+            s_last_activity_us = esp_timer_get_time();
+            clip_menu_handle(key);
+            // 异步状态(同步页)的 waitKey 不等待；菜单打开时按 50ms 节拍空转，
+            // 否则会满速空跑烧 CPU。
+            if (key == 0) vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        if (key == KEY_WIN_V) {
+            clip_menu_open(currentState);
+            s_last_activity_us = esp_timer_get_time();
+            continue;
+        }
 
         // Global Ctrl+Space IME toggle (only for editor)
         // 切换后标记重绘:编辑器空闲路径不重绘,状态栏的输入法标签须立即刷新

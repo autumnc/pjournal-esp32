@@ -1,5 +1,7 @@
 #include "screen_gtd.h"
 
+#include "clipboard.h"
+
 #include "font_renderer.h"
 
 #include "json_parser.h"
@@ -5426,4 +5428,59 @@ AppState screen_gtd_handle(int key, ScreenContext &ctx) {
 
     return APP_GTD;
 
+}
+
+// ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
+static void gtdInsertIntoNote(const std::string &text) {
+    int pos = 0;
+    while (pos <= (int)text.size()) {
+        size_t nl = text.find('\n', pos);
+        size_t end = (nl == std::string::npos) ? text.size() : nl;
+        std::string piece = text.substr(pos, end - pos);
+        if (!piece.empty() && piece.back() == '\r') piece.pop_back();
+        if (!piece.empty()) {
+            g.noteLines[g.noteRow].insert(g.noteCol, piece);
+            g.noteCol += (int)piece.size();
+        }
+        if (nl == std::string::npos) break;
+        std::string rest = g.noteLines[g.noteRow].substr(g.noteCol);
+        g.noteLines[g.noteRow].erase(g.noteCol);
+        g.noteLines.insert(g.noteLines.begin() + g.noteRow + 1, rest);
+        g.noteRow++;
+        g.noteCol = 0;
+        pos = (int)nl + 1;
+    }
+    g.noteVrowsDirty = true;
+}
+
+bool screen_gtd_paste_text(const std::string &text) {
+    if (text.empty()) return false;
+    switch (g.mode) {
+    case M_ADD:
+    case M_RENAME:
+    case M_ADD_PROJECT:
+    case M_RENAME_PROJECT:
+    case M_RENAME_CONTEXT:
+    case M_RENAME_TAG:
+    case M_ADD_CONTEXT:
+    case M_ADD_TAG:
+    case M_EDIT_FIELD: {
+        bool multi = false;
+        if (g.mode == M_EDIT_FIELD && g.detailField >= 0 && g.detailField < NUM_DETAIL_FIELDS)
+            multi = DETAIL_FIELDS[g.detailField].type == 'm';
+        std::string ins = multi ? text : clipboardFlattenSingleLine(text);
+        g.editBuf.insert(g.editCur, ins);
+        g.editCur += (int)ins.length();
+        return true;
+    }
+    case M_FILTER:
+        g.filterText += clipboardFlattenSingleLine(text);
+        rebuildFilter();
+        return true;
+    case M_EDIT_NOTE:
+        gtdInsertIntoNote(text);
+        return true;
+    default:
+        return false;
+    }
 }
