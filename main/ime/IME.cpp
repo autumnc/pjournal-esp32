@@ -5411,7 +5411,7 @@ bool IME::handleKey(int key, std::string &out) {
         if (isLetterSelArmKey(key)) {
             // 只在"候选真的是靠数字键选"的状态里开：有候选、且不在 v 模式/联想/删除态。
             // 候选模式下开关式，再按一下取消；没有候选时 Tab 保持原来的语义。
-            const bool selState = !_page.empty() && !_vMode && !_lfMode && !_deleteMode;
+            const bool selState = letterSelTapAvailable();
             if (selState) {
                 _letterSelArmed = !_letterSelArmed;
                 return true;

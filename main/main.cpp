@@ -10,6 +10,7 @@
 #include "flomo_client.h"
 #include "ime/IME.h"
 #include "clip_menu.h"
+#include "shortcut_menu.h"
 #include "pjournal_app.h"
 #include "screen_editor.h"
 #include "screen_settings.h"
@@ -609,6 +610,41 @@ extern "C" void app_main() {
         // Check for key repeat events
         g_bt.checkKeyRepeat();
 
+        // ── 编辑器 Win 快捷菜单浮层 ──────────────────────────────────────
+        // 菜单打开期间吞掉所有按键，空闲时 50ms 节拍空转；选中项通过注入
+        // 原有快捷键执行，注入的键继续走下面的剪贴板/全局快捷键/switch 分发，
+        // 因此「剪贴板」能命中紧随其后的 KEY_WIN_V 分支。
+        if (shortcut_menu_active()) {
+            s_last_activity_us = esp_timer_get_time();
+            ShortcutMenuAction act = shortcut_menu_handle(key);
+            if (act == ShortcutMenuAction::None) {
+                if (key == 0) vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+            switch (act) {
+            case ShortcutMenuAction::Voice:
+                currentState = APP_VOICE;
+                key = 0;
+                break;
+            case ShortcutMenuAction::PolishAll:
+                screen_polish_set_scope(POLISH_WHOLE);
+                currentState = APP_POLISH;
+                key = 0;
+                break;
+            case ShortcutMenuAction::Save:            key = 0x13; break;
+            case ShortcutMenuAction::Clipboard:       key = KEY_WIN_V; break;
+            case ShortcutMenuAction::Inspiration:     key = KEY_CTRL_I; break;
+            case ShortcutMenuAction::Search:          key = KEY_SEARCH; break;
+            case ShortcutMenuAction::History:         key = 0x19; break;
+            case ShortcutMenuAction::Prompt:          key = 0x10; break;
+            case ShortcutMenuAction::PolishSelection: key = 0x0F; break;
+            case ShortcutMenuAction::FileManager:     key = 0x05; break;
+            case ShortcutMenuAction::Help:            key = KEY_HELP; break;
+            case ShortcutMenuAction::Exit:            key = 0x11; break;
+            default:                                  key = 0; break;
+            }
+        }
+
         // ── Win+V 剪贴板历史浮层 ─────────────────────────────────────────
         // 菜单打开期间吞掉所有按键（包括空闲节拍），并刷新活动时间防止
         // 自动休眠；关闭后底层界面在下一个空闲节拍自行重绘。
@@ -624,6 +660,17 @@ extern "C" void app_main() {
             clip_menu_open(currentState);
             s_last_activity_us = esp_timer_get_time();
             continue;
+        }
+
+        // ── 单按左 Win → 编辑器快捷菜单 ──────────────────────────────────
+        // 只认左 Win 的修饰键单击(0xB1)；右 Win 不处理，避免媒体报文被误
+        // 解析成修饰键单击时误弹。打开失败（PSRAM 不足）就把按键放行。
+        if (key == KEY_MOD_TAP_LGUI && currentState == APP_EDITOR &&
+            app_editor_shortcut_menu_allowed()) {
+            if (shortcut_menu_open()) {
+                s_last_activity_us = esp_timer_get_time();
+                continue;
+            }
         }
 
         // Global Ctrl+Space IME toggle (only for editor)

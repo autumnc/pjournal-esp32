@@ -376,6 +376,13 @@ void FontRenderer::drawSymbolGlyph(int x, int y, const SymbolGlyph *sym, bool in
     }
 }
 
+// 18px 字体里四个方向箭头(U+2190..U+2193)的字形整体偏高，绘制时下移 2px
+// 与同一行的文字基线对齐；22/28px 的两套字形自带偏移，不受影响。
+static int smallFontArrowDy(uint32_t cp, int font_size) {
+    if (font_size != 18) return 0;
+    return (cp >= 0x2190 && cp <= 0x2193) ? 2 : 0;
+}
+
 int FontRenderer::drawText(int x, int y, const char *text, bool invert) {
     int orig_x = x;
     while (*text) {
@@ -391,7 +398,7 @@ int FontRenderer::drawText(int x, int y, const char *text, bool invert) {
         } else {
             auto *meta = findGlyph(cp);
             if (meta) {
-                drawGlyph(x, y, meta, invert);
+                drawGlyph(x, y + smallFontArrowDy(cp, font_size_), meta, invert);
                 x += meta->advance;
             } else if (font_size_ == 18) {
                 uint32_t fb = smallFontFallbackCodepoint(cp);
@@ -435,15 +442,16 @@ int FontRenderer::drawTextStyled(int x, int y, const char *text, const TextStyle
         } else {
             auto *meta = findGlyph(cp);
             if (meta) {
-                if (ts.bold) drawGlyph(x + 1, y, meta, false);
+                const int dy = smallFontArrowDy(cp, font_size_);
+                if (ts.bold) drawGlyph(x + 1, y + dy, meta, false);
                 // 仅对纯横画字(一、二、三)额外向下描1px:水平位移只让它们变宽不变厚,
                 // 看不出加粗;含竖/斜笔画的字(四、十、八…)水平位移已足够,再加就过粗。
                 if (ts.bold &&
                     bitmapIsHorizontalOnly(bitmap_data_ + meta->bitmap_offset,
                                            meta->width, meta->height,
                                            (meta->width + 7) / 8))
-                    drawGlyph(x, y + 1, meta, false);
-                drawGlyph(x, y, meta, false);
+                    drawGlyph(x, y + 1 + dy, meta, false);
+                drawGlyph(x, y + dy, meta, false);
                 adv = meta->advance;
             } else if (font_size_ == 18) {
                 uint32_t fb = smallFontFallbackCodepoint(cp);

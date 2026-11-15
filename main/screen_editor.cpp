@@ -4736,6 +4736,44 @@ bool app_editor_help_active() {
     return g_editor.helpActive;
 }
 
+// ── Win 快捷菜单用的查询(O(1), 不复制正文) ─────────────────────────────
+// 单按 Win 时是否允许弹出快捷菜单。任何模态对话框/后台生成期间都不弹,
+// 且设置里字母选字键为 lwin 时, 候选中按 Win 优先给输入法选字。
+bool app_editor_shortcut_menu_allowed() {
+    if (g_editor.promptGenerating || g_editor.recoveryPrompt || g_editor.confirmSave) return false;
+    if (g_editor.search.active || g_editor.helpActive || g_editor.fileMgr.active) return false;
+    if (g_editor.vi.cmdlineActive) return false;
+    if (g_settings.letterSelKey() == "lwin" && g_editor.imeActive &&
+        g_ime.active() && g_ime.letterSelTapAvailable()) {
+        return false;
+    }
+    return true;
+}
+
+bool app_editor_prompt_mode() {
+    return g_editor.promptMode;
+}
+
+bool app_editor_in_quick_file_session() {
+    return inQuickFileSession();
+}
+
+bool app_editor_in_file_edit_session() {
+    return inFileEditSession();
+}
+
+// 普通文本选区(vi visual 的选区不算: 那条路径有自己的运算符语义)。
+bool app_editor_has_selection() {
+    return g_editor.hasSelection && g_editor.vi.mode == ViMode::Insert;
+}
+
+bool app_editor_is_empty() {
+    for (const auto &line : g_editor.lines) {
+        if (!line.empty()) return false;
+    }
+    return true;
+}
+
 // vi normal/visual 或命令行激活时, 全局 Ctrl+Space 不得偷偷打开输入法;
 // '/' '?' 命令栏自己的 Ctrl+Space 由编辑器处理。
 bool app_editor_vi_ime_blocked() {

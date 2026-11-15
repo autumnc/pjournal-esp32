@@ -21,6 +21,7 @@ idf_component_register(SRCS
     "pjournal_app.cpp"
     "clip_history.cpp"
     "clip_menu.cpp"
+    "shortcut_menu.cpp"
     "clip_web.cpp"
     "ui_helpers.cpp"
     "safe_file.cpp"

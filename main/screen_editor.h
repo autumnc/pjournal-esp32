@@ -32,6 +32,14 @@ void app_editor_stash_session();
 void app_editor_restore_stashed_session();
 bool app_editor_has_stashed_session();
 
+// Win 快捷菜单(shortcut_menu.cpp)的可见性与打开条件
+bool app_editor_shortcut_menu_allowed();
+bool app_editor_prompt_mode();
+bool app_editor_in_quick_file_session();
+bool app_editor_in_file_edit_session();
+bool app_editor_has_selection();
+bool app_editor_is_empty();
+
 // 查找/替换对话框是否打开(供 main.cpp 屏蔽全局按键/物理按键)
 bool app_editor_search_active();
 

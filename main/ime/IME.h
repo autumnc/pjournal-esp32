@@ -93,6 +93,11 @@ public:
     // 这一次的 q/w/e/r/t/y/u/i/o 就当成数字 1..9 选字（见 handleKey）。
     bool letterSelectArmed() const { return _letterSelArmed; }
     void disarmLetterSelect() { _letterSelArmed = false; }
+    // 这一次字母选字触发键是否真的会被输入法消费（与 handleKey 的 selState 一致）。
+    // 供界面判断修饰键单击的归属, 避免抢走输入法的选字。
+    bool letterSelTapAvailable() const {
+        return !_page.empty() && !_vMode && !_lfMode && !_deleteMode;
+    }
     // 数字 1..9 对应的字母，翻译表和屏幕提示共用这一份。
     static const char *letterSelKeys();
 
