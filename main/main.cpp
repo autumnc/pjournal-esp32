@@ -634,6 +634,7 @@ extern "C" void app_main() {
             case ShortcutMenuAction::Save:            key = 0x13; break;
             case ShortcutMenuAction::Clipboard:       key = KEY_WIN_V; break;
             case ShortcutMenuAction::Inspiration:     key = KEY_CTRL_I; break;
+            case ShortcutMenuAction::Flomo:           key = 0x06; break;
             case ShortcutMenuAction::Search:          key = KEY_SEARCH; break;
             case ShortcutMenuAction::History:         key = 0x19; break;
             case ShortcutMenuAction::Prompt:          key = 0x10; break;

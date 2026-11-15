@@ -36,7 +36,7 @@ struct MenuItem {
 static bool s_active = false;
 static int s_sel = 0;
 static int s_count = 0;
-static MenuItem s_items[12];        // 最多 11 项，留一点余量
+static MenuItem s_items[12];        // 当前满载 12 项（一屏能放下）
 static uint8_t *s_base = nullptr;   // PSRAM 整帧底板
 static size_t s_baseSize = 0;
 
@@ -56,6 +56,7 @@ static void buildItems() {
     addItem(ShortcutMenuAction::Save, "保存", "Ctrl+S");
     addItem(ShortcutMenuAction::Clipboard, "剪贴板", "Alt+V");
     addItem(ShortcutMenuAction::Inspiration, "灵感", "Ctrl+I");
+    addItem(ShortcutMenuAction::Flomo, "发送到 Flomo", "Ctrl+F");
     addItem(ShortcutMenuAction::Search, "查找/替换", "Ctrl+/");
 
     // 版本历史只在开启且是日记/灵感会话时可用（快捷编辑/文件编辑里 Ctrl+Y

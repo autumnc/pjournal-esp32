@@ -10,6 +10,7 @@ enum class ShortcutMenuAction {
     Save,
     Clipboard,
     Inspiration,
+    Flomo,
     Search,
     History,
     Prompt,
