@@ -9,6 +9,7 @@
 #include "io_probe.h"
 #include <cstring>
 #include <cstdio>
+#include <cerrno>
 #include <algorithm>
 #include <ctime>
 #include <cstdlib>
@@ -1408,13 +1409,10 @@ bool IME::loadUserDictFile(const char *path, std::vector<UserEntry> &entries,
         }
     }
     if (compactUserEntries(entries, maxEntries)) hadDuplicates = true;
-    if (hadDuplicates) {
-        // 只在真正合并了计数时才需要保存
-        dirty = true;
-        saveUserDictFile(path, entries, dirty);
-    } else {
-        dirty = false;  // 无重复，无需保存
-    }
+    // 加载期间只标脏, 不写 SD: 写盘任务和主线程读 journal 会抢同一条 SD 总线
+    // (实测一次 25KB 整表重写被拖到 1.3s, 把 journal 合并也一起拖慢)。所有词典
+    // 读完后由 loadUserDict 末尾统一落盘。
+    dirty = hadDuplicates;
     if (entries.size() > 0)
         ESP_LOGI(IME_TAG, "loaded %zu user words from %s", entries.size(), path);
     return true;
@@ -1424,18 +1422,43 @@ void IME::loadUserDict() {
     // 每个词典单独打一次 HEAP, 目的是把"约 99KB 内部 RAM"这笔账摊到具体是哪个文件
     // (fixed / dynamic / predict / reject) 上 —— 单看总量只知道总共花了多少, 不知道
     // 该收哪个。4 个文件 + 后面的索引重建各一条, 差值就是各自的净占用。
+    IO_PROBE("loadUserDict", "合计");
     IO_PROBE_HEAP("词典加载前");
-    loadUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
+    {
+        IO_PROBE("loadUserDictFile", "fixed");
+        loadUserDictFile(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
+    }
     IO_PROBE_HEAP("加载后 fixed");
-    loadUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
+    {
+        IO_PROBE("loadUserDictFile", "dynamic");
+        loadUserDictFile(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
+    }
     IO_PROBE_HEAP("加载后 dynamic");
-    loadUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
+    {
+        IO_PROBE("loadUserDictFile", "predict");
+        loadUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
+    }
     IO_PROBE_HEAP("加载后 predict");
-    loadUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty, USERPREDICT_REJECT_LIMIT);
+    {
+        IO_PROBE("loadUserDictFile", "reject");
+        loadUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty, USERPREDICT_REJECT_LIMIT);
+    }
     IO_PROBE_HEAP("加载后 reject");
-    loadUserDictJournal(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
-    loadUserDictJournal(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
-    loadUserDictJournal(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
+    bool fixedJournal = false;
+    bool dynamicJournal = false;
+    bool predictJournal = false;
+    {
+        IO_PROBE("loadUserDictJournal", "fixed");
+        fixedJournal = loadUserDictJournal(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, USERDICT_FIXED_LIMIT);
+    }
+    {
+        IO_PROBE("loadUserDictJournal", "dynamic");
+        dynamicJournal = loadUserDictJournal(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, USERDICT_DYNAMIC_LIMIT);
+    }
+    {
+        IO_PROBE("loadUserDictJournal", "predict");
+        predictJournal = loadUserDictJournal(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, USERPREDICT_LIMIT);
+    }
     IO_PROBE_HEAP("journal 合并后");
     for (auto it = _userPredictWords.begin(); it != _userPredictWords.end(); ) {
         if (!validPredictEntry(it->code, it->word)) {
@@ -1445,8 +1468,23 @@ void IME::loadUserDict() {
             ++it;
         }
     }
-    if (_userPredictDirty) saveUserDictFile(USERPREDICT_PATH, _userPredictWords, _userPredictDirty);
-    if (_userPredictRejectDirty) saveUserDictFile(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty);
+    // 所有词典读完后才落盘: 加载期间写 SD 会和 journal 读取抢总线(实测把一次
+    // 25KB 整表重写拖到 1.3s)。journal 的删除并进同一个写盘任务, 只有整表写成功
+    // 才 unlink; 写失败时 journal 留着, 下次开机重新合并。
+    auto saveLoaded = [&](const char *dictPath, std::vector<UserEntry> &entries,
+                          bool &dirty, bool journalMerged) {
+        if (dirty) {
+            saveUserDictFile(dictPath, entries, dirty,
+                             journalMerged ? userDictJournalPath(dictPath).c_str() : nullptr);
+        } else if (journalMerged) {
+            // 表没脏却合并了 journal(理论上不会发生, 合并出新词一定置脏), 直接清。
+            clearUserDictJournal(dictPath);
+        }
+    };
+    saveLoaded(USERDICT_FIXED_PATH, _fixedUserWords, _fixedUserDirty, fixedJournal);
+    saveLoaded(USERDICT_DYNAMIC_PATH, _dynamicUserWords, _dynamicUserDirty, dynamicJournal);
+    saveLoaded(USERPREDICT_PATH, _userPredictWords, _userPredictDirty, predictJournal);
+    saveLoaded(USERPREDICT_REJECT_PATH, _userPredictRejectWords, _userPredictRejectDirty, false);
     markUserWordIndexesDirty("load");
     _userPredictIndexDirty = true;
     _userDictLoaded = true;
@@ -1484,17 +1522,25 @@ bool IME::compactUserEntries(std::vector<UserEntry> &entries, size_t limit) {
 // journal 文件里, 下次启动 loadUserDictJournal 会重新合并回来 —— 这也是 journal
 // 机制本来就有的兜底。
 //
-// 这里**不删 journal**: 同步版本是"整表写完紧跟着 unlink(journal)", 两步在同一
-// 次调用里, 不可能被插进来。异步之后这两步之间隔了一个任务调度, 而用户完全可能
-// 在空闲落盘刚入队后马上接着打字 —— 新词追加进 journal 文件, 紧跟着整表按**入队
-// 时**的快照重写(不含新词)并删掉 journal, 那个词就没了。改成一个只增不减的追加
-// 日志: 下次启动 loadUserDictJournal 把它合并回整表, 合并时发现"没有新东西"就自己
-// 把 journal 清掉(loadUserDictJournal 的 else 分支), 清理时机变成单线程的启动期。
-// 代价只是日志文件在一个会话内单调增长, 一个词一行、几十字节, 到下次启动就清了。
+// 运行期的词典落盘**不删 journal**: 同步版本是"整表写完紧跟着 unlink(journal)",
+// 两步在同一次调用里, 不可能被插进来。异步之后这两步之间隔了一个任务调度, 而用户
+// 完全可能在空闲落盘刚入队后马上接着打字 —— 新词追加进 journal 文件, 紧跟着整表
+// 按**入队时**的快照重写(不含新词)并删掉 journal, 那个词就没了。所以会话内 journal
+// 只增不减, 等到下次启动 loadUserDictJournal 把它合并回整表。
+//
+// journal 的清理放在启动期: loadUserDict 把"整表重写 + 写成功后删 journal"作为
+// 同一个写盘任务入队(removeAfter), 只有 safeWriteFile 成功才 unlink —— 表没落盘
+// 就绝不会删 journal。这样清理时机仍是单线程的启动期, 且不会出现"表旧了、日志也
+// 没了"。代价只是日志文件在一个会话内单调增长, 一个词一行、几十字节, 到下次启动
+// 就清了。
 struct UserDictWriteJob {
     std::string path;
     std::string data;
-    bool replace;                // true=整表重写(safeWriteFile), false=追加("a")
+    bool replace = false;        // true=整表重写(safeWriteFile), false=追加("a")
+    // 非空时: 整表**写成功后**才 unlink 这个文件(用于清 journal)。失败则保留,
+    // 由下次启动重新合并。必须和重写放在同一个任务里判断, 不能拆成下一条队列
+    // 消息 —— 那样只能保证顺序, 保证不了"前一条成功了"。
+    std::string removeAfter;
 };
 
 static QueueHandle_t s_userDictWriteQueue = nullptr;
@@ -1534,6 +1580,10 @@ static void userDictWriterTask(void *) {
         if (!ok) {
             ESP_LOGE(IME_TAG, "async userdict write failed: %s", job->path.c_str());
             IO_PROBE_HEAP("异步写盘失败");
+        } else if (!job->removeAfter.empty()) {
+            // 整表已经落盘, journal 里的内容全部在表里了, 这时删才安全。
+            if (unlink(job->removeAfter.c_str()) != 0 && errno != ENOENT)
+                ESP_LOGW(IME_TAG, "journal unlink failed: %s", job->removeAfter.c_str());
         }
         delete job;
         s_userDictWritesOutstanding.fetch_sub(1, std::memory_order_release);
@@ -1545,7 +1595,9 @@ static void userDictWriterTask(void *) {
 static bool ensureUserDictWriter() {
     if (s_userDictWriteTask) return true;
     if (!s_userDictWriteQueue) {
-        s_userDictWriteQueue = xQueueCreate(8, sizeof(UserDictWriteJob *));
+        // 一次加载最多 4 个整表重写(journal 删除随同一个任务执行), 留足余量
+        // 让运行期的追加任务不会因为启动期排队而失败。
+        s_userDictWriteQueue = xQueueCreate(12, sizeof(UserDictWriteJob *));
         if (!s_userDictWriteQueue) return false;
     }
     if (xTaskCreatePinnedToCore(userDictWriterTask, "udict_wr", 4096, nullptr, 3,
@@ -1558,14 +1610,17 @@ static bool ensureUserDictWriter() {
 }
 
 static bool enqueueUserDictWrite(const std::string &path, std::string &&data,
-                                 bool replace) {
-    if (data.empty()) return true;
+                                 bool replace, const char *removeAfter) {
+    // 空表也允许走写盘, 前提是还带着"写完删 journal": 否则空表会把 journal
+    // 留下来, 下次开机又合并一遍。
+    if (data.empty() && (!removeAfter || !*removeAfter)) return true;
     if (!ensureUserDictWriter()) return false;
     UserDictWriteJob *job = new (std::nothrow) UserDictWriteJob;
     if (!job) return false;
     job->path = path;
     job->data = std::move(data);
     job->replace = replace;
+    if (removeAfter && *removeAfter) job->removeAfter = removeAfter;
     // 先加后 send: 反过来会有一个"已在队列里但没计数"的窗口, 正好被
     // waitUserDictWritesDrained 撞上就会误判成写完。
     s_userDictWritesOutstanding.fetch_add(1, std::memory_order_acquire);
@@ -1593,7 +1648,8 @@ bool IME::waitUserDictWritesDrained(int timeout_ms) {
     }
 }
 
-void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty) {
+void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty,
+                           const char *journalToDelete) {
     if (!dirty) return;
 
     // Write in descending-count order, but leave `entries` untouched: the lookup
@@ -1624,7 +1680,7 @@ void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bo
     snprintf(probeDetail, sizeof(probeDetail), "%s  %u 条", path, (unsigned)entries.size());
     IO_PROBE("序列化(主线程)", probeDetail);
 
-    if (!enqueueUserDictWrite(path, std::move(data), true)) {
+    if (!enqueueUserDictWrite(path, std::move(data), true, journalToDelete)) {
         // 队列满/任务建不起来: 保持 dirty, 下次空闲再试(不丢数据)。
         ESP_LOGW(IME_TAG, "enqueue failed, %s stays dirty", path);
         return;
@@ -1632,16 +1688,17 @@ void IME::saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bo
     dirty = false;
 }
 
-void IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
+bool IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
                               bool &dirty, size_t maxEntries) {
     std::string journal = userDictJournalPath(path);
     FILE *f = fopen(journal.c_str(), "r");
-    if (!f) return;
+    if (!f) return false;
 
     bool changed = false;
 #if PJOURNAL_IME_PERF_LOG
-    // 启动期合并 journal 是"首次激活输入法"耗时的主体: 逐行合并, 表满时每行都可能
-    // 触发一次整表压紧。这里记下行数/压紧次数/总时长, 和上面的水位线改动对照着看。
+    // 启动期合并 journal 曾是"首次激活输入法"耗时的主体: 旧实现每碰到水位线就
+    // stable_sort + 重建哈希, 4338 行会压 5 次。这里记下 merge 的行数/压紧次数
+    // 和总时长, 用来确认改成"先收集、最后压一次"之后仍只有一次。
     int64_t perfStartUs = IME_PERF_NOW();
     int perfLines = 0;
     int perfCompactions = 0;
@@ -1650,6 +1707,30 @@ void IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
     entryIndex.reserve(entries.size() * 2 + 1);
     for (size_t i = 0; i < entries.size(); i++)
         entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
+
+    // journal 里的新词先收进 pending, 全部读完后一次并入再压紧。pending 的上限
+    // 只是防御超长 journal 把 PSRAM 顶爆; 正常 journal(几千行)会一次读完、
+    // 最后只 compact 一次。
+    const size_t pendingCap = maxEntries * 2;
+    std::vector<UserEntry> pending;
+    std::unordered_map<std::string, size_t> pendingIndex;
+    pending.reserve(std::min(maxEntries, (size_t)512));
+
+    auto foldPending = [&]() {
+        for (auto &e : pending)
+            entries.push_back(std::move(e));
+        pending.clear();
+        pendingIndex.clear();
+        compactUserEntries(entries, maxEntries);
+        entryIndex.clear();
+        entryIndex.reserve(entries.size() * 2 + 1);
+        for (size_t i = 0; i < entries.size(); i++)
+            entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
+#if PJOURNAL_IME_PERF_LOG
+        perfCompactions++;
+#endif
+    };
+
     char buf[256];
     while (fgets(buf, sizeof(buf), f)) {
 #if PJOURNAL_IME_PERF_LOG
@@ -1660,42 +1741,47 @@ void IME::loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
         int count = 1;
         bool trad = false;
         if (!parseUserDictLine(buf, code, word, count, trad)) continue;
-        auto existingIt = entryIndex.find(userEntryKey(code, word, trad));
+        std::string key = userEntryKey(code, word, trad);
+        auto existingIt = entryIndex.find(key);
         if (existingIt != entryIndex.end()) {
             UserEntry &existing = entries[existingIt->second];
             if (existing.count < count) {
                 existing.count = count;
                 changed = true;
             }
-        } else {
-            if (entries.size() >= userDictHighWater(maxEntries)) {
-                compactUserEntries(entries, maxEntries);
-#if PJOURNAL_IME_PERF_LOG
-                perfCompactions++;
-#endif
-                entryIndex.clear();
-                entryIndex.reserve(entries.size() * 2 + 1);
-                for (size_t i = 0; i < entries.size(); i++)
-                    entryIndex[userEntryKey(entries[i].code, entries[i].word, entries[i].trad)] = i;
-            }
-            entries.push_back({code, word, count, trad, userInitialForCode(code)});
-            entryIndex[userEntryKey(code, word, trad)] = entries.size() - 1;
-            changed = true;
+            continue;
         }
+        auto pendingIt = pendingIndex.find(key);
+        if (pendingIt != pendingIndex.end()) {
+            UserEntry &p = pending[pendingIt->second];
+            if (p.count < count) p.count = count;
+            continue;
+        }
+        pending.push_back({code, word, count, trad, userInitialForCode(code)});
+        pendingIndex[key] = pending.size() - 1;
+        changed = true;
+        if (pending.size() >= pendingCap) foldPending();
     }
     fclose(f);
+    if (!pending.empty()) {
+        for (auto &e : pending)
+            entries.push_back(std::move(e));
+    }
     if (compactUserEntries(entries, maxEntries)) changed = true;
 #if PJOURNAL_IME_PERF_LOG
+    if (!pending.empty()) perfCompactions++;
     ESP_LOGW(IME_TAG, "perf journal-merge %s lines=%d compactions=%d entries=%u %lldus",
              path, perfLines, perfCompactions, (unsigned)entries.size(),
              (long long)(IME_PERF_NOW() - perfStartUs));
 #endif
     if (changed) {
         dirty = true;
-        saveUserDictFile(path, entries, dirty);
-    } else {
-        clearUserDictJournal(path);
+        // journal 不在这里删: 调用方会在整表写盘成功后把删除任务排到写盘队列里,
+        // 由 FIFO 保证"先落表、后删日志"。写失败时 journal 保留, 下次开机重合并。
+        return true;
     }
+    clearUserDictJournal(path);
+    return false;
 }
 
 void IME::appendUserDictJournal(const char *path, const UserEntry &entry) {
@@ -1765,7 +1851,7 @@ void IME::flushUserDictJournal(bool force) {
         }
         if (data.empty()) continue;
         if (!enqueueUserDictWrite(userDictJournalPath(path.c_str()), std::move(data),
-                                  false)) {
+                                  false, nullptr)) {
             // 入队失败: 这些条目留在待写队列里, 下轮再试。
             for (auto &item : _pendingUserDictJournal)
                 if (item.path == path) failed.push_back(item);
@@ -1934,6 +2020,7 @@ void IME::sortUserIndexMapsAfterAppend(const std::vector<UserEntry> &entries,
 
 void IME::rebuildUserWordIndexes() {
     if (!_userWordIndexesDirty) return;
+    IO_PROBE("rebuildUserWordIndexes", _indexDirtyReason ? _indexDirtyReason : "-");
     // 索引(4 个 vector 值 + 4 个 string 键的 map)是内部 RAM 的另一个大头, 而且它是
     // "第一次用到才建"的懒加载 —— 上面 loadUserDict 的探针看不到它, 只有真正敲了
     // 字、触发第一次查询后才会显现。所以这里也各打一条。
@@ -3255,6 +3342,7 @@ uint8_t IME::readLfFlag(uint16_t i) {
 #endif
 
 void IME::setActive(bool on) {
+    IO_PROBE("IME::setActive", on ? "on" : "off");
     if (!on) flushUserDictSaves(true);
     _active = on;
     if (on) {

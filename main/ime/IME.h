@@ -238,8 +238,13 @@ private:
     int64_t _idleFlushBackoffUntilUs = 0;
     void loadUserDict();
     bool loadUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty, size_t maxEntries);
-    void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty);
-    void loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
+    // journalToDelete 非空时, 整表**写成功之后**才删这个 journal(与重写合并成
+    // 同一个写盘任务, 写失败则 journal 保留, 下次开机重新合并)。
+    void saveUserDictFile(const char *path, std::vector<UserEntry> &entries, bool &dirty,
+                          const char *journalToDelete = nullptr);
+    // 返回 true 表示 journal 里有新内容已合并进 entries, 但表还没落盘; 调用方需在
+    // 整表写成功后再删 journal(见 loadUserDict 的 saveLoaded)。
+    bool loadUserDictJournal(const char *path, std::vector<UserEntry> &entries,
                              bool &dirty, size_t maxEntries);
     void appendUserDictJournal(const char *path, const UserEntry &entry);
     void queueUserDictJournal(const char *path, const UserEntry &entry);

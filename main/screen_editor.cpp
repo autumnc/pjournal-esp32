@@ -3901,6 +3901,7 @@ static AppState screen_editor_vi_handle(int key, ScreenContext &ctx, bool &handl
 
 // ── Screen entry points ──────────────────────────────────────────────────
 void screen_editor_init(ScreenContext &ctx) {
+    IO_PROBE("screen_editor_init", "total");
     g_editor.lines.clear();
     g_editor.autoSaveTime = 0;
     g_editor.savedFilename = ctx.editFilename;
@@ -3909,8 +3910,10 @@ void screen_editor_init(ScreenContext &ctx) {
     bool quickFile = g_quickEdit && ctx.editContent.empty() && g_editor.savedFilename.empty();
     bool fileEditFile = g_fileEdit && ctx.editContent.empty() && g_editor.savedFilename.empty();
     if (quickFile) {
+        IO_PROBE("loadQuickEditFile", "quick");
         loadQuickEditFile();
     } else if (fileEditFile) {
+        IO_PROBE("loadFileEditCurrent", "file");
         loadFileEditCurrent();
     } else if (!ctx.editContent.empty()) {
         size_t pos = 0;
@@ -3972,14 +3975,17 @@ void screen_editor_init(ScreenContext &ctx) {
     clearUndoHistory();
 
     std::string recoveryContent, recoveryMeta;
-    if (g_settings.recoveryDraft() && g_journal.loadRecoveryDraft(recoveryContent, recoveryMeta)) {
-        g_editor.recoveryPrompt = true;
-        g_editor.recoveryContent = recoveryContent;
-        g_editor.recoveryMeta = recoveryMeta;
-    } else {
-        g_editor.recoveryPrompt = false;
-        g_editor.recoveryContent.clear();
-        g_editor.recoveryMeta.clear();
+    {
+        IO_PROBE("loadRecoveryDraft", "editor");
+        if (g_settings.recoveryDraft() && g_journal.loadRecoveryDraft(recoveryContent, recoveryMeta)) {
+            g_editor.recoveryPrompt = true;
+            g_editor.recoveryContent = recoveryContent;
+            g_editor.recoveryMeta = recoveryMeta;
+        } else {
+            g_editor.recoveryPrompt = false;
+            g_editor.recoveryContent.clear();
+            g_editor.recoveryMeta.clear();
+        }
     }
     g_editor.lastRecoveryHash = 0;
     g_editor.promptGenerating = false;
