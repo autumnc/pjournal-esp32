@@ -2,6 +2,8 @@
 
 #include "clipboard.h"
 
+#include "calendar_panel.h"
+
 #include "font_renderer.h"
 
 #include "json_parser.h"
@@ -168,15 +170,8 @@ static struct {
 
 
 
-    // calendar popup
-
-    int calYear = 2026;
-
-    int calMonth = 1;
-
-    int calDay = 1;
-
-    int calSelDay = 1;
+    // calendar popup（与「过往日记」日期筛选共用同一面板）
+    CalendarPanelState cal;
 
 
 
@@ -2429,80 +2424,12 @@ static void drawPicker() {
 
 
 
-static int daysInMonth(int year, int month) {
-
-    static const int dim[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
-    if (month < 1 || month > 12) return 30;
-
-    int d = dim[month];
-
-    if (month == 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))) d = 29;
-
-    return d;
-
-}
-
-
-
-// day of week: 0=Mon .. 6=Sun
-
-static int dayOfWeek(int year, int month, int day) {
-
-    struct tm t = {};
-
-    t.tm_year = year - 1900;
-
-    t.tm_mon = month - 1;
-
-    t.tm_mday = day;
-
-    mktime(&t);
-
-    int w = t.tm_wday;  // 0=Sun
-
-    return w == 0 ? 6 : w - 1;
-
-}
-
-
-
 static void openCalendar() {
 
     auto &task = g.data["tasks"][g.detailTaskIdx];
 
-    std::string due = task["due"].asString();
-
-    time_t now_t; time(&now_t); struct tm *now_tm = localtime(&now_t);
-
-
-
-    if (due.length() >= 10) {
-
-        g.calYear = atoi(due.substr(0, 4).c_str());
-
-        g.calMonth = atoi(due.substr(5, 2).c_str());
-
-        g.calDay = atoi(due.substr(8, 2).c_str());
-
-    } else {
-
-        g.calYear = now_tm->tm_year + 1900;
-
-        g.calMonth = now_tm->tm_mon + 1;
-
-        g.calDay = now_tm->tm_mday;
-
-    }
-
-    g.calSelDay = g.calDay;
-
-    // 防御 due 字段里非法月份/日期(如 13 月 32 日)导致的越界访问。
-    if (g.calMonth < 1) g.calMonth = 1;
-    if (g.calMonth > 12) g.calMonth = 12;
-    if (g.calDay < 1) g.calDay = 1;
-    int dim = daysInMonth(g.calYear, g.calMonth);
-    if (g.calDay > dim) g.calDay = dim;
-    g.calSelDay = g.calDay;
+    // 空/非法 due 由共享面板回落到今天
+    calendar_panel_reset(g.cal, task["due"].asString());
 
     g.mode = M_CALENDAR;
 
@@ -2514,153 +2441,7 @@ static void drawCalendar() {
 
     drawDetail();
 
-
-
-    int boxW = 280;
-
-    int boxH = 220;
-
-    int boxX = (SCREEN_W - boxW) / 2;
-
-    int boxY = (SCREEN_H - boxH) / 2;
-
-
-
-    // Opaque white background
-
-    u8g2_SetDrawColor(g_u8g2, 1);
-
-    u8g2_DrawBox(g_u8g2, boxX, boxY, boxW, boxH);
-
-    u8g2_SetDrawColor(g_u8g2, 0);
-
-    u8g2_DrawFrame(g_u8g2, boxX, boxY, boxW, boxH);
-
-
-
-    // Month/year header
-
-    char hdr[32];
-
-    snprintf(hdr, sizeof(hdr), "%d年%d月", g.calYear, g.calMonth);
-
-    int hdrW = g_font.textWidth(hdr);
-
-    g_font.drawText(boxX + (boxW - hdrW) / 2, boxY + 12 + g_font.ascent(), hdr, false);
-
-
-
-    // Navigation hints: h=prev month, l=next month
-
-    g_font.drawText(boxX + 8, boxY + 12 + g_font.ascent(), "h", false);
-
-    g_font.drawText(boxX + boxW - 8 - g_font.textWidth("l"), boxY + 12 + g_font.ascent(), "l", false);
-
-
-
-    // Weekday header
-
-    const char *wdnames[] = {"一","二","三","四","五","六","日"};
-
-    int colW = boxW / 7;
-
-    int hdrY = boxY + 12 + FONT_H + 4;
-
-    for (int i = 0; i < 7; i++) {
-
-        int cx = boxX + i * colW + (colW - g_font.textWidth(wdnames[i])) / 2;
-
-        g_font.drawText(cx, hdrY + g_font.ascent(), wdnames[i], false);
-
-    }
-
-
-
-    // Separator line
-
-    u8g2_SetDrawColor(g_u8g2, 0);
-
-    u8g2_DrawHLine(g_u8g2, boxX + 4, hdrY + FONT_H + 2, boxW - 8);
-
-
-
-    // Day grid
-
-    int firstDow = dayOfWeek(g.calYear, g.calMonth, 1);
-
-    int dim = daysInMonth(g.calYear, g.calMonth);
-
-    int gridY = hdrY + FONT_H + 21;
-
-
-
-    time_t now_t; time(&now_t); struct tm *now_tm = localtime(&now_t);
-
-    int todayDay = (now_tm->tm_year + 1900 == g.calYear && now_tm->tm_mon + 1 == g.calMonth)
-
-                   ? now_tm->tm_mday : 0;
-
-
-
-    for (int d = 1; d <= dim; d++) {
-
-        int dow = (firstDow + d - 1) % 7;
-
-        int row = (firstDow + d - 1) / 7;
-
-        int cx = boxX + dow * colW;
-
-        int cy = gridY + row * LINE_SPACING;
-
-
-
-        bool sel = (d == g.calSelDay);
-
-        bool today = (d == todayDay);
-
-
-
-        char ds[16];
-
-        snprintf(ds, sizeof(ds), "%d", d);
-
-        int tw = g_font.textWidth(ds);
-
-        int dx = cx + (colW - tw) / 2;
-
-
-
-        if (sel) {
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-            u8g2_DrawBox(g_u8g2, cx + 2, cy - g_font.ascent(), colW - 4, FONT_H);
-
-            u8g2_SetDrawColor(g_u8g2, 1);
-
-            g_font.drawText(dx, cy, ds, true);
-
-            u8g2_SetDrawColor(g_u8g2, 0);
-
-        } else {
-
-            if (today) {
-
-                // Underline today
-
-                g_font.drawText(dx, cy, ds, false);
-
-                u8g2_DrawHLine(g_u8g2, dx, cy + 3, tw);
-
-            } else {
-
-                g_font.drawText(dx, cy, ds, false);
-
-            }
-
-        }
-
-    }
+    calendar_panel_draw(g.cal);
 
 }
 
@@ -3723,71 +3504,13 @@ AppState screen_gtd_handle(int key, ScreenContext &ctx) {
 
         if (g.mode == M_CALENDAR) {
 
-            if (key == 0x1B) {
+            CalendarPanelResult calResult = calendar_panel_handle_key(key, g.cal);
 
-                g.mode = M_DETAIL;
-
-            } else if (key == KEY_LEFT) {
-
-                // Previous day
-
-                if (g.calSelDay > 1) g.calSelDay--;
-
-            } else if (key == KEY_RIGHT) {
-
-                // Next day
-
-                int dim = daysInMonth(g.calYear, g.calMonth);
-
-                if (g.calSelDay < dim) g.calSelDay++;
-
-            } else if (key == KEY_UP || key == 'k') {
-
-                g.calSelDay -= 7;
-
-                if (g.calSelDay < 1) g.calSelDay = 1;
-
-            } else if (key == KEY_DOWN || key == 'j') {
-
-                g.calSelDay += 7;
-
-                int dim = daysInMonth(g.calYear, g.calMonth);
-
-                if (g.calSelDay > dim) g.calSelDay = dim;
-
-            } else if (key == 'h' || key == 'H') {
-
-                // Previous month
-
-                g.calMonth--;
-
-                if (g.calMonth < 1) { g.calMonth = 12; g.calYear--; }
-
-                int dim = daysInMonth(g.calYear, g.calMonth);
-
-                if (g.calSelDay > dim) g.calSelDay = dim;
-
-            } else if (key == 'l' || key == 'L') {
-
-                // Next month
-
-                g.calMonth++;
-
-                if (g.calMonth > 12) { g.calMonth = 1; g.calYear++; }
-
-                int dim = daysInMonth(g.calYear, g.calMonth);
-
-                if (g.calSelDay > dim) g.calSelDay = dim;
-
-            } else if (key == 0x0A || key == 0x0D) {
-
-                // Confirm date
+            if (calResult == CalendarPanelResult::Accept) {
 
                 auto &task = tasks[g.detailTaskIdx];
 
-                char ds[16];
-
-                snprintf(ds, sizeof(ds), "%04d-%02d-%02d", g.calYear, g.calMonth, g.calSelDay);
+                std::string ds = calendar_panel_date_string(g.cal);
 
                 task.set("due", ds);
 
@@ -3797,9 +3520,7 @@ AppState screen_gtd_handle(int key, ScreenContext &ctx) {
 
                 g.mode = M_DETAIL;
 
-            } else if (key == 0x7F || key == 0x08) {
-
-                // Clear date
+            } else if (calResult == CalendarPanelResult::Clear) {
 
                 auto &task = tasks[g.detailTaskIdx];
 
@@ -3811,9 +3532,17 @@ AppState screen_gtd_handle(int key, ScreenContext &ctx) {
 
                 g.mode = M_DETAIL;
 
+            } else if (calResult == CalendarPanelResult::Cancel) {
+
+                g.mode = M_DETAIL;
+
             }
 
-            drawCalendar();
+            // 接受/清除/取消后模式已切回 M_DETAIL，不能再画日历面板，
+            // 否则弹出层会一直留在屏幕上直到下一次按键。
+            if (g.mode == M_CALENDAR) drawCalendar();
+
+            else drawDetail();
 
             ui_commit();
 

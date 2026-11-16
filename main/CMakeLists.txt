@@ -40,6 +40,7 @@ idf_component_register(SRCS
     "font_renderer.cpp"
     "bt_keyboard.cpp"
     "journal_storage.cpp"
+    "calendar_panel.cpp"
     "settings_manager.cpp"
     "wifi_manager.cpp"
     "webdav_client.cpp"
@@ -100,7 +101,7 @@ idf_component_register(SRCS
         esp_hal_usb
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="5.0.4")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="5.0.5")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PJOURNAL_IME_ENABLE_PINYIN=$<BOOL:${PJOURNAL_IME_ENABLE_PINYIN}>
     PJOURNAL_IME_ENABLE_LIANGFEN=$<BOOL:${PJOURNAL_IME_ENABLE_LIANGFEN}>

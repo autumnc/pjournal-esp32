@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <ctime>
 #include <string>
@@ -56,6 +57,14 @@ public:
     // Read entry content by filename
     std::string readEntry(const std::string &filename);
 
+    // 在单篇日记正文中做 ASCII 大小写不敏感的子串搜索（中文按字节精确匹配）。
+    // 分块读取，缓冲显式分配在 PSRAM，不把整篇正文载入内存。
+    bool searchEntryContent(const std::string &filename, const std::string &needleLower);
+
+    // 日记内容修订号：保存/改写/删除/重挂载 SD 都会递增。全文搜索结果带上
+    // 扫描起点的修订号，之后用当前值比对即可发现正文已过期。
+    uint32_t contentRevision() const { return m_contentRevision.load(std::memory_order_relaxed); }
+
     // Delete entry by filename
     bool deleteEntry(const std::string &filename);
 
@@ -90,6 +99,7 @@ private:
     std::vector<std::string> m_fileIndex;      // newest first
     std::unordered_set<std::string> m_dateSet; // distinct YYYY-MM-DD dates
     bool m_indexValid = false;
+    std::atomic<uint32_t> m_contentRevision{0};
 
     bool mounted_ = false;
     sdmmc_card_t *card_ = nullptr;  // esp_vfs_fat_sdcard_unmount() 需要原始指针

@@ -1,4 +1,5 @@
 #include "pjournal_app.h"
+#include "calendar_panel.h"
 #include "clipboard.h"
 #include "clip_history.h"
 #include "font_renderer.h"
@@ -9,6 +10,8 @@
 #include "main_menu_icons.h"
 #include "screen_editor.h"
 #include "vertical_layout.h"
+#include "ime/IME.h"
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
@@ -52,6 +55,31 @@ extern "C" {
 static struct {
     int selection = 0; int scroll = 0;
     std::vector<JournalEntry> entries;   // cached listing, avoid full SD rescan each frame
+    std::vector<int> view;               // indices into entries after date filter
+    std::string filterDate;              // empty = all dates
+    bool calOpen = false;
+    CalendarPanelState cal;
+    bool searchOpen = false;             // 正在输入搜索词
+    std::string searchQuery;             // empty = no text filter
+    bool imeActive = false;
+    // Enter 触发的全文搜索结果（entries 下标，升序；用条目数/首尾文件名/内容修订号校验是否仍有效）
+    std::vector<int> fullTextIdx;
+    std::string fullTextQuery;
+    std::string fullTextDate;
+    size_t fullTextEntryCount = 0;
+    std::string fullTextFirstFile;
+    std::string fullTextLastFile;
+    uint32_t fullTextRevision = 0;
+    bool fullTextActive = false;
+    // 全文增量扫描：每轮空闲节拍只处理一小批，扫描期间界面和按键仍可用
+    bool scanActive = false;
+    int scanNext = 0;
+    int scanTotal = 0;
+    int scanDone = 0;
+    std::string scanQuery;
+    std::string scanQueryLower;
+    std::string scanDate;
+    uint32_t scanRevision = 0;
 } g_browser;
 static struct { std::vector<std::string> lines; int scroll = 0; std::string filename;
     std::string dateStr;
@@ -100,7 +128,189 @@ static const std::vector<MdLineInfo>& getViewerMdInfo(bool mdOn) {
     return g_viewer.cachedMdInfo;
 }
 
-static void refreshBrowserCache() { g_browser.entries = g_journal.listEntries(); }
+static std::string asciiLowerCopy(const std::string &s) {
+    std::string out = s;
+    for (char &c : out)
+        if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+    return out;
+}
+
+// ASCII 大小写不敏感的子串匹配；中文按字节精确匹配。
+// 直接在原串上逐字节比较，避免为全文搜索复制整篇日记。
+static bool browserTextContains(const std::string &hay, const std::string &needleLower) {
+    size_t n = needleLower.size();
+    if (n == 0) return true;
+    if (hay.size() < n) return false;
+    for (size_t i = 0; i + n <= hay.size(); i++) {
+        size_t j = 0;
+        while (j < n) {
+            char c = hay[i + j];
+            if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+            if (c != needleLower[j]) break;
+            j++;
+        }
+        if (j == n) return true;
+    }
+    return false;
+}
+
+// 实时过滤只匹配日期/标题/首行预览（不读 SD）
+static bool browserEntryMatchesQuery(const JournalEntry &e, const std::string &qLower) {
+    return browserTextContains(e.date, qLower) ||
+           browserTextContains(e.title, qLower) ||
+           browserTextContains(e.preview, qLower);
+}
+
+// 搜索词上限：面板只能显示一行，过长查询既没有显示价值，也会把全文匹配拖成
+// O(文件长度 × 查询长度)。按字节截断，输入侧直接拒绝超限的提交。
+static constexpr size_t kMaxSearchBytes = 128;
+// 每个空闲节拍读多少篇：太大则单拍卡顿，太小则长列表扫得太慢。
+static constexpr int kFullTextBatch = 16;
+
+static void invalidateFullTextSearch() {
+    g_browser.fullTextActive = false;
+    g_browser.fullTextIdx.clear();
+    g_browser.fullTextQuery.clear();
+    g_browser.fullTextDate.clear();
+    g_browser.fullTextEntryCount = 0;
+    g_browser.fullTextFirstFile.clear();
+    g_browser.fullTextLastFile.clear();
+    g_browser.fullTextRevision = 0;
+}
+
+// 中止增量扫描并丢弃未完成结果（保留已有筛选条件，由调用方决定重绘）。
+static void cancelFullTextScan() {
+    g_browser.scanActive = false;
+    g_browser.scanNext = 0;
+    g_browser.scanTotal = 0;
+    g_browser.scanDone = 0;
+    g_browser.scanQuery.clear();
+    g_browser.scanQueryLower.clear();
+    g_browser.scanDate.clear();
+    g_browser.scanRevision = 0;
+    g_browser.fullTextIdx.clear();
+}
+
+static void rebuildBrowserView();
+static void stepFullTextScan();
+
+// Enter 触发：开始逐篇分块读取正文补搜。扫描不在一次按键里跑完，而是每个
+// 空闲节拍处理一小批，期间任何按键都会中止扫描并按正常按键处理，避免长列表
+// 把主循环（按键/界面）整段堵死。
+static void startFullTextScan() {
+    cancelFullTextScan();
+    invalidateFullTextSearch();
+    if (g_browser.searchQuery.empty()) {
+        rebuildBrowserView();
+        return;
+    }
+
+    g_browser.scanQuery = g_browser.searchQuery;
+    g_browser.scanQueryLower = asciiLowerCopy(g_browser.searchQuery);
+    g_browser.scanDate = g_browser.filterDate;
+    // 记录扫描起点的修订号：扫描期间若有别的任务改写了日记，结果直接作废，
+    // 不能让"扫完时再取修订号"把中途改动洗成有效结果。
+    g_browser.scanRevision = g_journal.contentRevision();
+    for (const auto &e : g_browser.entries)
+        if (g_browser.scanDate.empty() || e.date == g_browser.scanDate) g_browser.scanTotal++;
+    g_browser.scanNext = 0;
+    g_browser.scanDone = 0;
+    g_browser.selection = g_browser.scroll = 0;
+    g_browser.scanActive = true;
+    stepFullTextScan();  // 先跑一批：短列表当场出结果，长列表立刻显示进度
+}
+
+static void stepFullTextScan() {
+    if (!g_browser.scanActive) return;
+    auto &entries = g_browser.entries;
+
+    int processed = 0;
+    while (g_browser.scanNext < (int)entries.size() && processed < kFullTextBatch) {
+        int i = g_browser.scanNext++;
+        const auto &e = entries[i];
+        if (!g_browser.scanDate.empty() && e.date != g_browser.scanDate) continue;
+        processed++;
+        g_browser.scanDone++;
+
+        bool matched = browserEntryMatchesQuery(e, g_browser.scanQueryLower);
+        if (!matched) matched = g_journal.searchEntryContent(e.filename, g_browser.scanQueryLower);
+        if (matched) g_browser.fullTextIdx.push_back(i);
+    }
+    if (g_browser.scanNext < (int)entries.size()) return;
+
+    // 扫描完成：固定结果与指纹，条目列表未变时后续直接复用
+    g_browser.scanActive = false;
+    g_browser.fullTextActive = true;
+    g_browser.fullTextQuery = g_browser.scanQuery;
+    g_browser.fullTextDate = g_browser.scanDate;
+    g_browser.fullTextEntryCount = entries.size();
+    g_browser.fullTextRevision = g_browser.scanRevision;
+    if (!entries.empty()) {
+        g_browser.fullTextFirstFile = entries.front().filename;
+        g_browser.fullTextLastFile = entries.back().filename;
+    }
+    g_browser.scanQuery.clear();
+    g_browser.scanQueryLower.clear();
+    g_browser.scanDate.clear();
+    g_browser.selection = g_browser.scroll = 0;
+    rebuildBrowserView();
+}
+
+// 按日期筛选与搜索词重建可见列表；不重复扫描 SD。
+static void rebuildBrowserView() {
+    g_browser.view.clear();
+    const auto &entries = g_browser.entries;
+    std::string q = asciiLowerCopy(g_browser.searchQuery);
+    // 全文结果只在条目列表未变化时沿用，避免外部增删/改写后下标或正文错位
+    bool useFullText = g_browser.fullTextActive &&
+                       g_browser.fullTextQuery == g_browser.searchQuery &&
+                       g_browser.fullTextDate == g_browser.filterDate &&
+                       g_browser.fullTextEntryCount == entries.size() &&
+                       g_browser.fullTextRevision == g_journal.contentRevision() &&
+                       (entries.empty() ||
+                        (g_browser.fullTextFirstFile == entries.front().filename &&
+                         g_browser.fullTextLastFile == entries.back().filename));
+    // 结果已过期就退回首行/标题实时过滤，底栏标签随之从"全文搜索"变回"搜索"；
+    // 同时释放可能很大的下标表，避免一次大搜索长期占着 PSRAM。
+    if (!useFullText) {
+        g_browser.fullTextActive = false;
+        std::vector<int>().swap(g_browser.fullTextIdx);  // 连容量一起还掉
+    }
+    for (int i = 0; i < (int)entries.size(); i++) {
+        if (!g_browser.filterDate.empty() && entries[i].date != g_browser.filterDate)
+            continue;
+        if (useFullText) {
+            if (!std::binary_search(g_browser.fullTextIdx.begin(), g_browser.fullTextIdx.end(), i))
+                continue;
+        } else if (!q.empty() && !browserEntryMatchesQuery(entries[i], q)) {
+            continue;
+        }
+        g_browser.view.push_back(i);
+    }
+    if (g_browser.selection >= (int)g_browser.view.size())
+        g_browser.selection = (int)g_browser.view.size() - 1;
+    if (g_browser.selection < 0) g_browser.selection = 0;
+    if (g_browser.scroll > g_browser.selection) g_browser.scroll = g_browser.selection;
+}
+
+static const JournalEntry *browserSelectedEntry() {
+    if (g_browser.view.empty()) return nullptr;
+    if (g_browser.selection < 0 || g_browser.selection >= (int)g_browser.view.size()) return nullptr;
+    return &g_browser.entries[g_browser.view[g_browser.selection]];
+}
+
+// 删除最后一个 UTF-8 码点（避免退格截断多字节汉字）
+static void popUtf8Codepoint(std::string &s) {
+    if (s.empty()) return;
+    size_t i = s.size() - 1;
+    while (i > 0 && ((unsigned char)s[i] & 0xC0) == 0x80) i--;
+    s.erase(i);
+}
+
+static void refreshBrowserCache() {
+    g_browser.entries = g_journal.listEntries();
+    rebuildBrowserView();
+}
 
 static const std::vector<VRow>& getHistoryVrows() {
     bool firstLineIndent = g_settings.firstLineIndent();
@@ -458,74 +668,251 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
 // ── Browser Screen ─────────────────────────────────────────────────────
 void screen_browser_init() {
     g_browser.selection = g_browser.scroll = 0;
+    g_browser.calOpen = false;
+    g_browser.searchOpen = false;
+    g_browser.imeActive = false;
+    g_ime.setActive(false);
+    cancelFullTextScan();
+    const bool hadFullText = g_browser.fullTextActive;
     refreshBrowserCache();
+    // 从编辑器保存后回来，或外部改动过日记：rebuild 会把过期结果降级成首行
+    // 过滤并清掉 fullTextActive，这里自动重新增量扫描，恢复正文命中。
+    if (hadFullText && !g_browser.fullTextActive && !g_browser.searchQuery.empty())
+        startFullTextScan();
 }
 
 AppState screen_browser_handle(int key, ScreenContext &ctx) {
     auto &entries = g_browser.entries;
     if (entries.empty()) { ctx.nextState = APP_MAIN; return APP_MAIN; }
-    if (g_browser.selection >= (int)entries.size()) g_browser.selection = (int)entries.size() - 1;
 
-    if (key == 'q' || key == 'Q' || key == 0x1B) { ctx.nextState = APP_MAIN; return APP_MAIN; }
-    if (key == 'j' || key == KEY_DOWN) { g_browser.selection++; if (g_browser.selection>=(int)entries.size()) g_browser.selection=(int)entries.size()-1; }
-    if (key == 'k' || key == KEY_UP) { g_browser.selection--; if (g_browser.selection<0) g_browser.selection=0; }
-    if (key == 0x0A || key == 0x0D) { ctx.selectedEntry = entries[g_browser.selection].filename; ctx.nextState = APP_VIEWER; return APP_VIEWER; }
-    if (key == 'h' || key == 'H') {
-        ctx.selectedEntry = entries[g_browser.selection].filename;
-        ctx.prevState = APP_BROWSER;
-        ctx.nextState = APP_HISTORY;
-        return APP_HISTORY;
-    }
-    if (key == 'd' || key == 'D') {
-        g_journal.deleteEntry(entries[g_browser.selection].filename);
-        refreshBrowserCache();
-        if (entries.empty()) { ctx.nextState=APP_MAIN; return APP_MAIN; }
-        if (g_browser.selection>=(int)entries.size()) g_browser.selection=(int)entries.size()-1;
-    }
-    if (key == 'e' || key == 'E') {
-        ctx.prevState = APP_BROWSER;
-        std::string content = g_journal.readEntry(entries[g_browser.selection].filename);
-        if (!content.empty()) {
-            ctx.editContent = extractBody(content);
-            ctx.editFilename = entries[g_browser.selection].filename;
-            ctx.promptMode = false;
-            ctx.promptText = "";
-            ctx.nextState = APP_EDITOR;
-            return APP_EDITOR;
+    // 全文增量扫描进行中：空闲节拍推进一批；任何按键立即中止扫描并继续按
+    // 常规按键处理，保证长列表扫描期间界面不失去响应。
+    if (g_browser.scanActive) {
+        if (key == 0) {
+            stepFullTextScan();
+        } else {
+            const bool esc = (key == 0x1B);
+            cancelFullTextScan();
+            rebuildBrowserView();
+            // Esc 只中止扫描，保留搜索词；再按一次才清除搜索词
+            if (esc) key = 0;
         }
     }
-    if (key == 0x13) {
-        auto content = g_journal.readEntry(entries[g_browser.selection].filename);
-        if (!content.empty()) {
-            auto body = extractBody(content);
-            if (!body.empty()) {
-                g_flomoPendingText = body;
-                g_flomoReturnTo = APP_BROWSER;
-                ctx.nextState = APP_SYNC_SEND_FLOMO;
-                return APP_SYNC_SEND_FLOMO;
+
+    if (g_browser.searchOpen) {
+        // 搜索输入：IME 优先消费按键，其余字符逐字追加并实时过滤
+        bool consumed = false;
+        if (g_browser.imeActive && key != 0) {
+            std::string imeOut;
+            if (g_ime.handleKey(key, imeOut)) {
+                if (!imeOut.empty() &&
+                    g_browser.searchQuery.size() + imeOut.size() <= kMaxSearchBytes) {
+                    g_browser.searchQuery += imeOut;
+                    g_browser.selection = g_browser.scroll = 0;
+                    invalidateFullTextSearch();
+                    rebuildBrowserView();
+                }
+                consumed = true;
+            }
+        }
+        if (!consumed) {
+            if (key == KEY_IME_TOGGLE) {
+                g_browser.imeActive = !g_browser.imeActive;
+                g_ime.setActive(g_browser.imeActive);
+            } else if (key == KEY_FULLWIDTH_TOGGLE) {
+                g_ime.toggleFullwidth();
+            } else if (key == KEY_TRAD_TOGGLE) {
+                g_ime.toggleTrad();
+            } else if (key == KEY_LSHIFT_TAP) {
+                g_ime.toggleEnglish();
+            } else if (key == 0x1B) {
+                g_browser.searchOpen = false;
+                g_browser.imeActive = false;
+                g_ime.setActive(false);
+                g_browser.searchQuery.clear();
+                g_browser.selection = g_browser.scroll = 0;
+                invalidateFullTextSearch();
+                rebuildBrowserView();
+            } else if (key == 0x0A || key == 0x0D) {
+                g_browser.searchOpen = false;
+                g_browser.imeActive = false;
+                g_ime.setActive(false);
+                startFullTextScan();  // 输入期按首行实时过滤，Enter 再补搜全文
+            } else if (key == 0x7F || key == 0x08) {
+                popUtf8Codepoint(g_browser.searchQuery);
+                g_browser.selection = g_browser.scroll = 0;
+                invalidateFullTextSearch();
+                rebuildBrowserView();
+            } else if (key >= 0x20 && key <= 0x7E) {
+                if (g_browser.searchQuery.size() < kMaxSearchBytes) {
+                    g_browser.searchQuery += (char)key;
+                    g_browser.selection = g_browser.scroll = 0;
+                    invalidateFullTextSearch();
+                    rebuildBrowserView();
+                }
+            }
+        }
+    } else if (g_browser.calOpen) {
+        // 浮动日历独占按键：Enter 按日期筛选，退格清除筛选，Esc 关闭面板
+        CalendarPanelResult res = calendar_panel_handle_key(key, g_browser.cal);
+        if (res == CalendarPanelResult::Accept) {
+            g_browser.filterDate = calendar_panel_date_string(g_browser.cal);
+            g_browser.selection = g_browser.scroll = 0;
+            invalidateFullTextSearch();
+            rebuildBrowserView();
+            g_browser.calOpen = false;
+        } else if (res == CalendarPanelResult::Clear) {
+            g_browser.filterDate.clear();
+            g_browser.selection = g_browser.scroll = 0;
+            invalidateFullTextSearch();
+            rebuildBrowserView();
+            g_browser.calOpen = false;
+        } else if (res == CalendarPanelResult::Cancel) {
+            g_browser.calOpen = false;
+        }
+    } else {
+        const int total = (int)g_browser.view.size();
+
+        if (key == 'q' || key == 'Q') { ctx.nextState = APP_MAIN; return APP_MAIN; }
+        if (key == 0x1B) {
+            // 有搜索/日期筛选时 Esc 逐层清除，全部清空后再按才返回主界面
+            if (!g_browser.searchQuery.empty()) {
+                g_browser.searchQuery.clear();
+                g_browser.selection = g_browser.scroll = 0;
+                invalidateFullTextSearch();
+                rebuildBrowserView();
+            } else if (!g_browser.filterDate.empty()) {
+                g_browser.filterDate.clear();
+                g_browser.selection = g_browser.scroll = 0;
+                invalidateFullTextSearch();
+                rebuildBrowserView();
+            } else {
+                ctx.nextState = APP_MAIN;
+                return APP_MAIN;
+            }
+        }
+        if (key == '/') {
+            g_browser.searchOpen = true;
+            g_browser.imeActive = true;
+            g_ime.setActive(true);
+        } else if (key == 't' || key == 'T') {
+            std::string base = g_browser.filterDate;
+            if (base.empty()) {
+                const JournalEntry *sel = browserSelectedEntry();
+                if (sel) base = sel->date;
+            }
+            calendar_panel_reset(g_browser.cal, base);
+            g_browser.calOpen = true;
+        } else {
+            if (key == 'j' || key == KEY_DOWN) {
+                if (g_browser.selection < total - 1) g_browser.selection++;
+            }
+            if (key == 'k' || key == KEY_UP) {
+                if (g_browser.selection > 0) g_browser.selection--;
+            }
+            const JournalEntry *sel = browserSelectedEntry();
+            if (sel && (key == 0x0A || key == 0x0D)) {
+                ctx.selectedEntry = sel->filename;
+                ctx.nextState = APP_VIEWER;
+                return APP_VIEWER;
+            } else if (sel && (key == 'h' || key == 'H')) {
+                ctx.selectedEntry = sel->filename;
+                ctx.prevState = APP_BROWSER;
+                ctx.nextState = APP_HISTORY;
+                return APP_HISTORY;
+            } else if (sel && (key == 'd' || key == 'D')) {
+                const bool wasFullText = g_browser.fullTextActive;
+                g_journal.deleteEntry(sel->filename);
+                refreshBrowserCache();
+                if (g_browser.entries.empty()) { ctx.nextState = APP_MAIN; return APP_MAIN; }
+                // 原来在全文结果里删除：重新增量扫描，别退化成只看首行/标题
+                if (wasFullText && !g_browser.searchQuery.empty()) startFullTextScan();
+            } else if (sel && (key == 'e' || key == 'E')) {
+                ctx.prevState = APP_BROWSER;
+                std::string content = g_journal.readEntry(sel->filename);
+                if (!content.empty()) {
+                    ctx.editContent = extractBody(content);
+                    ctx.editFilename = sel->filename;
+                    ctx.promptMode = false;
+                    ctx.promptText = "";
+                    ctx.nextState = APP_EDITOR;
+                    return APP_EDITOR;
+                }
+            } else if (sel && key == 0x13) {
+                auto content = g_journal.readEntry(sel->filename);
+                if (!content.empty()) {
+                    auto body = extractBody(content);
+                    if (!body.empty()) {
+                        g_flomoPendingText = body;
+                        g_flomoReturnTo = APP_BROWSER;
+                        ctx.nextState = APP_SYNC_SEND_FLOMO;
+                        return APP_SYNC_SEND_FLOMO;
+                    }
+                }
             }
         }
     }
 
+    // 增量扫描未完成：显示进度（每个空闲节拍刷新一次），任意键可中止
+    if (g_browser.scanActive) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "全文搜索 %d/%d  Esc取消",
+                 g_browser.scanDone, g_browser.scanTotal);
+        ui_show_message_centered(msg);
+        return APP_BROWSER;
+    }
+
+    const int total = (int)g_browser.view.size();
     ui_clear(); int y = FONT_H;
     ui_draw_text(4, y, "过往日记", false, true);
+    // 顶部右侧：日期筛选（粗体）或快捷键提示
+    const bool filtered = !g_browser.filterDate.empty();
+    const char *hint = filtered ? g_browser.filterDate.c_str() : "t日历 /搜索";
+    int hintW = g_font.textWidth(hint);
+    if (4 + g_font.textWidth("过往日记") + 8 <= SCREEN_W - hintW - 4)
+        ui_draw_text(SCREEN_W - hintW - 4, y, hint, false, filtered);
+    u8g2_SetDrawColor(g_u8g2, 0);
     u8g2_DrawHLine(g_u8g2, 0, y + 7, SCREEN_W);
     y = y + 7 + LINE_SPACING - 4;
-    int visible = (SCREEN_H - y + LINE_SPACING - 1) / LINE_SPACING;
+    const bool showSearchBar = g_browser.searchOpen || !g_browser.searchQuery.empty();
+    int listBottom = showSearchBar ? SCREEN_H - LINE_SPACING - 6 : SCREEN_H;
+    int visible = (listBottom - y + LINE_SPACING - 1) / LINE_SPACING;
     if (g_browser.selection < g_browser.scroll) g_browser.scroll = g_browser.selection;
     if (g_browser.selection >= g_browser.scroll + visible)
         g_browser.scroll = g_browser.selection - visible + 1;
 
-    for (int i = 0; i < visible && (g_browser.scroll + i) < (int)entries.size(); i++) {
-        auto &e = entries[g_browser.scroll + i]; bool sel = (g_browser.scroll + i == g_browser.selection);
-        std::string dateDisplay;
-        if (e.filename.length() >= 10) dateDisplay = e.filename.substr(0, 10);
-        else dateDisplay = e.date;
-        std::string preview = e.preview.empty() ? e.title : e.preview;
-        char buf[80];
-        snprintf(buf, sizeof(buf), "%s %s", dateDisplay.c_str(), preview.c_str());
-        ui_draw_text(8, y + i * LINE_SPACING, buf, sel);
+    if (total == 0) {
+        if (!g_browser.searchQuery.empty()) ui_draw_text_centered(SCREEN_H / 2, "无匹配日记");
+        else if (filtered) ui_draw_text_centered(SCREEN_H / 2, "该日期无日记");
+        else ui_draw_text_centered(SCREEN_H / 2, "暂无日记");
+    } else {
+        for (int i = 0; i < visible && (g_browser.scroll + i) < total; i++) {
+            auto &e = entries[g_browser.view[g_browser.scroll + i]];
+            bool sel = (g_browser.scroll + i == g_browser.selection);
+            std::string dateDisplay;
+            if (e.filename.length() >= 10) dateDisplay = e.filename.substr(0, 10);
+            else dateDisplay = e.date;
+            std::string preview = e.preview.empty() ? e.title : e.preview;
+            char buf[80];
+            snprintf(buf, sizeof(buf), "%s %s", dateDisplay.c_str(), preview.c_str());
+            ui_draw_text(8, y + i * LINE_SPACING, buf, sel);
+        }
     }
+
+    if (showSearchBar) {
+        char fb[128];
+        snprintf(fb, sizeof(fb), "%s: %s",
+                 g_browser.fullTextActive ? "全文搜索" : "搜索",
+                 g_browser.searchQuery.c_str());
+        ui_draw_text(4, SCREEN_H - 6, fb, true);
+    }
+
+    if (g_browser.calOpen) {
+        // 有日记的日期用粗体标出
+        calendar_panel_draw(g_browser.cal,
+                            [](const std::string &date) { return g_journal.hasEntry(date); });
+    }
+    if (g_ime.composing()) drawIMEUIFullscreen();
     ui_commit();
     return APP_BROWSER;
 }

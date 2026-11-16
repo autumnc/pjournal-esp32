@@ -2,6 +2,7 @@
 #include "safe_file.h"
 #include "settings_manager.h"
 #include <cstring>
+#include <cstdlib>
 #include <ctime>
 #include <algorithm>
 #include <functional>
@@ -12,6 +13,7 @@
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -118,9 +120,12 @@ bool JournalStorage::begin() {
     }
 
     // 重挂后必须重扫: U盘模式期间电脑可能增删/改名文件, 旧索引不能再用。
+    // 同时递增修订号: U 盘里的正文改动不经过 saveEntry/deleteEntry，全文结果
+    // 不能凭条目数/首尾文件名误判为有效。
     m_fileIndex.clear();
     m_dateSet.clear();
     m_indexValid = false;
+    m_contentRevision.fetch_add(1, std::memory_order_relaxed);
 
     if (!s_sd_mutex) s_sd_mutex = xSemaphoreCreateRecursiveMutex();
     ensureDir();
@@ -231,6 +236,7 @@ bool JournalStorage::saveEntry(const std::string &text) {
         return false;
     }
     ESP_LOGI(TAG, "Saved: %s", fname.c_str());
+    m_contentRevision.fetch_add(1, std::memory_order_relaxed);
     if (m_indexValid) indexAddFile(fname);
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return true;
@@ -249,6 +255,7 @@ bool JournalStorage::saveEntryRaw(const std::string &filename, const std::string
         if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
         return false;
     }
+    m_contentRevision.fetch_add(1, std::memory_order_relaxed);
     if (m_indexValid) indexAddFile(filename);
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return true;
@@ -341,7 +348,10 @@ bool JournalStorage::restoreHistoryVersion(const std::string &filename, const st
         if (old != content) saveJournalHistoryVersion(basePath(), filename, old);
     }
     bool ok = safeWriteFile(path, content);
-    if (ok && m_indexValid) indexAddFile(filename);
+    if (ok) {
+        m_contentRevision.fetch_add(1, std::memory_order_relaxed);
+        if (m_indexValid) indexAddFile(filename);
+    }
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return ok;
 }
@@ -467,11 +477,67 @@ std::string JournalStorage::readEntry(const std::string &filename) {
     return result;
 }
 
+static bool asciiContainsLen(const char *hay, size_t len, const std::string &needleLower) {
+    size_t n = needleLower.size();
+    if (n == 0) return true;
+    if (len < n) return false;
+    for (size_t i = 0; i + n <= len; i++) {
+        size_t j = 0;
+        while (j < n) {
+            char c = hay[i + j];
+            if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+            if (c != needleLower[j]) break;
+            j++;
+        }
+        if (j == n) return true;
+    }
+    return false;
+}
+
+bool JournalStorage::searchEntryContent(const std::string &filename, const std::string &needleLower) {
+    if (!mounted_ || needleLower.empty()) return false;
+
+    const size_t n = needleLower.size();
+    size_t cap = 4096;
+    if (n + 1 > cap) cap = n + 1;  // 极长查询也要保证一次能匹配
+    char *buf = (char *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = (char *)malloc(cap);  // PSRAM 不可用时退回小块内部堆
+    if (!buf) return false;
+
+    bool found = false;
+    if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
+    std::string path = basePath() + "/" + filename;
+    repairSafeWriteFile(path);
+    FILE *f = fopen(path.c_str(), "r");
+    if (f) {
+        const size_t keep = (n > 1) ? (n - 1) : 0;
+        size_t carry = 0;
+        while (true) {
+            size_t want = cap - carry;
+            size_t got = fread(buf + carry, 1, want, f);
+            size_t len = carry + got;
+            if (asciiContainsLen(buf, len, needleLower)) { found = true; break; }
+            if (got < want) break;  // EOF 或短读
+            // 保留末尾 n-1 字节，避免匹配被块边界切断
+            size_t c = keep < len ? keep : len;
+            if (c) memmove(buf, buf + len - c, c);
+            carry = c;
+        }
+        fclose(f);
+    }
+    if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
+    free(buf);
+    return found;
+}
+
 bool JournalStorage::deleteEntry(const std::string &filename) {
     if (!mounted_) return false;
     if (s_sd_mutex) xSemaphoreTakeRecursive(s_sd_mutex, portMAX_DELAY);
     bool ok = remove((basePath() + "/" + filename).c_str()) == 0;
-    if (ok && m_indexValid) indexRemoveFile(filename);
+    if (ok) {
+        m_contentRevision.fetch_add(1, std::memory_order_relaxed);
+        if (m_indexValid) indexRemoveFile(filename);
+    }
     if (s_sd_mutex) xSemaphoreGiveRecursive(s_sd_mutex);
     return ok;
 }
