@@ -122,7 +122,7 @@ foreach(_pj_tpl_name ${PJOURNAL_DEFAULT_TEMPLATE_NAMES})
     math(EXPR _pj_tpl_idx "${_pj_tpl_idx}+1")
 endforeach()
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="5.0.5")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="5.0.6")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PJOURNAL_IME_ENABLE_PINYIN=$<BOOL:${PJOURNAL_IME_ENABLE_PINYIN}>
     PJOURNAL_IME_ENABLE_LIANGFEN=$<BOOL:${PJOURNAL_IME_ENABLE_LIANGFEN}>
