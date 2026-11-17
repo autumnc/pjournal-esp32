@@ -10,18 +10,23 @@
 #include "file_edit.h"
 #include "typing_click.h"
 #include "ui_helpers.h"
+#include "weather_client.h"
 #include "markdown_render.h"
 #include "vertical_layout.h"
 #include "ime/IME.h"
+#include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <set>
 #include <algorithm>
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <freertos/idf_additions.h>  // xTaskCreateWithCaps: 天气任务栈放 PSRAM
 
 extern u8g2_t *g_u8g2;
 
@@ -118,6 +123,9 @@ struct EditorState {
     bool promptMode = false;
     bool imeActive = false;
     bool confirmSave = false;
+    // 模板日记会话：快捷菜单显示「获取天气」，Ctrl+W 填 {{weather}}。
+    bool templateJournal = false;
+    bool weatherFetching = false;
     bool vrowsDirty = true;
     std::vector<VRow> cachedVrows;
     bool cachedFirstLineIndent = false;
@@ -204,6 +212,26 @@ static void lockPromptResult() {
 
 static void unlockPromptResult() {
     if (s_promptResultMutex) xSemaphoreGive(s_promptResultMutex);
+}
+
+static volatile bool s_weatherTaskDone = false;
+static volatile bool s_weatherTaskRunning = false;
+static volatile uint32_t s_weatherTaskGen = 0;
+static WeatherResult s_weatherTaskResult;
+static std::string s_weatherTaskCity;
+static bool s_weatherUiDrawn = false;
+// 静态信号量：连这一点内部 RAM 也不从堆上出。
+static StaticSemaphore_t s_weatherMutexBuf;
+static SemaphoreHandle_t s_weatherResultMutex = nullptr;
+
+static void lockWeatherResult() {
+    if (!s_weatherResultMutex)
+        s_weatherResultMutex = xSemaphoreCreateMutexStatic(&s_weatherMutexBuf);
+    if (s_weatherResultMutex) xSemaphoreTake(s_weatherResultMutex, portMAX_DELAY);
+}
+
+static void unlockWeatherResult() {
+    if (s_weatherResultMutex) xSemaphoreGive(s_weatherResultMutex);
 }
 
 // Mark every line-derived cache (vrows, word count, markdown info) stale.
@@ -2035,7 +2063,7 @@ static void drawConfirmDialog() {
     u8g2_DrawFrame(g_u8g2, bx, by, bw, bh);
     ui_draw_text_centered(by + 28, "是否保存当前内容？");
     ui_draw_text_centered(by + 58, "Enter=保存");
-    ui_draw_text_centered(by + 88, "ESC=放弃");
+    ui_draw_text_centered(by + 88, "ESC=放弃 C=取消");
     u8g2_SetDrawColor(g_u8g2, 1);
 }
 
@@ -2074,6 +2102,201 @@ static void runPromptTask(void *arg) {
     unlockPromptResult();
     s_promptTaskDone = true;
     vTaskDelete(nullptr);
+}
+
+// ── 模板日记：获取天气填入 {{weather}} ───────────────────────────────────
+// 浮层提示画在当前编辑内容之上，不清掉正文；没有新内容时跳过重绘。
+static void drawWeatherFetching(bool force = false) {
+    if (s_weatherUiDrawn && !force) return;
+
+    ui_clear();
+    drawEditor();
+
+    const char *msg = "获取天气中...";
+    int bw = g_font.textWidth(msg) + 32;
+    int bh = g_font.lineHeight() + 22;
+    int bx = (SCREEN_W - bw) / 2;
+    int by = (SCREEN_H - bh) / 2 - 10;
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, bx, by, bw, bh);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, bx, by, bw, bh);
+    g_font.drawText(bx + 16, by + 11 + g_font.ascent(), msg, false);
+    u8g2_SetDrawColor(g_u8g2, 1);
+
+    ui_draw_status("获取天气", "请稍候");
+    ui_commit();
+    s_weatherUiDrawn = true;
+}
+
+// 天气类提示（成功/失败）也用浮层盖在正文上，不整屏替换编辑器。
+// 显示完由调用方负责重绘正文。
+static void drawEditorToast(const std::string &msg) {
+    ui_clear();
+    drawEditor();
+    const char *text = msg.c_str();
+    int bw = g_font.textWidth(text) + 32;
+    if (bw > SCREEN_W - 16) bw = SCREEN_W - 16;
+    int bh = g_font.lineHeight() + 22;
+    int bx = (SCREEN_W - bw) / 2;
+    int by = (SCREEN_H - bh) / 2 - 10;
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, bx, by, bw, bh);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, bx, by, bw, bh);
+    g_font.drawText(bx + 16, by + 11 + g_font.ascent(), text, false);
+    u8g2_SetDrawColor(g_u8g2, 1);
+    ui_commit();
+    vTaskDelay(pdMS_TO_TICKS(1200));
+}
+
+static void runWeatherTask(void *arg) {
+    uint32_t gen = (uint32_t)(uintptr_t)arg;
+    bool wifiWasConnected = g_wifi.isConnected();
+    WeatherResult result;
+    if (ensure_wifi_connected()) {
+        result = weatherFetchCurrent(s_weatherTaskCity);
+    } else {
+        result.error = "WiFi未连接";
+    }
+    restore_wifi_state(wifiWasConnected);
+
+    lockWeatherResult();
+    // 会话可能已经退出或被新请求取代；只有当前这一代才能发布结果。
+    if (gen == s_weatherTaskGen) {
+        s_weatherTaskResult = result;
+        s_weatherTaskDone = true;
+    }
+    s_weatherTaskRunning = false;
+    unlockWeatherResult();
+    vTaskDeleteWithCaps(nullptr);   // 栈由 xTaskCreateWithCaps 分配在 PSRAM
+}
+
+// 把正文里的 {{weather}} / {{ weather }} 全部替换成 summary。
+// 返回 false 表示模板里没有占位符（调用方改为在光标处插入）。
+static bool fillWeatherPlaceholders(const std::string &summary) {
+    static const char *kPatterns[] = {"{{weather}}", "{{ weather }}"};
+    bool found = false;
+    for (const auto &line : g_editor.lines) {
+        for (const char *p : kPatterns) {
+            if (line.find(p) != std::string::npos) { found = true; break; }
+        }
+        if (found) break;
+    }
+    if (!found) return false;
+
+    recordUndoSnapshot(UndoGroup::Structural);
+    for (int li = 0; li < (int)g_editor.lines.size(); li++) {
+        std::string &line = g_editor.lines[li];
+        struct Occ { int pos; int len; };
+        std::vector<Occ> occs;
+        for (const char *p : kPatterns) {
+            int plen = (int)strlen(p);
+            size_t pos = 0;
+            while ((pos = line.find(p, pos)) != std::string::npos) {
+                occs.push_back({(int)pos, plen});
+                pos += plen;
+            }
+        }
+        if (occs.empty()) continue;
+        std::sort(occs.begin(), occs.end(),
+                  [](const Occ &a, const Occ &b) { return a.pos < b.pos; });
+
+        // 光标按“原坐标 + 占位符替换造成的字节差”重新映射；落在占位符内部
+        // 的则落到替换文本末尾。
+        if (li == g_editor.cy) {
+            int adj = 0;
+            int newCx = g_editor.cx;
+            bool mapped = false;
+            for (const auto &o : occs) {
+                int delta = (int)summary.size() - o.len;
+                if (o.pos + o.len <= g_editor.cx) {
+                    adj += delta;
+                } else if (o.pos < g_editor.cx) {
+                    newCx = o.pos + adj + (int)summary.size();
+                    mapped = true;
+                    break;
+                } else {
+                    newCx = g_editor.cx + adj;
+                    mapped = true;
+                    break;
+                }
+            }
+            if (!mapped) newCx = g_editor.cx + adj;
+            g_editor.cx = newCx;
+        }
+
+        for (int i = (int)occs.size() - 1; i >= 0; i--)
+            line.replace(occs[i].pos, occs[i].len, summary);
+    }
+
+    g_editor.hasSelection = false;
+    g_editor.targetCx = -1;
+    markDirty();
+    g_editor.autoSaveTime = esp_timer_get_time() + 3000000;
+    g_editor.modifiedSinceSave = true;
+    return true;
+}
+
+static void finishWeatherFetch(const WeatherResult &result) {
+    if (!result.success) {
+        drawEditorToast(result.error.empty() ? "天气获取失败" : result.error);
+        return;
+    }
+    if (fillWeatherPlaceholders(result.summary)) {
+        drawEditorToast("已填入天气");
+    } else {
+        editorInsertText(result.summary);
+        drawEditorToast("已插入天气");
+    }
+    if (g_editor.imeActive) g_ime.setDocumentContext(editorImeContextText());
+}
+
+static void startWeatherFetch() {
+    std::string city = g_settings.getString("weather_city");
+    size_t b = 0, e = city.size();
+    while (b < e && isspace((unsigned char)city[b])) b++;
+    while (e > b && isspace((unsigned char)city[e - 1])) e--;
+    city = city.substr(b, e - b);
+    if (city.empty()) {
+        drawEditorToast("请先在设置中设置天气地区");
+        ui_clear(); drawEditor(); ui_commit();
+        return;
+    }
+    // 上一次请求还没收尾（例如切走界面又回来）：不要并发连 WiFi。
+    lockWeatherResult();
+    if (s_weatherTaskRunning) {
+        unlockWeatherResult();
+        drawEditorToast("天气获取中，请稍候");
+        ui_clear(); drawEditor(); ui_commit();
+        return;
+    }
+
+    s_weatherTaskCity = city;
+    s_weatherTaskResult = WeatherResult();
+    s_weatherTaskDone = false;
+    uint32_t gen = s_weatherTaskGen + 1;
+    s_weatherTaskGen = gen;
+    s_weatherTaskRunning = true;
+    unlockWeatherResult();
+
+    g_editor.weatherFetching = true;
+    s_weatherUiDrawn = false;
+    TaskHandle_t handle = nullptr;
+    // 天气任务只在模板日记里偶尔用一次，栈放 PSRAM（TLS 握手要的栈比普通
+    // 任务多，给够 12KB），不挤占内部 RAM。
+    if (xTaskCreateWithCaps(runWeatherTask, "weather_fetch", 12288,
+                            (void *)(uintptr_t)gen, 1, &handle,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
+        lockWeatherResult();
+        s_weatherTaskRunning = false;
+        unlockWeatherResult();
+        g_editor.weatherFetching = false;
+        drawEditorToast("系统繁忙,请重试");
+        ui_clear(); drawEditor(); ui_commit();
+        return;
+    }
+    drawWeatherFetching(true);
 }
 
 // ── Editor save helper ────────────────────────────────────────────────────
@@ -3925,13 +4148,20 @@ void screen_editor_init(ScreenContext &ctx) {
         }
         while (g_editor.lines.size() > 1 && g_editor.lines.back().empty())
             g_editor.lines.pop_back();
-        g_editor.cx = (int)g_editor.lines.back().length();
-        g_editor.cy = (int)g_editor.lines.size() - 1;
+        if (ctx.editCursorFirstLineEnd) {
+            g_editor.cy = 0;
+            g_editor.cx = (int)g_editor.lines.front().length();
+        } else {
+            g_editor.cx = (int)g_editor.lines.back().length();
+            g_editor.cy = (int)g_editor.lines.size() - 1;
+        }
         ctx.editContent.clear();
     } else {
         g_editor.lines.push_back("");
         g_editor.cx = g_editor.cy = 0;
     }
+    // 无论内容是否为空都清掉一次性标记，避免影响下一次普通编辑会话。
+    ctx.editCursorFirstLineEnd = false;
 
     g_editor.scroll = 0;
     g_editor.targetCx = -1;
@@ -3957,6 +4187,8 @@ void screen_editor_init(ScreenContext &ctx) {
     g_editor.promptText = ctx.promptText;
     g_editor.titleOverride = ctx.editorTitle;
     g_editor.promptMode = ctx.promptMode && !quickFile && !fileEditFile;
+    g_editor.templateJournal = ctx.templateJournal;
+    ctx.templateJournal = false;
     ctx.editFilename.clear();
     ctx.editorTitle.clear();
 
@@ -3990,6 +4222,8 @@ void screen_editor_init(ScreenContext &ctx) {
     g_editor.lastRecoveryHash = 0;
     g_editor.promptGenerating = false;
     s_promptTaskDone = false;
+    g_editor.weatherFetching = false;
+    s_weatherUiDrawn = false;
 }
 
 AppState screen_editor_handle(int key, ScreenContext &ctx) {
@@ -4015,6 +4249,24 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             }
         }
         s_promptTaskContext.clear();
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+
+    if (g_editor.weatherFetching) {
+        if (!s_weatherTaskDone) {
+            drawWeatherFetching();
+            return APP_EDITOR;
+        }
+        g_editor.weatherFetching = false;
+        lockWeatherResult();
+        WeatherResult result = s_weatherTaskResult;
+        s_weatherTaskResult = WeatherResult();
+        s_weatherTaskDone = false;
+        unlockWeatherResult();
+        finishWeatherFetch(result);
+        s_weatherTaskCity.clear();
+        s_weatherUiDrawn = false;
         ui_clear(); drawEditor(); ui_commit();
         return APP_EDITOR;
     }
@@ -4054,6 +4306,12 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             g_editor.confirmSave = false;
             return finishEditor(ctx);
         }
+        // C=取消: 关闭退出菜单,继续编辑,避免误按 Esc 丢掉内容。
+        if (key == 'c' || key == 'C') {
+            g_editor.confirmSave = false;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
         if (key == 0x1B || key == 'n' || key == 'N') {
             g_editor.confirmSave = false;
             ctx.nextState = ctx.prevState;
@@ -4090,6 +4348,14 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.helpActive = true;
         g_editor.helpScroll = 0;
         ui_clear(); drawHelpPanel(); ui_commit();
+        return APP_EDITOR;
+    }
+
+    // Ctrl+W → 获取天气（仅模板日记会话）。放在 vi 分发之前，否则 vi normal
+    // 模式会把快捷菜单发来的 Ctrl+W 吞掉。
+    if (key == 0x17 && g_editor.templateJournal && !g_editor.vi.cmdlineActive) {
+        g_ime.cancelComposition();
+        startWeatherFetch();
         return APP_EDITOR;
     }
 
@@ -4672,6 +4938,23 @@ bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
         drawPromptGenerating();
         return true;
     }
+    if (g_editor.weatherFetching) {
+        if (s_weatherTaskDone) {
+            g_editor.weatherFetching = false;
+            lockWeatherResult();
+            WeatherResult result = s_weatherTaskResult;
+            s_weatherTaskResult = WeatherResult();
+            s_weatherTaskDone = false;
+            unlockWeatherResult();
+            finishWeatherFetch(result);
+            s_weatherTaskCity.clear();
+            s_weatherUiDrawn = false;
+            ui_clear(); drawEditor(); ui_commit();
+            return true;
+        }
+        drawWeatherFetching(forceRedraw);
+        return true;
+    }
     if (g_editor.recoveryPrompt) {
         if (forceRedraw || !g_editor.drawnOnce) {
             ui_clear(); drawEditor(); drawRecoveryDialog(); ui_commit();
@@ -4730,6 +5013,8 @@ bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
 
 void screen_editor_reset_drawn() {
     g_editor.drawnOnce = false;
+    // 浮层也要跟着重画；否则从灵感/润色等覆盖界面返回时可能停在旧画面。
+    s_weatherUiDrawn = false;
 }
 
 // 查找/替换对话框是否打开(供 main.cpp 屏蔽全局按键)
@@ -4746,7 +5031,8 @@ bool app_editor_help_active() {
 // 单按 Win 时是否允许弹出快捷菜单。任何模态对话框/后台生成期间都不弹,
 // 且设置里字母选字键为 lwin 时, 候选中按 Win 优先给输入法选字。
 bool app_editor_shortcut_menu_allowed() {
-    if (g_editor.promptGenerating || g_editor.recoveryPrompt || g_editor.confirmSave) return false;
+    if (g_editor.promptGenerating || g_editor.weatherFetching ||
+        s_weatherTaskRunning || g_editor.recoveryPrompt || g_editor.confirmSave) return false;
     if (g_editor.search.active || g_editor.helpActive || g_editor.fileMgr.active) return false;
     if (g_editor.vi.cmdlineActive) return false;
     if (g_settings.letterSelKey() == "lwin" && g_editor.imeActive &&
@@ -4758,6 +5044,15 @@ bool app_editor_shortcut_menu_allowed() {
 
 bool app_editor_prompt_mode() {
     return g_editor.promptMode;
+}
+
+bool app_editor_template_journal() {
+    return g_editor.templateJournal;
+}
+
+bool app_editor_weather_fetching() {
+    // 会话可能已经被重建（weatherFetching 清零），但后台请求还没收尾。
+    return g_editor.weatherFetching || s_weatherTaskRunning;
 }
 
 bool app_editor_in_quick_file_session() {
@@ -4939,8 +5234,8 @@ void editorInsertText(const std::string &text) {
 bool app_editor_paste_text(const std::string &text) {
     if (text.empty()) return false;
     // 模态对话框只接受自己的按键，不往里塞文字。
-    if (g_editor.promptGenerating || g_editor.recoveryPrompt ||
-        g_editor.confirmSave || g_editor.helpActive) {
+    if (g_editor.promptGenerating || g_editor.weatherFetching ||
+        g_editor.recoveryPrompt || g_editor.confirmSave || g_editor.helpActive) {
         return false;
     }
 

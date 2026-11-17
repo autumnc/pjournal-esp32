@@ -4,6 +4,7 @@
 #include "clip_history.h"
 #include "font_renderer.h"
 #include "journal_storage.h"
+#include "journal_template.h"
 #include "builtin_prompts.h"
 #include "settings_manager.h"
 #include "markdown_render.h"
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
+#include <utility>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -370,6 +372,7 @@ struct MainMenuAction {
 static const MainMenuAction kMainActions[] = {
     {'p', "提示写作", &MAIN_ICON_PROMPT},
     {'f', "自由写作", &MAIN_ICON_FREE},
+    {'m', "模板日记", &MAIN_ICON_TEMPLATE},
     {'v', "查看过往日记", &MAIN_ICON_VIEW},
     {'w', "同步WebDAV", &MAIN_ICON_SYNC},
     {'t', "GTD任务管理", &MAIN_ICON_GTD},
@@ -380,19 +383,41 @@ static const MainMenuAction kMainActions[] = {
 };
 
 #define MAIN_MENU_ICON_SLOT_W 56
+// 隐藏项：模板日记（kMainActions[2]，模板选「无」时关闭）与查看过往日记
+// （kMainActions[3]，没有日记时隐藏）。
+#define MAIN_MENU_TEMPLATE_ACTION_INDEX 2
+#define MAIN_MENU_VIEW_ACTION_INDEX 3
 
-static int mainMenuVisibleCount(bool hasEntries) {
-    return hasEntries ? 9 : 8;
+static int mainMenuActionCount() {
+    return (int)(sizeof(kMainActions) / sizeof(kMainActions[0]));
 }
 
-static int mainMenuActionIndex(int visibleIndex, bool hasEntries) {
-    if (hasEntries || visibleIndex < 2) return visibleIndex;
-    return visibleIndex + 1;
+static bool mainMenuActionHidden(int actionIndex, bool hasEntries, bool templateEnabled) {
+    if (actionIndex == MAIN_MENU_TEMPLATE_ACTION_INDEX && !templateEnabled) return true;
+    if (actionIndex == MAIN_MENU_VIEW_ACTION_INDEX && !hasEntries) return true;
+    return false;
 }
 
-static int mainMenuVisibleIndexForKey(char key, bool hasEntries) {
-    for (int i = 0; i < mainMenuVisibleCount(hasEntries); i++) {
-        int actionIndex = mainMenuActionIndex(i, hasEntries);
+static int mainMenuVisibleCount(bool hasEntries, bool templateEnabled) {
+    int n = 0;
+    for (int i = 0; i < mainMenuActionCount(); i++)
+        if (!mainMenuActionHidden(i, hasEntries, templateEnabled)) n++;
+    return n;
+}
+
+static int mainMenuActionIndex(int visibleIndex, bool hasEntries, bool templateEnabled) {
+    int seen = 0;
+    for (int i = 0; i < mainMenuActionCount(); i++) {
+        if (mainMenuActionHidden(i, hasEntries, templateEnabled)) continue;
+        if (seen == visibleIndex) return i;
+        seen++;
+    }
+    return 0;
+}
+
+static int mainMenuVisibleIndexForKey(char key, bool hasEntries, bool templateEnabled) {
+    for (int i = 0; i < mainMenuVisibleCount(hasEntries, templateEnabled); i++) {
+        int actionIndex = mainMenuActionIndex(i, hasEntries, templateEnabled);
         if (kMainActions[actionIndex].key == key) return i;
     }
     return -1;
@@ -412,6 +437,24 @@ static void mainMenuActivate(const MainMenuAction &action, ScreenContext &ctx) {
         ctx.prevState = APP_MAIN;
         ctx.nextState = APP_EDITOR;
         break;
+    case 'm': {
+        std::string content, error;
+        if (!journalTemplateLoadSelected(content, error)) {
+            ctx.statusMessage = error;
+            ctx.nextState = APP_MAIN;
+            break;
+        }
+        ctx.editContent = std::move(content);
+        ctx.editCursorFirstLineEnd = true;
+        ctx.templateJournal = true;
+        ctx.editFilename.clear();
+        ctx.promptMode = false;
+        ctx.promptText = "";
+        ctx.editorTitle = "模板日记";
+        ctx.prevState = APP_MAIN;
+        ctx.nextState = APP_EDITOR;
+        break;
+    }
     case 'v':
         ctx.nextState = APP_BROWSER;
         break;
@@ -540,7 +583,8 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_clear(); int y = FONT_H;
     const int rowH = LINE_SPACING;
     bool hasEntries = g_journal.totalEntries() > 0;
-    int actionCount = mainMenuVisibleCount(hasEntries);
+    const bool tplEnabled = journalTemplateEnabled();
+    int actionCount = mainMenuVisibleCount(hasEntries, tplEnabled);
     if (g_mainMenu.selection >= actionCount) g_mainMenu.selection = actionCount - 1;
     if (g_mainMenu.selection < 0) g_mainMenu.selection = 0;
 
@@ -552,7 +596,7 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
         key = 0;
     } else {
         char lowerKey = (key >= 'A' && key <= 'Z') ? (char)(key + ('a' - 'A')) : (char)key;
-        int idx = mainMenuVisibleIndexForKey(lowerKey, hasEntries);
+        int idx = mainMenuVisibleIndexForKey(lowerKey, hasEntries, tplEnabled);
         if (idx >= 0) g_mainMenu.selection = idx;
     }
 
@@ -611,7 +655,7 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     // 月视图:底部要容纳 图标+22pt动作标签,图标距分割线更近
     int iconTop = dividerY + (monthView ? 4 : 14);
     for (int i = 0; i < actionCount; i++) {
-        const MainMenuAction &action = kMainActions[mainMenuActionIndex(i, hasEntries)];
+        const MainMenuAction &action = kMainActions[mainMenuActionIndex(i, hasEntries, tplEnabled)];
         int cx = baseX + i * slotW + slotW / 2 - scrollX;
         drawMainMenuIcon(cx, iconTop, action.icon, i == g_mainMenu.selection);
     }
@@ -621,7 +665,8 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
         int w = g_font.textWidth(">");
         g_font.drawText(SCREEN_W - w - 2, iconTop + 24 + g_font.ascent() / 2, ">");
     }
-    const MainMenuAction &selected = kMainActions[mainMenuActionIndex(g_mainMenu.selection, hasEntries)];
+    const MainMenuAction &selected =
+        kMainActions[mainMenuActionIndex(g_mainMenu.selection, hasEntries, tplEnabled)];
     if (!monthView) {
         y = iconTop + 48 + rowH;
         char selectedText[48];
@@ -656,9 +701,10 @@ AppState screen_main_handle(int key, ScreenContext &ctx) {
     ui_commit();
 
     char lowerKey = (key >= 'A' && key <= 'Z') ? (char)(key + ('a' - 'A')) : (char)key;
-    int directIdx = mainMenuVisibleIndexForKey(lowerKey, hasEntries);
+    int directIdx = mainMenuVisibleIndexForKey(lowerKey, hasEntries, tplEnabled);
     if (directIdx >= 0) {
-        mainMenuActivate(kMainActions[mainMenuActionIndex(directIdx, hasEntries)], ctx);
+        mainMenuActivate(
+            kMainActions[mainMenuActionIndex(directIdx, hasEntries, tplEnabled)], ctx);
     } else if (key == 0x0A || key == 0x0D) {
         mainMenuActivate(selected, ctx);
     } else if (key=='q'||key=='Q') ctx.nextState=APP_QUIT;

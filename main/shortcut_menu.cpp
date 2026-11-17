@@ -59,6 +59,11 @@ static void buildItems() {
     addItem(ShortcutMenuAction::Flomo, "发送到 Flomo", "Ctrl+F");
     addItem(ShortcutMenuAction::Search, "查找/替换", "Ctrl+/");
 
+    // 模板日记：按 Ctrl+W 取当前天气填入正文的 {{weather}}。
+    if (app_editor_template_journal()) {
+        addItem(ShortcutMenuAction::Weather, "获取天气", "Ctrl+W");
+    }
+
     // 版本历史只在开启且是日记/灵感会话时可用（快捷编辑/文件编辑里 Ctrl+Y
     // 是切换文件）。
     if (g_settings.versionHistory() && !app_editor_in_quick_file_session() &&

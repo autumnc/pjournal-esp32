@@ -35,6 +35,9 @@ bool app_editor_has_stashed_session();
 // Win 快捷菜单(shortcut_menu.cpp)的可见性与打开条件
 bool app_editor_shortcut_menu_allowed();
 bool app_editor_prompt_mode();
+bool app_editor_template_journal();
+// 天气请求进行中：屏蔽会并发使用 WiFi 的物理按键入口（语音听写/AI 润色）。
+bool app_editor_weather_fetching();
 bool app_editor_in_quick_file_session();
 bool app_editor_in_file_edit_session();
 bool app_editor_has_selection();

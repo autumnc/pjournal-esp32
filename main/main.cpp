@@ -6,6 +6,7 @@
 #include "quick_edit.h"
 #include "file_edit.h"
 #include "journal_storage.h"
+#include "journal_template.h"
 #include "webdav_client.h"
 #include "flomo_client.h"
 #include "ime/IME.h"
@@ -415,6 +416,8 @@ extern "C" void app_main() {
         while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
     ESP_LOGI(TAG, "Journal entries: %d", g_journal.totalEntries());
+    // 首次开机（或用户删掉了 Templates 目录）：写入内置默认模板。
+    journalTemplateEnsureDefaults();
 
     // 诊断: 开机基线(此时各子系统还没起来) + 一次写盘基准(内部 flash vs SD)。
     // 两件事都在这里做是因为 SD 刚挂载成功、而又还没开始跑业务, 数据最干净。
@@ -636,6 +639,7 @@ extern "C" void app_main() {
             case ShortcutMenuAction::Inspiration:     key = KEY_CTRL_I; break;
             case ShortcutMenuAction::Flomo:           key = 0x06; break;
             case ShortcutMenuAction::Search:          key = KEY_SEARCH; break;
+            case ShortcutMenuAction::Weather:         key = 0x17; break;
             case ShortcutMenuAction::History:         key = 0x19; break;
             case ShortcutMenuAction::Prompt:          key = 0x10; break;
             case ShortcutMenuAction::PolishSelection: key = 0x0F; break;
@@ -840,7 +844,9 @@ extern "C" void app_main() {
                             // 单击: 上移,等待双击窗口确认非双击后生效
                             s_pending_single.key = KEY_UP;
                             s_pending_single.queued_us = now;
-                        } else if (currentState == APP_EDITOR && btn_user.is_double && !app_editor_search_active() && !app_editor_help_active() && !app_editor_vi_cmdline_active()) {
+                        } else if (currentState == APP_EDITOR && btn_user.is_double &&
+                                   !app_editor_search_active() && !app_editor_help_active() &&
+                                   !app_editor_vi_cmdline_active() && !app_editor_weather_fetching()) {
                             // 编辑器双击: 进入语音听写(会话在screen_voice_init启动)
                             currentState = APP_VOICE;
                             key = 0;
@@ -940,7 +946,9 @@ extern "C" void app_main() {
                                 s_pending_single.key = KEY_DOWN;
                                 s_pending_single.queued_us = now;
                             }
-                        } else if (currentState == APP_EDITOR && btn_boot.is_double && !app_editor_search_active() && !app_editor_help_active() && !app_editor_vi_cmdline_active()) {
+                        } else if (currentState == APP_EDITOR && btn_boot.is_double &&
+                                   !app_editor_search_active() && !app_editor_help_active() &&
+                                   !app_editor_vi_cmdline_active() && !app_editor_weather_fetching()) {
                             // 编辑器双击: 进入AI润色面板(全文润色)
                             screen_polish_set_scope(POLISH_WHOLE);
                             currentState = APP_POLISH;

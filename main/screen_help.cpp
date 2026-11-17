@@ -52,6 +52,7 @@ static const HelpChapter CHAPTERS[] = {
      "快捷键：\n"
      "p  提示写作\n"
      "f  自由写作\n"
+     "m  模板日记\n"
      "v  查看过往日记\n"
      "w  同步 WebDAV\n"
      "t  GTD 任务管理\n"
@@ -73,6 +74,13 @@ static const HelpChapter CHAPTERS[] = {
      "f 自由写作：新建空白日记。\n"
      "p 提示写作：随机给一句写作\n"
      "提示，围绕它记录。\n"
+     "m 模板日记：套用 SD 卡\n"
+     "Templates 目录中的 Markdown\n"
+     "模板，{{date}} 与 {{weekday}}\n"
+     "会自动填成当天日期和星期。\n"
+     "Ctrl+W 取当前天气填入\n"
+     "{{weather}}（地区在设置里的\n"
+     "模式设置→天气地区中填写）。\n"
      "\n"
      "连接蓝牙键盘后直接打字。\n"
      "中文输入按 Ctrl+Space 切换，\n"
@@ -359,8 +367,8 @@ static const HelpChapter CHAPTERS[] = {
      "（润色、语音听写、蓝牙增删等）。"},
 
     {"文件管理与 U 盘",
-     "文件管理：\n"
-     "设置里的文件管理可浏览 SD 卡。\n"
+     "网络文件管理：\n"
+     "设置里的网络文件管理可浏览 SD 卡。\n"
      "快捷编辑/文件编辑模式下\n"
      "按 Ctrl+E 打开本地文件管理器：\n"
      "a 新建、r 改名、d 删除、\n"

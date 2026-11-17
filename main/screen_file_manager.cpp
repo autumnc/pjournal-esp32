@@ -106,7 +106,7 @@ AppState screen_file_manager_handle(int key, ScreenContext &ctx) {
     // Draw screen
     ui_clear();
     int y = 43;
-    ui_draw_text_centered(y, "文件管理", false, true);
+    ui_draw_text_centered(y, "网络文件管理", false, true);
     y += FONT_H;
     u8g2_DrawHLine(g_u8g2, 0, y, SCREEN_W);
     y += 23;

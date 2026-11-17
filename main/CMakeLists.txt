@@ -40,6 +40,8 @@ idf_component_register(SRCS
     "font_renderer.cpp"
     "bt_keyboard.cpp"
     "journal_storage.cpp"
+    "journal_template.cpp"
+    "weather_client.cpp"
     "calendar_panel.cpp"
     "settings_manager.cpp"
     "wifi_manager.cpp"
@@ -100,6 +102,25 @@ idf_component_register(SRCS
         esp_tinyusb
         esp_hal_usb
 )
+
+# 仓库根目录 Templates/ 下的默认模板：编进固件，首次开机 SD 卡没有
+# Templates 目录时由 journalTemplateEnsureDefaults() 写出来。
+# 文件名是中文，用 RENAME_TO 生成固定的 ASCII 符号名给 journal_template.cpp 引用。
+set(PJOURNAL_DEFAULT_TEMPLATE_NAMES
+    "子弹笔记日记.md"
+    "晨间日记.md"
+    "极简日记模板.md"
+    "项目学习日记.md"
+    "马伯庸日记模板.md"
+    "马伯庸日记模板-紧凑.md"
+)
+set(_pj_tpl_idx 0)
+foreach(_pj_tpl_name ${PJOURNAL_DEFAULT_TEMPLATE_NAMES})
+    target_add_binary_data(${COMPONENT_LIB}
+        "${CMAKE_CURRENT_LIST_DIR}/../Templates/${_pj_tpl_name}" BINARY
+        RENAME_TO "pj_default_template_${_pj_tpl_idx}")
+    math(EXPR _pj_tpl_idx "${_pj_tpl_idx}+1")
+endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE PJOURNAL_VERSION="5.0.5")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

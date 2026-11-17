@@ -36,6 +36,8 @@ struct ScreenContext {
     bool promptMode = false;      // true = prompt writing, false = free writing
     std::string editorTitle;      // optional editor status title override
     std::string editContent;      // body text to load into editor (from browser)
+    bool editCursorFirstLineEnd = false; // true = 光标落在第一行行末（模板日记）
+    bool templateJournal = false;   // true = template journal session (enables weather fill)
     std::string editFilename;     // original filename when editing existing entry
     std::string statusMessage;    // one-shot status message to show
     int statusDuration = 0;       // ticks to show status message

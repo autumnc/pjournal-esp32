@@ -3,6 +3,8 @@
 #include "font_renderer.h"
 #include "settings_manager.h"
 #include "journal_storage.h"
+#include "journal_template.h"
+#include "markdown_render.h"
 #include "wifi_manager.h"
 #include "flomo_client.h"
 #include "ime/IME.h"
@@ -27,6 +29,7 @@ extern "C" {
     extern void u8g2_SetDrawColor(void *u8g2, int color);
     extern void u8g2_DrawBox(void *u8g2, int x, int y, int w, int h);
     extern void u8g2_DrawHLine(void *u8g2, int x, int y, int w);
+    extern void u8g2_DrawFrame(void *u8g2, int x, int y, int w, int h);
 }
 
 static const char *appModeLabel(const std::string &mode) {
@@ -58,6 +61,9 @@ struct SettingField {
 static const SettingField SETTINGS_FIELDS[] = {
     // 模式设置
     {"_app_mode", "工作模式", false, true, SG_MODE},
+    {"_journal_template", "日记模板", false, true, SG_MODE},
+    {"_journal_template_preview", "模板预览", false, true, SG_MODE},
+    {"weather_city", "天气地区", false, false, SG_MODE},
     {"_home_view", "主页视图", false, true, SG_MODE},
     {"_input_mode", "输入模式", false, true, SG_MODE},
     {"night_mode", "夜间模式", false, false, SG_MODE},
@@ -88,7 +94,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"_letter_sel_key", "字母选字按键", false, true, SG_IME},
     {"_dict_mgr", "词库管理", false, true, SG_IME},
     // 文件管理
-    {"_file_mgr", "文件管理", false, true, SG_FILE},
+    {"_file_mgr", "网络文件管理", false, true, SG_FILE},
     {"_usb_msc", "U盘模式", false, true, SG_FILE},
     {"file_mgr_token", "文件管理密码", true, false, SG_FILE},
     // 连接管理
@@ -132,6 +138,13 @@ static const char *settingsGroupLabel(SettingsGroup g) {
 // 打字音效与输入模式无关,只要音效打开就显示细项;竖排参考线仅在竖排时显示。
 static bool fieldHidden(int idx) {
     const char *k = SETTINGS_FIELDS[idx].key;
+    // 日记模板只在"个人日记"工作模式下出现
+    if (strcmp(k, "_journal_template") == 0)
+        return g_settings.appMode() != "journal";
+    // 选了「无模板」= 关闭模板日记：预览和天气地区随之隐藏。
+    if (strcmp(k, "_journal_template_preview") == 0 ||
+        strcmp(k, "weather_city") == 0)
+        return g_settings.appMode() != "journal" || !journalTemplateEnabled();
     if (strcmp(k, "vertical_ref_line") == 0)
         return g_settings.editorOrientation() != "vertical";
     if (strcmp(k, "_vertical_ref_line_style") == 0)
@@ -311,7 +324,14 @@ static bool restartRequiredField(const char *key) {
            strcmp(key, "ime_candidate_highlight") == 0;
 }
 
-enum SettingsScreenMode { SETTINGS_BROWSE, SETTINGS_DICT_CHOOSE, SETTINGS_DICT_LIST, SETTINGS_DICT_ADD };
+enum SettingsScreenMode {
+    SETTINGS_BROWSE,
+    SETTINGS_DICT_CHOOSE,
+    SETTINGS_DICT_LIST,
+    SETTINGS_DICT_ADD,
+    SETTINGS_TPL_LIST,
+    SETTINGS_TPL_PREVIEW,
+};
 
 static struct {
     int selection = 0;
@@ -340,6 +360,15 @@ static struct {
     std::string dictFilterCacheQuery;
     std::vector<IME::UserEntryView> dictEntriesCache;
     std::vector<int> dictFilteredCache;
+    // 日记模板选择浮层与 Markdown 预览
+    std::vector<std::string> tplEntries;
+    int tplSelection = 0;
+    int tplScroll = 0;
+    std::string tplPreviewName;
+    std::vector<std::string> tplPreviewLines;
+    std::vector<MdLineInfo> tplPreviewMd;
+    std::vector<VRow> tplPreviewVrows;
+    int tplPreviewScroll = 0;
 } g_settingsState;
 
 // 展开/隐藏子项后把选中行夹回有效范围
@@ -672,6 +701,171 @@ static const std::vector<int> &dictFilteredIndices(const std::vector<IME::UserEn
     return g_settingsState.dictFilteredCache;
 }
 
+// ── 日记模板：选择浮层与 Markdown 预览 ──────────────────────────────────
+static void drawSettingsBrowse(bool doCommit = true);
+
+// 按像素宽度截断 UTF-8 文本，末尾补省略号。
+static std::string fitTextWidth(const std::string &text, int maxW) {
+    if (g_font.textWidth(text.c_str()) <= maxW) return text;
+    std::string out = text;
+    while (!out.empty()) {
+        size_t i = out.size() - 1;
+        while (i > 0 && ((unsigned char)out[i] & 0xC0) == 0x80) i--;
+        out.erase(i);
+        if (g_font.textWidth((out + "…").c_str()) <= maxW) return out + "…";
+    }
+    return "";
+}
+
+static void refreshTemplateEntries() {
+    auto &st = g_settingsState;
+    st.tplEntries = journalTemplateList();
+    st.tplScroll = 0;
+    // 浮层第 0 行固定是「无」（关闭模板日记），文件从第 1 行开始。
+    int sel = 0;
+    if (journalTemplateEnabled() && !st.tplEntries.empty()) {
+        sel = 1;  // 从未显式选择时，生效的是列表第一个模板
+        std::string selected = journalTemplateSelected();
+        for (int i = 0; i < (int)st.tplEntries.size(); i++) {
+            if (st.tplEntries[i] == selected) {
+                sel = i + 1;
+                break;
+            }
+        }
+    }
+    st.tplSelection = sel;
+}
+
+// 浮动菜单画在已经绘制好的设置页上，由调用方最后 ui_commit。
+static void drawTemplateListPopup() {
+    auto &st = g_settingsState;
+    const int fileCount = (int)st.tplEntries.size();
+    const int total = fileCount + 1;  // 第 0 行是「无」
+    const int rowH = FONT_H + 2;
+    int visible = std::min(total, 7);
+    if (visible < 1) visible = 1;
+
+    if (st.tplSelection >= total) st.tplSelection = total - 1;
+    if (st.tplSelection < 0) st.tplSelection = 0;
+    if (st.tplSelection < st.tplScroll) st.tplScroll = st.tplSelection;
+    if (st.tplSelection >= st.tplScroll + visible)
+        st.tplScroll = st.tplSelection - visible + 1;
+    if (st.tplScroll < 0) st.tplScroll = 0;
+
+    const int pad = 8;
+    const int panelW = SCREEN_W - 24;
+    const int hintRows = fileCount == 0 ? 1 : 0;
+    const int panelH = pad + FONT_H + 6 + visible * rowH + hintRows * rowH + pad;
+    const int px = (SCREEN_W - panelW) / 2;
+    const int py = (SCREEN_H - panelH) / 2;
+
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, px, py, panelW, panelH);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, px, py, panelW, panelH);
+
+    char title[48];
+    snprintf(title, sizeof(title), "选择日记模板  %d", fileCount);
+    int ty = py + pad + g_font.ascent();
+    g_font.drawText(px + (panelW - g_font.textWidth(title)) / 2, ty, title, false);
+    int sepY = ty + g_font.descent() + 3;
+    u8g2_DrawHLine(g_u8g2, px + 8, sepY, panelW - 16);
+
+    for (int i = 0; i < visible && st.tplScroll + i < total; i++) {
+        int idx = st.tplScroll + i;
+        int baseline = sepY + 6 + g_font.ascent() + i * rowH;
+        bool sel = idx == st.tplSelection;
+        if (sel) {
+            u8g2_SetDrawColor(g_u8g2, 0);
+            u8g2_DrawBox(g_u8g2, px + 4, baseline - g_font.ascent() - 1,
+                         panelW - 8, rowH);
+            u8g2_SetDrawColor(g_u8g2, 1);
+        } else {
+            u8g2_SetDrawColor(g_u8g2, 0);
+        }
+        std::string name = (idx == 0)
+            ? std::string("无（关闭模板日记）")
+            : journalTemplateDisplayName(st.tplEntries[idx - 1]);
+        name = fitTextWidth(name, panelW - 24);
+        g_font.drawText(px + 12, baseline, name.c_str(), false);
+    }
+    if (fileCount == 0) {
+        const char *empty = "Templates目录下没有 .md 模板";
+        int ey = sepY + 6 + g_font.ascent() + visible * rowH;
+        g_font.drawText(px + (panelW - g_font.textWidth(empty)) / 2, ey, empty, false);
+    }
+    u8g2_SetDrawColor(g_u8g2, 0);
+}
+
+static void splitTemplateLines(const std::string &text, std::vector<std::string> &lines) {
+    lines.clear();
+    size_t pos = 0;
+    while (pos < text.length()) {
+        size_t nl = text.find('\n', pos);
+        lines.push_back(nl == std::string::npos ? text.substr(pos) : text.substr(pos, nl - pos));
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+    }
+    if (lines.empty()) lines.push_back("");
+}
+
+// 读取当前模板并准备好预览用的折行/Markdown 缓存。
+static bool prepareTemplatePreview(std::string &error) {
+    std::string content;
+    if (!journalTemplateLoadSelected(content, error)) return false;
+    auto &st = g_settingsState;
+    st.tplPreviewName = journalTemplateDisplayName(journalTemplateSelected());
+    splitTemplateLines(content, st.tplPreviewLines);
+    st.tplPreviewMd = mdClassifyLines(st.tplPreviewLines);
+    st.tplPreviewVrows = buildVrows(st.tplPreviewLines, &st.tplPreviewMd, nullptr);
+    st.tplPreviewScroll = 0;
+    return true;
+}
+
+static void drawTemplatePreview() {
+    auto &st = g_settingsState;
+    const int headerY = FONT_H;
+    const int sepY = headerY + g_font.descent();
+    const int contentY = sepY + 26;
+    const int contentMaxY = STATUS_Y;
+    const int viewH = contentMaxY - contentY;
+
+    mdSetRenderEnabled(true);
+    int maxScroll = st.tplPreviewVrows.empty() ? 0 :
+        vrowScrollToShow(st.tplPreviewVrows, (int)st.tplPreviewVrows.size() - 1,
+                         viewH, &st.tplPreviewMd);
+    if (maxScroll < 0) maxScroll = 0;
+    if (st.tplPreviewScroll > maxScroll) st.tplPreviewScroll = maxScroll;
+    if (st.tplPreviewScroll < 0) st.tplPreviewScroll = 0;
+
+    ui_clear();
+    ui_draw_text(4, headerY, "模板预览", true);
+    int nameW = g_font.textWidth(st.tplPreviewName.c_str());
+    if (4 + g_font.textWidth("模板预览") + 8 <= SCREEN_W - nameW - 4)
+        ui_draw_text(SCREEN_W - nameW - 4, headerY, st.tplPreviewName.c_str());
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, 4, sepY, SCREEN_W - 8);
+
+    int ly = contentY;
+    for (int idx = st.tplPreviewScroll; idx < (int)st.tplPreviewVrows.size(); idx++) {
+        if (idx > st.tplPreviewScroll) {
+            ly += LINE_SPACING + vrowGapBefore(st.tplPreviewVrows, idx, &st.tplPreviewMd);
+            if (ly + g_font.descent() > contentMaxY) break;
+        }
+        auto &vr = st.tplPreviewVrows[idx];
+        mdDrawVrow(4, ly, st.tplPreviewLines[vr.lineIdx], vr.start, vr.end,
+                   st.tplPreviewMd[vr.lineIdx], vr.indentCells);
+    }
+
+    if (st.tplPreviewScroll > 0 && maxScroll > 0) {
+        char pct[16];
+        snprintf(pct, sizeof(pct), "%d%%", st.tplPreviewScroll * 100 / maxScroll);
+        ui_draw_text(SCREEN_W - g_font.textWidth(pct) - 4, headerY, pct);
+    }
+    ui_draw_status("↑↓滚动 Esc返回", "");
+    ui_commit();
+}
+
 static bool connect_wifi_from_settings() {
     std::string ssid = g_settings.wifiSsid();
     if (ssid.empty()) return false;
@@ -702,10 +896,70 @@ void screen_settings_init() {
     g_settingsState.dictSearchCursor = 0;
     g_settingsState.dictSearchImeActive = false;
     g_settingsState.dictNotice.clear();
+    g_settingsState.tplEntries.clear();
+    g_settingsState.tplSelection = 0;
+    g_settingsState.tplScroll = 0;
+    g_settingsState.tplPreviewName.clear();
+    g_settingsState.tplPreviewLines.clear();
+    g_settingsState.tplPreviewMd.clear();
+    g_settingsState.tplPreviewVrows.clear();
+    g_settingsState.tplPreviewScroll = 0;
     invalidateDictCache();
 }
 
 AppState screen_settings_handle(int key, ScreenContext &ctx) {
+    // ── Template selection popup (floating over the settings page) ────
+    if (g_settingsState.mode == SETTINGS_TPL_LIST) {
+        const int total = (int)g_settingsState.tplEntries.size() + 1;  // 含「无」
+        if (key == 0x1B || key == 'q' || key == 'Q') {
+            g_settingsState.mode = SETTINGS_BROWSE;
+        } else if (key == KEY_UP || key == 'k') {
+            if (g_settingsState.tplSelection > 0) g_settingsState.tplSelection--;
+        } else if (key == KEY_DOWN || key == 'j') {
+            if (g_settingsState.tplSelection < total - 1) g_settingsState.tplSelection++;
+        } else if (key == KEY_PAGE_UP) {
+            g_settingsState.tplSelection = std::max(0, g_settingsState.tplSelection - 7);
+        } else if (key == KEY_PAGE_DOWN) {
+            g_settingsState.tplSelection = std::min(total - 1, g_settingsState.tplSelection + 7);
+        } else if (key == 0x0A || key == 0x0D) {
+            if (g_settingsState.tplSelection == 0)
+                journalTemplateSelectNone();
+            else
+                journalTemplateSelect(g_settingsState.tplEntries[g_settingsState.tplSelection - 1]);
+            g_settingsState.mode = SETTINGS_BROWSE;
+        }
+        drawSettingsBrowse(false);
+        if (g_settingsState.mode == SETTINGS_TPL_LIST) {
+            drawTemplateListPopup();
+            ui_draw_status("↑↓选择 Enter确定 Esc取消", "");
+        }
+        ui_commit();
+        return APP_SETTINGS;
+    }
+
+    // ── Template Markdown preview ─────────────────────────────────────
+    if (g_settingsState.mode == SETTINGS_TPL_PREVIEW) {
+        auto &st = g_settingsState;
+        if (key == 0x1B || key == 'q' || key == 'Q') {
+            st.mode = SETTINGS_BROWSE;
+            drawSettingsBrowse();
+            return APP_SETTINGS;
+        }
+        const int viewH = STATUS_Y - (FONT_H + g_font.descent() + 26);
+        int maxScroll = st.tplPreviewVrows.empty() ? 0 :
+            vrowScrollToShow(st.tplPreviewVrows, (int)st.tplPreviewVrows.size() - 1,
+                             viewH, &st.tplPreviewMd);
+        if (maxScroll < 0) maxScroll = 0;
+        if (key == 'j' || key == KEY_DOWN) st.tplPreviewScroll++;
+        if (key == 'k' || key == KEY_UP) st.tplPreviewScroll--;
+        if (key == KEY_PAGE_DOWN) st.tplPreviewScroll += 10;
+        if (key == KEY_PAGE_UP) st.tplPreviewScroll -= 10;
+        if (st.tplPreviewScroll < 0) st.tplPreviewScroll = 0;
+        if (st.tplPreviewScroll > maxScroll) st.tplPreviewScroll = maxScroll;
+        drawTemplatePreview();
+        return APP_SETTINGS;
+    }
+
     // ── User dictionary manager ───────────────────────────────────────
     if (g_settingsState.mode == SETTINGS_DICT_CHOOSE) {
         if (key == 0x1B || key == 'q' || key == 'Q') {
@@ -1063,6 +1317,25 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.statusMessage = "切换模式需重启生效";
                 return APP_SETTINGS;
             }
+            if (strcmp(f.key, "_journal_template") == 0) {
+                refreshTemplateEntries();
+                g_settingsState.mode = SETTINGS_TPL_LIST;
+                drawSettingsBrowse(false);
+                drawTemplateListPopup();
+                ui_draw_status("↑↓选择 Enter确定 Esc取消", "");
+                ui_commit();
+                return APP_SETTINGS;
+            }
+            if (strcmp(f.key, "_journal_template_preview") == 0) {
+                std::string error;
+                if (!prepareTemplatePreview(error)) {
+                    ctx.statusMessage = error;
+                    return APP_SETTINGS;
+                }
+                g_settingsState.mode = SETTINGS_TPL_PREVIEW;
+                drawTemplatePreview();
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_home_view") == 0) {
                 std::string next = (g_settings.homeView() == "month") ? "week" : "month";
                 g_settings.setString("home_view", next);
@@ -1259,6 +1532,12 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         }
     }
 
+    drawSettingsBrowse();
+    return APP_SETTINGS;
+}
+
+// 设置浏览页（组标题 + 当前分组展开的条目）。模板浮层/预览返回后也复用它。
+static void drawSettingsBrowse(bool doCommit) {
     ui_clear(); int y = FONT_H;
     ui_draw_text_centered(y, "设置", false, true);
     y += FONT_H;
@@ -1302,6 +1581,18 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
             } else if (strcmp(f.key, "_app_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          appModeLabel(g_settings.appMode()));
+            } else if (strcmp(f.key, "_journal_template") == 0) {
+                std::string disp;
+                if (!journalTemplateEnabled()) {
+                    disp = "无（已关闭）";
+                } else {
+                    std::string sel = journalTemplateSelected();
+                    disp = sel.empty() ? "(未选择)" : journalTemplateDisplayName(sel);
+                }
+                disp = fitTextWidth(disp, 170);
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label, disp.c_str());
+            } else if (strcmp(f.key, "_journal_template_preview") == 0) {
+                snprintf(buf, sizeof(buf), "▶ %s", f.label);
             } else if (strcmp(f.key, "_home_view") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.homeView() == "month" ? "月视图" : "周视图");
@@ -1351,8 +1642,7 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         }
         ui_draw_text(8, y + i * rowH, buf, sel);
     }
-    ui_commit();
-    return APP_SETTINGS;
+    if (doCommit) ui_commit();
 }
 
 // ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
