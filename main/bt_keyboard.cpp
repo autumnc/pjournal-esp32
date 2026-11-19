@@ -63,6 +63,8 @@ struct BtSdLock {
 #define KEY_HELP       0xA3
 #define KEY_REDO       0xA4
 #define KEY_WIN_V      0xA5  // 与 pjournal_app.h 保持一致
+#define KEY_MD_TOGGLE  0xA6  // Ctrl+M → Markdown 实时渲染开关
+#define KEY_TOC        0xA7  // Alt+O → 大纲目录(TOC)
 // 字母选字触发键里修饰键的"单击"事件。必须与 pjournal_app.h 的同名宏一致。
 #define KEY_MOD_TAP_LCTRL 0xB0
 #define KEY_MOD_TAP_LGUI  0xB1
@@ -400,6 +402,13 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                     xQueueSendToBack(s_queue, &wv, 0);
                     continue;
                 }
+                if ((mod & 0x44) && kc == 18) {
+                    // Alt+O → 大纲目录(TOC)。Alt 组合不会落到 hid_to_ascii,
+                    // 这里单独发键码。
+                    uint8_t toc = KEY_TOC;
+                    xQueueSendToBack(s_queue, &toc, 0);
+                    continue;
+                }
                 if (ctrl && shift && kc == 9) {
                     // Ctrl+Shift+F → simplified/traditional toggle (before generic Ctrl+letter)
                     uint8_t tt = KEY_TRAD_TOGGLE;
@@ -410,6 +419,13 @@ static void hidh_cb(void *handler_args, esp_event_base_t base, int32_t id, void 
                     // Ctrl+I → inspiration panel (must check before generic Ctrl+letter)
                     uint8_t ci = KEY_CTRL_I;
                     xQueueSendToBack(s_queue, &ci, 0);
+                    continue;
+                }
+                if (ctrl && kc == 16) {
+                    // Ctrl+M → Markdown 实时渲染开关。Ctrl+M 的 ASCII 是 0x0D,
+                    // 与 Enter 冲突, 必须在这里单独发专用键码。
+                    uint8_t mt = KEY_MD_TOGGLE;
+                    xQueueSendToBack(s_queue, &mt, 0);
                     continue;
                 }
                 if (ctrl && kc == 44) {
@@ -1107,6 +1123,10 @@ void BtKeyboard::checkKeyRepeat() {
                 } else if (ctrl && kc == 12) {
                     uint8_t ci = KEY_CTRL_I;
                     xQueueSendToBack(s_queue, &ci, 0);
+                } else if ((s_last_mod & 0x44) && kc == 18) {
+                    // Alt+O → 大纲目录; 按住不自动重复,避免反复开关目录
+                } else if (ctrl && kc == 16) {
+                    // Ctrl+M → Markdown 开关; 按住不自动重复,避免连续翻转
                 } else if (ctrl && kc == 44) {
                     uint8_t toggle = KEY_IME_TOGGLE;
                     xQueueSendToBack(s_queue, &toggle, 0);

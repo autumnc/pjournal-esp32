@@ -639,6 +639,8 @@ extern "C" void app_main() {
             case ShortcutMenuAction::Inspiration:     key = KEY_CTRL_I; break;
             case ShortcutMenuAction::Flomo:           key = 0x06; break;
             case ShortcutMenuAction::Search:          key = KEY_SEARCH; break;
+            case ShortcutMenuAction::Outline:         key = KEY_TOC; break;
+            case ShortcutMenuAction::MarkdownToggle:  key = KEY_MD_TOGGLE; break;
             case ShortcutMenuAction::Weather:         key = 0x17; break;
             case ShortcutMenuAction::History:         key = 0x19; break;
             case ShortcutMenuAction::Prompt:          key = 0x10; break;
@@ -680,25 +682,25 @@ extern "C" void app_main() {
 
         // Global Ctrl+Space IME toggle (only for editor)
         // 切换后标记重绘:编辑器空闲路径不重绘,状态栏的输入法标签须立即刷新
-        if (key == KEY_IME_TOGGLE && currentState == APP_EDITOR && !app_editor_search_active() && !app_editor_help_active() && !app_editor_vi_ime_blocked()) {
+        if (key == KEY_IME_TOGGLE && currentState == APP_EDITOR && !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active() && !app_editor_vi_ime_blocked()) {
             app_toggle_ime();
             screen_editor_reset_drawn();
             key = 0;
         }
         // Shift+Space fullwidth toggle (only when IME active in editor)
-        if (key == KEY_FULLWIDTH_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
+        if (key == KEY_FULLWIDTH_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active()) {
             app_toggle_fullwidth();
             screen_editor_reset_drawn();
             key = 0;
         }
         // Ctrl+Shift+F simplified/traditional toggle (only when IME active in editor)
-        if (key == KEY_TRAD_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
+        if (key == KEY_TRAD_TOGGLE && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active()) {
             app_toggle_trad();
             screen_editor_reset_drawn();
             key = 0;
         }
         // Left Shift tap → temp English mode toggle (only when IME active in editor)
-        if (key == KEY_LSHIFT_TAP && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active()) {
+        if (key == KEY_LSHIFT_TAP && currentState == APP_EDITOR && app_ime_active() && !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active()) {
             app_toggle_english();
             screen_editor_reset_drawn();
             key = 0;
@@ -706,7 +708,7 @@ extern "C" void app_main() {
         // Ctrl+D → IME user word deletion mode (only when IME active in editor)
         if (key == 0x04 && currentState == APP_EDITOR && app_ime_active() &&
             !IME::getInstance().predicting() &&
-            !app_editor_search_active() && !app_editor_help_active()) {
+            !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active()) {
             app_toggle_ime_delete_mode();
             {
                 std::string imeStatus = IME::getInstance().takeStatusMessage();
@@ -845,7 +847,7 @@ extern "C" void app_main() {
                             s_pending_single.key = KEY_UP;
                             s_pending_single.queued_us = now;
                         } else if (currentState == APP_EDITOR && btn_user.is_double &&
-                                   !app_editor_search_active() && !app_editor_help_active() &&
+                                   !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active() &&
                                    !app_editor_vi_cmdline_active() && !app_editor_weather_fetching()) {
                             // 编辑器双击: 进入语音听写(会话在screen_voice_init启动)
                             currentState = APP_VOICE;
@@ -947,7 +949,7 @@ extern "C" void app_main() {
                                 s_pending_single.queued_us = now;
                             }
                         } else if (currentState == APP_EDITOR && btn_boot.is_double &&
-                                   !app_editor_search_active() && !app_editor_help_active() &&
+                                   !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active() &&
                                    !app_editor_vi_cmdline_active() && !app_editor_weather_fetching()) {
                             // 编辑器双击: 进入AI润色面板(全文润色)
                             screen_polish_set_scope(POLISH_WHOLE);
@@ -990,7 +992,7 @@ extern "C" void app_main() {
 
         // Global Ctrl+I → inspiration panel (works from any screen including editor)
         if (key == KEY_CTRL_I && currentState != APP_INSPIRATION &&
-            currentState != APP_USB_MSC && !app_editor_search_active() && !app_editor_help_active() &&
+            currentState != APP_USB_MSC && !app_editor_search_active() && !app_editor_help_active() && !app_editor_toc_active() &&
             !app_editor_vi_cmdline_active()) {
             inspReturnTo = currentState;
             if (currentState == APP_EDITOR) inspEditorReturnTo = ctx.prevState;

@@ -49,6 +49,13 @@ std::string mdCnNumeral(int n);
 // Classify every line of the document in one pass.
 std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines);
 
+// Collect heading line numbers / levels (1..6) for the editor TOC. Same code
+// fence state machine as mdClassifyLines, but no per-line MdLineInfo array:
+// avoids an O(lines) internal-RAM peak on large documents.
+void mdCollectHeadings(const std::vector<std::string> &lines,
+                       std::vector<int> &outLines,
+                       std::vector<int> &outLevels);
+
 // Shared heading-fold semantics: hidden[li]=1 for every line swallowed by a
 // folded heading (nested folds, inner folded headings inside a fold region
 // stay hidden). Returns all zeros when mdInfo is null or nothing is folded.
@@ -82,6 +89,13 @@ std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,
                 const MdLineInfo &info, int indentCells = 0, int cursorBytePos = -1,
                 bool folded = false);
+
+// Draw a heading line's rendered form (level icon + styled title) at (x, y).
+// Used by the editor TOC: it ignores the live-render toggle (the outline always
+// shows the rendered form) and omits the heading underline to keep dense rows
+// readable. maxWidth > 0 truncates at that many pixels. Returns the drawn width.
+int mdDrawHeadingRow(int x, int y, const std::string &line, int headingLevel,
+                     int maxWidth = 0);
 
 // Visual x (px from the line's left edge) at which raw byte bytePos renders.
 // For heading/task/quote lines the content sits at a fixed prefix offset

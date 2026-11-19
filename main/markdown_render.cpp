@@ -652,6 +652,37 @@ std::vector<MdVCell> mdVerticalCells(const std::string &line, const MdLineInfo &
 
 void mdSetRenderEnabled(bool on) { s_mdEnabled = on; }
 
+// 标题判定: '#' 必须从第 0 列开始, 1..6 个, 且后面紧跟一个空格。
+static int headingLevelOf(const std::string &ln) {
+    int end = (int)ln.size();
+    while (end > 0 && (ln[end - 1] == ' ' || ln[end - 1] == '\t')) end--;
+    int h = 0;
+    while (h < end && ln[h] == '#') h++;
+    if (h >= 1 && h <= 6 && h < end && ln[h] == ' ') return h;
+    return 0;
+}
+
+void mdCollectHeadings(const std::vector<std::string> &lines,
+                       std::vector<int> &outLines,
+                       std::vector<int> &outLevels) {
+    // 与 mdClassifyLines 的代码块状态机保持一致, 但不分配 O(行数) 的
+    // MdLineInfo 数组: 大文件上那是几十 KB 的内部 RAM 峰值。
+    bool inCode = false;
+    for (size_t i = 0; i < lines.size(); i++) {
+        const std::string &ln = lines[i];
+        if (ln.compare(0, 3, "```") == 0) {
+            inCode = !inCode;
+            continue;
+        }
+        if (inCode) continue;
+        int h = headingLevelOf(ln);
+        if (h > 0) {
+            outLines.push_back((int)i);
+            outLevels.push_back(h);
+        }
+    }
+}
+
 std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines) {
     std::vector<MdLineInfo> out(lines.size());
     bool inCode = false;
@@ -673,9 +704,8 @@ std::vector<MdLineInfo> mdClassifyLines(const std::vector<std::string> &lines) {
 
         // heading / quote only at column 0; horizontal rule tolerates leading ws
         if (ws == 0) {
-            int h = 0;
-            while (h < end && ln[h] == '#') h++;
-            if (h >= 1 && h <= 6 && h < end && ln[h] == ' ') {
+            int h = headingLevelOf(ln);
+            if (h > 0) {
                 info.headingLevel = h;
                 continue;
             }
@@ -783,6 +813,64 @@ int mdVrowX(const std::string &line, const MdLineInfo &info, int bytePos, int vr
     }
     return extra + mdVisualX(line, info, bytePos, -1, folded) -
            mdVisualX(line, info, vrowStart, -1, folded) + prefix;
+}
+
+int mdDrawHeadingRow(int x, int y, const std::string &line, int headingLevel,
+                     int maxWidth) {
+    if (headingLevel < 1) headingLevel = 1;
+    if (headingLevel > 6) headingLevel = 6;
+
+    // 目录里始终显示渲染后的标题(级别图标 + 隐藏内联标记), 与编辑区的
+    // "Markdown渲染"开关无关; 开关只影响正文绘制。
+    // 直到函数结束都保持启用: mdVisualX 也用这个开关决定是否按标题/列表
+    // 前缀计算 x, 提前恢复会让"实时渲染关闭"时目录里的缩进/图标位置错位。
+    const bool saved = s_mdEnabled;
+    s_mdEnabled = true;
+    MdLineInfo info;
+    info.headingLevel = headingLevel;
+    std::vector<MdSeg> segs;
+    mdParseLine(line, info, segs, -1, false, false);
+
+    const int limit = maxWidth > 0 ? x + maxWidth : 0;
+    int right = x;
+    u8g2_SetDrawColor(g_u8g2, 0);
+    for (auto &seg : segs) {
+        if (seg.drawText.empty()) continue;
+        TextStyle ts = seg.ts;
+        ts.underline = false;  // 目录行不加下划线, 避免密集行看起来粘连
+        const std::string &s = seg.drawText;
+        // 每段起点与实时渲染同一套视觉坐标, 图标前缀宽度(按格计)与正文对齐。
+        int cx = x + mdVisualX(line, info, seg.start, -1, false);
+        const int sw = g_font.textWidth(s.c_str());
+        if (limit <= 0 || cx + sw <= limit) {
+            // 整段一次画完, 与实时渲染同一条绘制路径。不能按 utf8Decode
+            // 逐字符拆: 它遇到 4 字节字符(标题图标 U+F03A4…、emoji)只前进
+            // 2 字节, 拆出来的是半截非法序列, 图标会被算成 0 宽而不显示。
+            g_font.drawTextStyled(cx, y, s.c_str(), ts);
+            if (cx + sw > right) right = cx + sw;
+            continue;
+        }
+        // 需要按 maxWidth 截断: 用首字节自定 UTF-8 长度, 避开上面的解码问题。
+        for (size_t i = 0; i < s.size();) {
+            unsigned char b = (unsigned char)s[i];
+            int n = b < 0x80 ? 1 : (b < 0xE0 ? 2 : (b < 0xF0 ? 3 : 4));
+            if (i + (size_t)n > s.size()) n = 1;
+            std::string ch = s.substr(i, n);
+            int cw = g_font.textWidth(ch.c_str());
+            if (cx + cw > limit) {
+                s_mdEnabled = saved;
+                u8g2_SetDrawColor(g_u8g2, 1);
+                return right - x;
+            }
+            g_font.drawTextStyled(cx, y, ch.c_str(), ts);
+            cx += cw;
+            i += n;
+        }
+        if (cx > right) right = cx;
+    }
+    s_mdEnabled = saved;
+    u8g2_SetDrawColor(g_u8g2, 1);
+    return right - x;
 }
 
 void mdDrawVrow(int x, int y, const std::string &line, int start, int end,

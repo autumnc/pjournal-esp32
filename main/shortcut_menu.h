@@ -12,6 +12,8 @@ enum class ShortcutMenuAction {
     Inspiration,
     Flomo,
     Search,
+    Outline,
+    MarkdownToggle,
     Weather,
     History,
     Prompt,

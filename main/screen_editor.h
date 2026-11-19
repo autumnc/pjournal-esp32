@@ -49,6 +49,9 @@ bool app_editor_search_active();
 // 快捷键帮助对话框是否打开(供 main.cpp 屏蔽全局按键/物理按键)
 bool app_editor_help_active();
 
+// 大纲目录浮层是否打开(供 main.cpp 屏蔽全局按键/物理按键)
+bool app_editor_toc_active();
+
 // vi normal/visual 或命令行激活时, 屏蔽全局输入法切换
 bool app_editor_vi_ime_blocked();
 // vi 命令行(: / ?)是否激活, 屏蔽全局 Ctrl+I 与物理按键浮层

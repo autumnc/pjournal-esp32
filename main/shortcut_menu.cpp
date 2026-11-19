@@ -35,8 +35,9 @@ struct MenuItem {
 
 static bool s_active = false;
 static int s_sel = 0;
+static int s_scroll = 0;             // 列表首项下标(放不下时滚动)
 static int s_count = 0;
-static MenuItem s_items[12];        // 当前满载 12 项（一屏能放下）
+static MenuItem s_items[16];         // 条件项全开时 15 项, 留 1 项余量
 static uint8_t *s_base = nullptr;   // PSRAM 整帧底板
 static size_t s_baseSize = 0;
 
@@ -58,6 +59,10 @@ static void buildItems() {
     addItem(ShortcutMenuAction::Inspiration, "灵感", "Ctrl+I");
     addItem(ShortcutMenuAction::Flomo, "发送到 Flomo", "Ctrl+F");
     addItem(ShortcutMenuAction::Search, "查找/替换", "Ctrl+/");
+    addItem(ShortcutMenuAction::Outline, "大纲目录", "Alt+O");
+    addItem(ShortcutMenuAction::MarkdownToggle,
+            g_settings.markdownRender() ? "Markdown渲染 开" : "Markdown渲染 关",
+            "Ctrl+M");
 
     // 模板日记：按 Ctrl+W 取当前天气填入正文的 {{weather}}。
     if (app_editor_template_journal()) {
@@ -102,9 +107,14 @@ static void drawMenu() {
     const int titleRowH = rowH + 2;
     const int hintRowH = rowH + 3;   // 提示行整体比普通行低 3px，框底随之外扩
 
+    // 条件项全开时 15 项放不进一屏: 固定标题/提示行, 中间列表滚动。
     const int boxW = kMenuW;
-    int boxH = pad + titleRowH + s_count * rowH + hintRowH + pad;
-    if (boxH > SCREEN_H) boxH = SCREEN_H;
+    const int maxBoxH = SCREEN_H - 8;
+    const int fixedH = pad * 2 + titleRowH + hintRowH;
+    int maxRows = (maxBoxH - fixedH) / rowH;
+    if (maxRows < 1) maxRows = 1;
+    const int visible = s_count < maxRows ? s_count : maxRows;
+    const int boxH = fixedH + visible * rowH;
     const int boxX = (SCREEN_W - boxW) / 2;
     int boxY = (SCREEN_H - boxH) / 2;
     if (boxY < 0) boxY = 0;
@@ -121,6 +131,10 @@ static void drawMenu() {
 
     if (s_sel < 0) s_sel = 0;
     if (s_sel >= s_count) s_sel = s_count - 1;
+    if (s_sel < s_scroll) s_scroll = s_sel;
+    if (s_sel >= s_scroll + visible) s_scroll = s_sel - visible + 1;
+    if (s_scroll > s_count - visible) s_scroll = s_count - visible;
+    if (s_scroll < 0) s_scroll = 0;
 
     // 恢复底板，再在上面画不透明面板。
     memcpy(u8g2_GetBufferPtr(g_u8g2), s_base, s_baseSize);
@@ -133,11 +147,13 @@ static void drawMenu() {
     u8g2_DrawHLine(g_u8g2, innerX, boxY + pad + titleRowH - 2, innerW);
 
     const int listY = boxY + pad + titleRowH;
-    for (int i = 0; i < s_count; i++) {
-        const int rowTop = listY + i * rowH;
+    for (int row = 0; row < visible; row++) {
+        const int i = s_scroll + row;
+        if (i >= s_count) break;
+        const int rowTop = listY + row * rowH;
         const bool sel = (i == s_sel);
+        u8g2_SetDrawColor(g_u8g2, 0);
         if (sel) {
-            u8g2_SetDrawColor(g_u8g2, 0);
             u8g2_DrawBox(g_u8g2, innerX, rowTop, innerW, rowH);
             u8g2_SetDrawColor(g_u8g2, 1);
         }
@@ -147,9 +163,25 @@ static void drawMenu() {
         if (sel) u8g2_SetDrawColor(g_u8g2, 0);
     }
 
+    // 列表放不下时右侧画滚动条,提示还有被裁掉的项。
+    if (s_count > visible) {
+        const int trackX = boxX + boxW - 7;
+        const int trackY = listY + 2;
+        const int trackH = visible * rowH - 4;
+        u8g2_SetDrawColor(g_u8g2, 0);
+        u8g2_DrawFrame(g_u8g2, trackX, trackY, 3, trackH);
+        int thumbH = trackH * visible / s_count;
+        if (thumbH < 8) thumbH = 8;
+        if (thumbH > trackH) thumbH = trackH;
+        int thumbY = trackY;
+        if (s_count > visible && trackH > thumbH)
+            thumbY += (trackH - thumbH) * s_scroll / (s_count - visible);
+        u8g2_DrawBox(g_u8g2, trackX + 1, thumbY, 1, thumbH);
+    }
+
     // 选择/执行/关闭提示行上方画一条横线，与菜单列表分开。
     u8g2_SetDrawColor(g_u8g2, 0);
-    u8g2_DrawHLine(g_u8g2, innerX, listY + s_count * rowH + 1, innerW);
+    u8g2_DrawHLine(g_u8g2, innerX, listY + visible * rowH + 1, innerW);
 
     const char *hint = "↑↓ 选择  Enter 执行  Esc 关闭";
     const int hintY = boxY + boxH - pad - g_font.descent() - 2;
@@ -185,6 +217,7 @@ bool shortcut_menu_open() {
     g_ime.cancelComposition();  // 只丢未上屏的拼音组合，保留输入法开关状态
     buildItems();
     s_sel = 0;
+    s_scroll = 0;
     s_active = true;
     drawMenu();
     return true;

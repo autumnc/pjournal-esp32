@@ -176,6 +176,15 @@ struct EditorState {
     bool helpActive = false;
     int helpScroll = 0;
 
+    // 大纲目录浮层 (Alt+O)。打开时快照标题行号/级别, 目录打开期间不可编辑正文。
+    struct {
+        bool active = false;
+        std::vector<int> lines;   // 标题所在行号
+        std::vector<int> levels;  // 对应标题级别(1..6)
+        int sel = 0;
+        int scroll = 0;
+    } toc;
+
     // 文件编辑模式内的本地文件管理器(Ctrl+E)
     struct {
         bool active = false;
@@ -1491,7 +1500,9 @@ static const char *HELP_LINES[] = {
     "Ctrl+X剪切  Ctrl+V粘贴",
     "Ctrl+Z撤销  Ctrl+R重做",
     "Ctrl+S保存  Ctrl+Q退出",
+    "Alt+O大纲目录",
     "Ctrl+O润色选区",
+    "Ctrl+M Markdown渲染开关",
     "Ctrl+T折叠/展开标题",
     "Ctrl+I灵感面板",
     "Ctrl+F发送Flomo",
@@ -1568,6 +1579,220 @@ static AppState screen_editor_help_handle(int key, ScreenContext &ctx) {
         if (g.helpScroll < 0) g.helpScroll = 0;
     }
     drawHelpPanel();
+    return APP_EDITOR;
+}
+
+// ── 大纲目录浮层 (Alt+O) ──────────────────────────────────────────────────
+// 标题行号/级别在打开时快照；按级别缩进, 行首复用 Markdown 标题的级别图标。
+// 目录独立于 "Markdown渲染" 开关: 关闭实时渲染后仍能按标题跳转。
+
+static int tocMaxRows() {
+    const int rowH = LINE_SPACING;
+    const int fixedH = 6 * 2 + (rowH + 2) + (rowH + 3);
+    int maxRows = ((SCREEN_H - 8) - fixedH) / rowH;
+    if (maxRows < 1) maxRows = 1;
+    return maxRows;
+}
+
+// 关闭目录并真正释放快照向量(clear 只改 size, 容量会常驻内部 RAM)。
+static void tocClose() {
+    auto &t = g_editor.toc;
+    t.active = false;
+    t.sel = 0;
+    t.scroll = 0;
+    std::vector<int>().swap(t.lines);
+    std::vector<int>().swap(t.levels);
+}
+
+static void tocOpen() {
+    auto &t = g_editor.toc;
+    t.lines.clear();
+    t.levels.clear();
+    // 渲染开启时正文已有一份分类缓存, 直接复用; 避免为目录再分配一份
+    // O(行数) 的临时数组(大文件上是内部 RAM 的主要风险)。
+    const bool mdOn = g_settings.markdownRender();
+    if (mdOn && !g_editor.mdInfoDirty && g_editor.cachedMdOn &&
+        g_editor.cachedMdInfo.size() == g_editor.lines.size()) {
+        // 渲染开启时正文已有一份分类缓存, 直接复用, 不再重新扫全文。
+        const std::vector<MdLineInfo> &info = g_editor.cachedMdInfo;
+        for (int i = 0; i < (int)info.size(); i++) {
+            const MdLineInfo &mi = info[i];
+            if (mi.headingLevel <= 0 || mi.inCodeBlock) continue;
+            t.lines.push_back(i);
+            t.levels.push_back(mi.headingLevel);
+        }
+    } else {
+        // 没有缓存(渲染关闭/刚切换过)时只流式收集标题, 不分配整篇
+        // MdLineInfo 数组 —— 大文件上那是内部 RAM 的峰值来源。
+        mdCollectHeadings(g_editor.lines, t.lines, t.levels);
+    }
+    // 默认选中光标之前(含)的最后一个标题, 从当前阅读位置继续。
+    t.sel = 0;
+    for (int i = 0; i < (int)t.lines.size(); i++) {
+        if (t.lines[i] <= g_editor.cy) t.sel = i;
+        else break;
+    }
+    t.scroll = 0;
+    const int visible = tocMaxRows();
+    if (t.sel >= visible) t.scroll = t.sel - visible + 1;
+    t.active = true;
+    g_ime.cancelComposition();  // 只取消未上屏的组合, 保留输入法开关状态
+}
+
+static void drawTocPanel() {
+    g_editor.drawnOnce = true;
+    ui_clear();
+    drawEditor();  // 浮层下面保留正文, 与快捷菜单/天气提示一致
+
+    auto &t = g_editor.toc;
+    const int asc = g_font.ascent();
+    const int rowH = LINE_SPACING;
+    const int pad = 6;
+    const int titleRowH = rowH + 2;
+    const int hintRowH = rowH + 3;
+    const int maxRows = tocMaxRows();
+    const int total = (int)t.lines.size();
+    const int visible = total > 0 ? (total < maxRows ? total : maxRows) : 1;
+    const int boxW = SCREEN_W - 24;
+    const int boxH = pad * 2 + titleRowH + visible * rowH + hintRowH;
+    const int boxX = (SCREEN_W - boxW) / 2;
+    const int boxY = (SCREEN_H - boxH) / 2;
+    const int innerX = boxX + pad;
+    const int innerW = boxW - 2 * pad;
+
+    if (t.sel < 0) t.sel = 0;
+    if (total > 0 && t.sel >= total) t.sel = total - 1;
+    if (t.sel < t.scroll) t.scroll = t.sel;
+    if (t.sel >= t.scroll + visible) t.scroll = t.sel - visible + 1;
+    if (t.scroll > total - visible) t.scroll = total - visible;
+    if (t.scroll < 0) t.scroll = 0;
+
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, boxX, boxY, boxW, boxH);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, boxX, boxY, boxW, boxH);
+    g_font.drawText(innerX, boxY + pad + asc + 2, "大纲目录");
+    if (total > 0) {
+        std::string info = std::to_string(t.sel + 1) + "/" + std::to_string(total);
+        g_font.drawText(boxX + boxW - pad - g_font.textWidth(info.c_str()),
+                        boxY + pad + asc + 2, info.c_str());
+    }
+    u8g2_DrawHLine(g_u8g2, innerX, boxY + pad + titleRowH - 2, innerW);
+
+    const int listY = boxY + pad + titleRowH;
+    if (total == 0) {
+        g_font.drawText(innerX + 4, listY + 1 + asc, "当前文件没有可跳转的标题");
+    } else {
+        const int indent = g_font.halfAdvance() + 2;  // 每级标题缩进
+        for (int row = 0; row < visible; row++) {
+            const int idx = t.scroll + row;
+            if (idx >= total) break;
+            // 防御: 目录打开期间正文被替换(旧快照失效)时不要越界取行。
+            const int li = t.lines[idx];
+            if (li < 0 || li >= (int)g_editor.lines.size()) break;
+            const int rowTop = listY + row * rowH;
+            int level = t.levels[idx];
+            if (level < 1) level = 1;
+            if (level > 6) level = 6;
+            const int x = innerX + 4 + (level - 1) * indent;
+            const int maxW = innerX + innerW - 6 - x;
+            mdDrawHeadingRow(x, rowTop + 1 + asc, g_editor.lines[li],
+                             level, maxW);
+            if (idx == t.sel) {
+                // XOR 反显整行: 白底黑字 → 黑底白字, 图标和正文一起高亮。
+                u8g2_SetDrawColor(g_u8g2, 2);
+                u8g2_DrawBox(g_u8g2, innerX, rowTop, innerW, rowH);
+                u8g2_SetDrawColor(g_u8g2, 1);
+            }
+        }
+        if (total > visible) {
+            const int trackX = boxX + boxW - 7;
+            const int trackY = listY + 2;
+            const int trackH = visible * rowH - 4;
+            u8g2_SetDrawColor(g_u8g2, 0);
+            u8g2_DrawFrame(g_u8g2, trackX, trackY, 3, trackH);
+            int thumbH = trackH * visible / total;
+            if (thumbH < 8) thumbH = 8;
+            if (thumbH > trackH) thumbH = trackH;
+            int thumbY = trackY;
+            if (trackH > thumbH)
+                thumbY += (trackH - thumbH) * t.scroll / (total - visible);
+            u8g2_DrawBox(g_u8g2, trackX + 1, thumbY, 1, thumbH);
+        }
+    }
+
+    // 与列表分开的提示行
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawHLine(g_u8g2, innerX, listY + visible * rowH + 1, innerW);
+    const char *hint = "↑↓ 选择  Enter 跳转  Esc 关闭";
+    const int hintY = boxY + boxH - pad - g_font.descent() - 2;
+    g_font.drawText(boxX + (boxW - g_font.textWidth(hint)) / 2, hintY, hint);
+    u8g2_SetDrawColor(g_u8g2, 1);
+    ui_commit();
+}
+
+static void tocJumpToSelection() {
+    auto &t = g_editor.toc;
+    if (t.sel < 0 || t.sel >= (int)t.lines.size()) return;
+    const int li = t.lines[t.sel];
+    if (li < 0 || li >= (int)g_editor.lines.size()) return;
+    int level = t.levels[t.sel];
+    if (level < 1) level = 1;
+
+    tocClose();
+    // 离开 Visual/VisualLine, 否则跳转后旧锚点会留下大段选区。
+    if (g_settings.viMode() &&
+        (g_editor.vi.mode == ViMode::Visual || g_editor.vi.mode == ViMode::VisualLine)) {
+        g_editor.vi.mode = ViMode::Normal;
+    }
+    // 无论什么模式都丢掉半截的计数/待执行操作, 免得上一个 d/3 落到跳转后的
+    // 新位置上。
+    g_editor.vi.count = 0;
+    g_editor.vi.op = ViOperator::None;
+    g_editor.cy = li;
+    // 光标落在标题标记(含其后的空格)之后, 避免 md 渲染把 "## " 原样露出来,
+    // 也不会停在图标占位上。
+    int cx = std::min(level, (int)g_editor.lines[li].size());
+    if (cx < (int)g_editor.lines[li].size() && g_editor.lines[li][cx] == ' ') cx++;
+    g_editor.cx = cx;
+    g_editor.targetCx = -1;
+    g_editor.hasSelection = false;
+    g_editor.vrowsDirty = true;  // drawEditor 会顺带展开包住目标行的折叠区
+    ui_clear(); drawEditor(); ui_commit();
+}
+
+static AppState screen_editor_toc_handle(int key, ScreenContext &ctx) {
+    (void)ctx;
+    auto &t = g_editor.toc;
+    const int total = (int)t.lines.size();
+    const int visible = tocMaxRows();
+
+    if (key == KEY_TOC || key == 0x1B || key == KEY_MOD_TAP_LGUI) {  // Alt+O / Esc
+        tocClose();
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+    if (key == KEY_UP || key == 'k') {
+        if (t.sel > 0) t.sel--;
+    } else if (key == KEY_DOWN || key == 'j') {
+        if (t.sel + 1 < total) t.sel++;
+    } else if (key == KEY_PAGE_UP) {
+        t.sel -= visible;
+        if (t.sel < 0) t.sel = 0;
+    } else if (key == KEY_PAGE_DOWN) {
+        if (total > 0) {
+            t.sel += visible;
+            if (t.sel >= total) t.sel = total - 1;
+        }
+    } else if (key == KEY_HOME) {
+        t.sel = 0;
+    } else if (key == KEY_END) {
+        t.sel = total > 0 ? total - 1 : 0;
+    } else if ((key == 0x0A || key == 0x0D) && total > 0) {
+        tocJumpToSelection();
+        return APP_EDITOR;
+    }
+    drawTocPanel();
     return APP_EDITOR;
 }
 
@@ -4201,6 +4426,8 @@ void screen_editor_init(ScreenContext &ctx) {
     // 重置快捷键帮助对话框
     g_editor.helpActive = false;
     g_editor.helpScroll = 0;
+    // 重置大纲目录: 重开编辑器/换文档后旧的行号快照必须失效。
+    tocClose();
     g_editor.fileMgr.active = false;
     g_editor.fileMgr.mode = FileMgrMode::Browse;
     g_editor.cachedGutterCells = -1;
@@ -4321,6 +4548,13 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         return APP_EDITOR;
     }
 
+    // ── 大纲目录浮层 (Alt+O) — 模态子状态, 处理所有按键 ─────────────────
+    // 必须放在文件管理器/查找/帮助等快捷键之前: 否则目录打开时 Ctrl+E 等
+    // 仍会打开别的面板, 目录快照可能指向已被替换的正文。
+    if (g_editor.toc.active) {
+        return screen_editor_toc_handle(key, ctx);
+    }
+
     if (g_editor.fileMgr.active) {
         return screen_editor_file_manager_handle(key, ctx);
     }
@@ -4349,6 +4583,49 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
         g_editor.helpScroll = 0;
         ui_clear(); drawHelpPanel(); ui_commit();
         return APP_EDITOR;
+    }
+
+    // Alt+O → 打开大纲目录。放在文件管理器/查找/帮助之后: 那些对话框打开时
+    // 由各自模态处理, 不能再叠一层目录。
+    if (key == KEY_TOC) {
+        // 后台任务期间空闲节拍由任务绘制接管, 此时弹出目录会被随后整帧覆盖。
+        if (g_editor.promptGenerating || g_editor.weatherFetching || s_weatherTaskRunning) {
+            ctx.statusMessage = "请稍候";
+            ctx.statusDuration = 30;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        // 命令栏开着时先退出: 目录是模态浮层, 不能把半截 :/' 命令留在下面,
+        // 跳转后光标位置也会被命令栏的绘制状态抢走。
+        if (g_settings.viMode() && g_editor.vi.cmdlineActive) viStopCmdline();
+        tocOpen();
+        drawTocPanel();
+        return APP_EDITOR;
+    }
+
+    // Ctrl+M → 开关 Markdown 实时渲染。写回设置, 与设置面板里的同一项同步。
+    // 放在 vi 分发之前: 专用键码在 vi normal 下会被当成未知特殊键吞掉。
+    if (key == KEY_MD_TOGGLE) {
+        const bool on = !g_settings.markdownRender();
+        g_settings.setString("md_render", on ? "1" : "0");
+        g_editor.vrowsDirty = true;
+        g_editor.mdInfoDirty = true;
+        ctx.statusMessage = on ? "Markdown渲染: 开" : "Markdown渲染: 关";
+        ctx.statusDuration = 30;
+        ui_clear(); drawEditor(); ui_commit();
+        return APP_EDITOR;
+    }
+
+    // Ctrl+O → 选区润色(大纲目录让位给 Alt+O)
+    if (key == 0x0F) {
+        if (!g_editor.hasSelection) {
+            ctx.statusMessage = "请先用Shift+方向键选择文字";
+            ctx.statusDuration = 30;
+            ui_clear(); drawEditor(); ui_commit();
+            return APP_EDITOR;
+        }
+        screen_polish_set_scope(POLISH_SELECTION);
+        return APP_POLISH;
     }
 
     // Ctrl+W → 获取天气（仅模板日记会话）。放在 vi 分发之前，否则 vi normal
@@ -4386,18 +4663,6 @@ AppState screen_editor_handle(int key, ScreenContext &ctx) {
             return APP_EDITOR;
         }
         ctx.nextState = ctx.prevState; return ctx.prevState;
-    }
-
-    // Ctrl+O → 选区润色(需先用Shift+方向键选择文字)
-    if (key == 0x0F) {
-        if (!g_editor.hasSelection) {
-            ctx.statusMessage = "请先用Shift+方向键选择文字";
-            ctx.statusDuration = 30;
-            ui_clear(); drawEditor(); ui_commit();
-            return APP_EDITOR;
-        }
-        screen_polish_set_scope(POLISH_SELECTION);
-        return APP_POLISH;
     }
 
     // Ctrl+A → 全选
@@ -4988,6 +5253,14 @@ bool screen_editor_idle(ScreenContext &ctx, bool forceRedraw) {
         }
         return false;
     }
+    // 大纲目录浮层同理
+    if (g_editor.toc.active) {
+        if (forceRedraw || !g_editor.drawnOnce) {
+            drawTocPanel();
+            return true;
+        }
+        return false;
+    }
     // 查找/替换对话框打开时,面板只在按键时变化;空闲重绘走面板
     if (g_editor.search.active) {
         if (forceRedraw || !g_editor.drawnOnce) {
@@ -5027,13 +5300,19 @@ bool app_editor_help_active() {
     return g_editor.helpActive;
 }
 
+// 大纲目录浮层是否打开(供 main.cpp 屏蔽全局按键)
+bool app_editor_toc_active() {
+    return g_editor.toc.active;
+}
+
 // ── Win 快捷菜单用的查询(O(1), 不复制正文) ─────────────────────────────
 // 单按 Win 时是否允许弹出快捷菜单。任何模态对话框/后台生成期间都不弹,
 // 且设置里字母选字键为 lwin 时, 候选中按 Win 优先给输入法选字。
 bool app_editor_shortcut_menu_allowed() {
     if (g_editor.promptGenerating || g_editor.weatherFetching ||
         s_weatherTaskRunning || g_editor.recoveryPrompt || g_editor.confirmSave) return false;
-    if (g_editor.search.active || g_editor.helpActive || g_editor.fileMgr.active) return false;
+    if (g_editor.search.active || g_editor.helpActive || g_editor.toc.active ||
+        g_editor.fileMgr.active) return false;
     if (g_editor.vi.cmdlineActive) return false;
     if (g_settings.letterSelKey() == "lwin" && g_editor.imeActive &&
         g_ime.active() && g_ime.letterSelTapAvailable()) {

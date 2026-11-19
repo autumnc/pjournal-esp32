@@ -67,6 +67,8 @@ struct ScreenContext {
 #define KEY_HELP       0xA3
 #define KEY_REDO       0xA4
 #define KEY_WIN_V      0xA5
+#define KEY_MD_TOGGLE  0xA6  // Ctrl+M → Markdown 实时渲染开关
+#define KEY_TOC        0xA7  // Alt+O → 大纲目录(TOC)
 // 字母选字触发键里修饰键的"单击"事件(左/右 Ctrl/Win/Alt)。Tab 走 0x09。
 // 必须与 bt_keyboard.cpp 的同名宏一致。
 #define KEY_MOD_TAP_LCTRL 0xB0
