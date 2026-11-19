@@ -463,7 +463,7 @@ gh api -X POST repos/autumnc/pjournal-esp32/pages \
 
 ## 版本
 
-当前版本: v5.0.6
+当前版本: v5.0.7
 
 ## License
 
