@@ -122,6 +122,8 @@ ESP32-S3 上的个人日记工具，配备 4.2 寸 RLCD 黑白全反射屏，支
 | `Ctrl+/` | 打开查找/替换对话框 |
 | `Ctrl+?` | 打开快捷键帮助对话框 |
 | 单按左 `Win` | 打开浮动快捷菜单（列出快捷键与功能，`↑↓` 选择、`Enter` 执行、`Esc` 关闭）；「AI 润色」有选区时润色选区，否则润色全文 |
+| `Alt+O` | 打开大纲目录（TOC）浮层，`Enter` 跳到对应标题 |
+| `Ctrl+M` | 开关 Markdown 实时渲染 |
 | `Ctrl+O` | AI 润色选中文本 |
 | `Ctrl+W` | 获取当前天气填入 `{{weather}}`（仅模板日记） |
 | `Ctrl+T` | 折叠/展开当前 Markdown 标题下的正文 |
@@ -415,6 +417,7 @@ gh api -X POST repos/autumnc/pjournal-esp32/pages \
 | 生成 Flomo Token | 由邮箱/密码生成 API Token |
 | WebDAV URL/用户/密码 | 远程同步地址 |
 | 个人经历/爱好 | AI 提示上下文 |
+| WiFi 扫描连接 | 扫描附近 WiFi，选中网络后输入密码（写入 WiFi SSID/密码） |
 | WiFi SSID/密码 | 网络连接 |
 | 时区 | 如 `CST-8` |
 | NTP 服务器 | 如 `pool.ntp.org` |

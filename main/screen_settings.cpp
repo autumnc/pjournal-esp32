@@ -17,7 +17,10 @@
 #include <cstring>
 #include <ctime>
 #include <algorithm>
+#include <cstdint>
+#include <mutex>
 #include <set>
+#include <utility>
 #include <vector>
 #include <esp_timer.h>
 #include <esp_sntp.h>
@@ -99,6 +102,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     {"file_mgr_token", "文件管理密码", true, false, SG_FILE},
     // 连接管理
     {"_bt_manage", "蓝牙设备管理", false, true, SG_CONNECT},
+    {"_wifi_scan", "WiFi 扫描连接", false, true, SG_CONNECT},
     {"wifi_ssid", "WiFi SSID", false, false, SG_CONNECT},
     {"wifi_pass", "WiFi 密码", false, false, SG_CONNECT},
     {"timezone", "时区(如CST-8)", false, false, SG_CONNECT},
@@ -331,6 +335,8 @@ enum SettingsScreenMode {
     SETTINGS_DICT_ADD,
     SETTINGS_TPL_LIST,
     SETTINGS_TPL_PREVIEW,
+    SETTINGS_WIFI_LIST,   // WiFi 扫描结果浮层
+    SETTINGS_WIFI_PASS,   // 输入所选网络密码的浮层
 };
 
 static struct {
@@ -369,6 +375,17 @@ static struct {
     std::vector<MdLineInfo> tplPreviewMd;
     std::vector<VRow> tplPreviewVrows;
     int tplPreviewScroll = 0;
+    // WiFi 扫描连接浮层
+    std::vector<WifiScanEntry> wifiEntries;  // 按信号排序、同 SSID 去重后的结果
+    int wifiSelection = 0;
+    int wifiScroll = 0;
+    bool wifiScanRunning = false;
+    bool wifiScanFailed = false;
+    bool wifiWasConnected = false;   // 打开浮层前是否已联网(关闭时决定是否保留射频)
+    std::string wifiPendingSsid;
+    bool wifiPendingOpen = false;
+    std::string wifiPassBuffer;
+    int wifiPassCursor = 0;
 } g_settingsState;
 
 // 展开/隐藏子项后把选中行夹回有效范围
@@ -874,6 +891,236 @@ static bool connect_wifi_from_settings() {
     return g_wifi.connect(ssid.c_str(), pass.c_str());
 }
 
+// ── WiFi 扫描连接 ────────────────────────────────────────────────────────
+// esp_wifi_scan_start(block=true) 会占住调用者最长约 4 秒, 所以放到后台
+// 任务里跑; 主循环只在 SETTINGS_WIFI_LIST 模式下轮询结果并重绘浮层。
+// 与天气/润色面板同一套做法, 界面不会卡死。
+static std::mutex s_wifiScanMutex;
+static std::vector<WifiScanEntry> s_wifiScanResult;
+static volatile bool s_wifiScanDone = false;
+static volatile bool s_wifiScanOk = false;
+// 每次启动扫描加一。旧任务(比如关闭浮层后又重开)晚到时结果作废, 避免
+// 上一次扫描覆盖这一次的列表。
+static volatile uint32_t s_wifiScanGen = 0;
+
+static void wifiScanTask(void *arg) {
+    const uint32_t gen = (uint32_t)(uintptr_t)arg;
+    {
+        // 所有带析构的局部量都必须在这个作用域里结束: vTaskDelete 直接消失,
+        // 不会展开栈, 留在栈上的 vector/string 会永久泄漏。
+        std::vector<WifiScanEntry> out;
+        bool ok = g_wifi.scanNetworks(out);
+        {
+            std::lock_guard<std::mutex> lock(s_wifiScanMutex);
+            // 更晚的扫描已经启动时这一批结果作废。也不能在持锁时
+            // vTaskDelete: lock_guard 不会析构, 互斥锁会永远锁住。
+            if (gen == s_wifiScanGen) {
+                s_wifiScanResult.swap(out);
+                s_wifiScanOk = ok;
+                s_wifiScanDone = true;
+            }
+        }
+        std::vector<WifiScanEntry>().swap(out);  // 作废分支的内存立即归还
+    }
+    vTaskDelete(nullptr);
+}
+
+static void wifiScanStart() {
+    auto &st = g_settingsState;
+    st.wifiScanRunning = true;
+    st.wifiScanFailed = false;
+    uint32_t gen = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_wifiScanMutex);
+        std::vector<WifiScanEntry>().swap(s_wifiScanResult);
+        s_wifiScanGen = s_wifiScanGen + 1;
+        gen = s_wifiScanGen;
+        s_wifiScanDone = false;
+    }
+    // 任务栈要放下 scanNetworks 里 32 条 wifi_ap_record_t(约 3.5KB)的临时
+    // 数组, 4KB 会溢出。
+    if (xTaskCreate(wifiScanTask, "wifiscan", 8192,
+                    (void *)(uintptr_t)gen, 1, nullptr) != pdPASS) {
+        st.wifiScanRunning = false;
+        st.wifiScanFailed = true;
+    }
+}
+
+// 把后台结果搬进界面状态: 按信号从强到弱排序, 同一 SSID(多 BSSID mesh)
+// 只保留最强的一条。
+static void wifiTakeScanResult() {
+    auto &st = g_settingsState;
+    std::vector<WifiScanEntry> entries;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(s_wifiScanMutex);
+        entries.swap(s_wifiScanResult);
+        ok = s_wifiScanOk;
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const WifiScanEntry &a, const WifiScanEntry &b) { return a.rssi > b.rssi; });
+    std::vector<WifiScanEntry>().swap(st.wifiEntries);
+    st.wifiEntries.reserve(entries.size());
+    for (auto &e : entries) {
+        bool dup = false;
+        for (auto &d : st.wifiEntries) {
+            if (d.ssid == e.ssid) { dup = true; break; }
+        }
+        if (!dup) st.wifiEntries.push_back(std::move(e));
+    }
+    st.wifiScanFailed = !ok;
+    st.wifiSelection = 0;
+    st.wifiScroll = 0;
+}
+
+static void wifiPollScan() {
+    auto &st = g_settingsState;
+    if (st.wifiScanRunning && s_wifiScanDone) {
+        st.wifiScanRunning = false;
+        wifiTakeScanResult();
+    }
+}
+
+static void wifiDialogOpen() {
+    auto &st = g_settingsState;
+    st.wifiWasConnected = g_wifi.isConnected();
+    std::vector<WifiScanEntry>().swap(st.wifiEntries);
+    st.wifiSelection = 0;
+    st.wifiScroll = 0;
+    st.wifiPendingSsid.clear();
+    st.wifiPendingOpen = false;
+    st.wifiPassBuffer.clear();
+    st.wifiPassCursor = 0;
+    st.mode = SETTINGS_WIFI_LIST;
+    wifiScanStart();
+}
+
+static void wifiDialogClose() {
+    auto &st = g_settingsState;
+    st.mode = SETTINGS_BROWSE;
+    std::vector<WifiScanEntry>().swap(st.wifiEntries);
+    // 扫描期间扫描任务还持有 WiFi 锁, 此时不能调 disconnect()(会阻塞到
+    // 扫描结束); scanNetworks 结束时会自己关掉本次打开的射频。
+    if (!st.wifiScanRunning && !st.wifiWasConnected && !g_wifi.isConnected())
+        g_wifi.disconnect();
+}
+
+// 保存 SSID/密码并立即验证连接。验证完按 app 的按需用网策略恢复:
+// 进浮层前没联网的话, 试连完就把射频关掉, 免得一直在线拖住自动休眠。
+static bool wifiSaveAndTest(const std::string &ssid, const std::string &pass, bool open) {
+    g_settings.setString("wifi_ssid", ssid);
+    g_settings.setString("wifi_pass", pass);
+    ui_clear();
+    ui_show_message_centered("正在连接WiFi...");
+    ui_commit();
+    bool ok = g_wifi.begin() && g_wifi.connect(ssid.c_str(), pass.c_str(), open);
+    // 失败时 connect() 会把驱动留在"自动重连新 SSID"状态: 密码错就永远重试,
+    // 白白耗电(旧连接也已被新配置顶掉); 所以失败一定关射频。成功但进浮层前
+    // 本来没联网的, 同样按按需策略关掉, 免得拖住自动休眠。
+    if (!ok || !g_settingsState.wifiWasConnected) g_wifi.disconnect();
+    return ok;
+}
+
+// 浮层画在已绘制的设置页上, 由调用方 ui_commit。
+static void drawWifiListPopup() {
+    auto &st = g_settingsState;
+    const int rowH = FONT_H + 2;
+    const int pad = 8;
+    const int panelW = SCREEN_W - 24;
+    const int total = (int)st.wifiEntries.size();
+    const int maxVisible = 7;  // 与模板选择浮层同高, 不压到状态栏
+
+    int lines = 1;
+    if (!st.wifiScanRunning && !st.wifiScanFailed && total > 0)
+        lines = std::min(total, maxVisible);
+    const int panelH = pad + FONT_H + 6 + lines * rowH + pad;
+    const int px = (SCREEN_W - panelW) / 2;
+    const int py = (SCREEN_H - panelH) / 2;
+
+    // 浮层数据可能在扫描完成后变多/变少, 每次绘制都把选择夹回范围。
+    if (st.wifiSelection < 0) st.wifiSelection = 0;
+    if (total > 0 && st.wifiSelection >= total) st.wifiSelection = total - 1;
+    if (st.wifiSelection < st.wifiScroll) st.wifiScroll = st.wifiSelection;
+    if (st.wifiSelection >= st.wifiScroll + lines) st.wifiScroll = st.wifiSelection - lines + 1;
+    if (st.wifiScroll < 0) st.wifiScroll = 0;
+
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, px, py, panelW, panelH);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, px, py, panelW, panelH);
+
+    g_font.drawText(px + 12, py + pad + g_font.ascent(), "WiFi 网络", false);
+    char info[32];
+    if (st.wifiScanRunning) snprintf(info, sizeof(info), "扫描中");
+    else if (st.wifiScanFailed) snprintf(info, sizeof(info), "失败");
+    else snprintf(info, sizeof(info), "%d 个", total);
+    g_font.drawText(px + panelW - 12 - g_font.textWidth(info),
+                    py + pad + g_font.ascent(), info, false);
+    int sepY = py + pad + g_font.ascent() + g_font.descent() + 3;
+    u8g2_DrawHLine(g_u8g2, px + 8, sepY, panelW - 16);
+
+    const int textTop = sepY + 6;
+    if (st.wifiScanRunning) {
+        g_font.drawText(px + 12, textTop + g_font.ascent(), "正在扫描附近WiFi...", false);
+    } else if (st.wifiScanFailed) {
+        g_font.drawText(px + 12, textTop + g_font.ascent(), "扫描失败, 按R重试", false);
+    } else if (total == 0) {
+        g_font.drawText(px + 12, textTop + g_font.ascent(), "未发现WiFi网络", false);
+    } else {
+        for (int i = 0; i < lines && st.wifiScroll + i < total; i++) {
+            const int idx = st.wifiScroll + i;
+            const int baseline = textTop + g_font.ascent() + i * rowH;
+            const bool sel = idx == st.wifiSelection;
+            if (sel) {
+                u8g2_SetDrawColor(g_u8g2, 0);
+                u8g2_DrawBox(g_u8g2, px + 4, baseline - g_font.ascent() - 1,
+                             panelW - 8, rowH);
+                u8g2_SetDrawColor(g_u8g2, 1);
+            } else {
+                u8g2_SetDrawColor(g_u8g2, 0);
+            }
+            const WifiScanEntry &e = st.wifiEntries[idx];
+            const char *tag = (e.ssid == g_settings.wifiSsid()) ? "当前"
+                              : (e.open ? "开放" : "加密");
+            const int tagW = g_font.textWidth(tag);
+            std::string name = fitTextWidth(e.ssid, panelW - 24 - tagW - 8);
+            g_font.drawText(px + 12, baseline, name.c_str(), false);
+            g_font.drawText(px + panelW - 12 - tagW, baseline, tag, false);
+        }
+    }
+    u8g2_SetDrawColor(g_u8g2, 0);
+}
+
+static void drawWifiPassPopup() {
+    auto &st = g_settingsState;
+    const int pad = 10;
+    const int panelW = SCREEN_W - 32;
+    const int panelH = pad * 2 + FONT_H + 6 + 2 * (FONT_H + 6);
+    const int px = (SCREEN_W - panelW) / 2;
+    const int py = (SCREEN_H - panelH) / 2;
+
+    u8g2_SetDrawColor(g_u8g2, 1);
+    u8g2_DrawBox(g_u8g2, px, py, panelW, panelH);
+    u8g2_SetDrawColor(g_u8g2, 0);
+    u8g2_DrawFrame(g_u8g2, px, py, panelW, panelH);
+
+    g_font.drawText(px + 12, py + pad + g_font.ascent(), "输入WiFi密码", false);
+    int sepY = py + pad + g_font.ascent() + g_font.descent() + 3;
+    u8g2_DrawHLine(g_u8g2, px + 8, sepY, panelW - 16);
+
+    int y = sepY + 6 + g_font.ascent();
+    std::string ssid = fitTextWidth(st.wifiPendingSsid, panelW - 24);
+    g_font.drawText(px + 12, y, ssid.c_str(), false);
+    y += FONT_H + 6;
+
+    std::string display(st.wifiPassBuffer.size(), '*');
+    if (display.empty()) display = " ";
+    g_font.drawText(px + 12, y, display.c_str(), false);
+    int cx = g_font.textWidth(display.substr(0, st.wifiPassCursor).c_str());
+    u8g2_DrawBox(g_u8g2, px + 12 + cx, y + 4, 8, 3);
+    u8g2_SetDrawColor(g_u8g2, 1);
+}
+
 // ── Screen entry points ──────────────────────────────────────────────────
 void screen_settings_init() {
     g_settingsState.selection = g_settingsState.scroll = 0;
@@ -904,6 +1151,26 @@ void screen_settings_init() {
     g_settingsState.tplPreviewMd.clear();
     g_settingsState.tplPreviewVrows.clear();
     g_settingsState.tplPreviewScroll = 0;
+    // WiFi 扫描浮层: 退出设置时可能还有扫描任务在跑, 它的结果只会落在
+    // 静态缓冲里, 这里把界面状态清干净即可。
+    g_settingsState.wifiScanRunning = false;
+    g_settingsState.wifiScanFailed = false;
+    g_settingsState.wifiWasConnected = false;
+    g_settingsState.wifiSelection = 0;
+    g_settingsState.wifiScroll = 0;
+    g_settingsState.wifiPendingSsid.clear();
+    g_settingsState.wifiPendingOpen = false;
+    g_settingsState.wifiPassBuffer.clear();
+    g_settingsState.wifiPassCursor = 0;
+    std::vector<WifiScanEntry>().swap(g_settingsState.wifiEntries);
+    {
+        std::lock_guard<std::mutex> lock(s_wifiScanMutex);
+        std::vector<WifiScanEntry>().swap(s_wifiScanResult);
+        // 世代 +1: 退出设置时可能还有扫描任务在跑, 它晚到的结果直接作废,
+        // 不再往静态缓冲里写。
+        s_wifiScanGen = s_wifiScanGen + 1;
+        s_wifiScanDone = false;
+    }
     invalidateDictCache();
 }
 
@@ -957,6 +1224,133 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
         if (st.tplPreviewScroll < 0) st.tplPreviewScroll = 0;
         if (st.tplPreviewScroll > maxScroll) st.tplPreviewScroll = maxScroll;
         drawTemplatePreview();
+        return APP_SETTINGS;
+    }
+
+    // ── WiFi 扫描结果浮层 ─────────────────────────────────────────────
+    if (g_settingsState.mode == SETTINGS_WIFI_LIST) {
+        auto &st = g_settingsState;
+        wifiPollScan();  // key==0 的空闲节拍也走这里, 扫描一结束就刷新
+        const int total = (int)st.wifiEntries.size();
+
+        if (key == 0x1B || key == 'q' || key == 'Q') {
+            wifiDialogClose();
+        } else if ((key == 'r' || key == 'R') && !st.wifiScanRunning) {
+            wifiScanStart();
+        } else if (key == KEY_UP || key == 'k') {
+            if (st.wifiSelection > 0) st.wifiSelection--;
+        } else if (key == KEY_DOWN || key == 'j') {
+            if (st.wifiSelection + 1 < total) st.wifiSelection++;
+        } else if (key == KEY_PAGE_UP) {
+            st.wifiSelection = std::max(0, st.wifiSelection - 7);
+        } else if (key == KEY_PAGE_DOWN) {
+            if (total > 0) st.wifiSelection = std::min(total - 1, st.wifiSelection + 7);
+        } else if ((key == 0x0A || key == 0x0D) && !st.wifiScanRunning && total > 0) {
+            if (st.wifiSelection >= total) st.wifiSelection = total - 1;  // 防御性夹取
+            const WifiScanEntry &e = st.wifiEntries[st.wifiSelection];
+            st.wifiPendingSsid = e.ssid;
+            st.wifiPendingOpen = e.open;
+            if (e.open) {
+                // 开放网络不需要密码, 直接保存并试连
+                bool ok = wifiSaveAndTest(e.ssid, "", true);
+                ui_clear();
+                ui_show_message_centered(ok ? "已保存，连接测试成功" : "连接失败，请重试");
+                ui_commit();
+                vTaskDelay(pdMS_TO_TICKS(ok ? 1200 : 1800));
+                wifiDialogClose();
+            } else {
+                st.wifiPassBuffer = (e.ssid == g_settings.wifiSsid())
+                                        ? g_settings.wifiPassword()
+                                        : std::string();
+                st.wifiPassCursor = (int)st.wifiPassBuffer.size();
+                st.mode = SETTINGS_WIFI_PASS;
+            }
+        }
+
+        if (st.mode == SETTINGS_WIFI_LIST) {
+            drawSettingsBrowse(false);
+            drawWifiListPopup();
+            const char *hint = st.wifiScanRunning ? "正在扫描附近WiFi..."
+                               : st.wifiScanFailed ? "扫描失败 R重试 Esc退出"
+                               : total == 0 ? "未发现网络 R重扫 Esc退出"
+                                            : "↑↓选择 Enter连接 R重扫 Esc退出";
+            ui_draw_status(hint, "");
+            ui_commit();
+            return APP_SETTINGS;
+        }
+        if (st.mode == SETTINGS_WIFI_PASS) {
+            drawSettingsBrowse(false);
+            drawWifiPassPopup();
+            ui_draw_status("Enter连接 Esc返回", "");
+            ui_commit();
+            return APP_SETTINGS;
+        }
+        // Esc / 开放网络试连结束: 浮层已关闭
+        drawSettingsBrowse();
+        return APP_SETTINGS;
+    }
+
+    // ── WiFi 密码输入浮层 ─────────────────────────────────────────────
+    if (g_settingsState.mode == SETTINGS_WIFI_PASS) {
+        auto &st = g_settingsState;
+
+        if (key == 0x1B) {
+            // 返回列表, 丢弃已输入的密码
+            st.wifiPassBuffer.clear();
+            st.wifiPassCursor = 0;
+            st.mode = SETTINGS_WIFI_LIST;
+        } else if (key == KEY_LEFT) {
+            moveCursorLeft(st.wifiPassBuffer, st.wifiPassCursor);
+        } else if (key == KEY_RIGHT) {
+            moveCursorRight(st.wifiPassBuffer, st.wifiPassCursor);
+        } else if (key == KEY_HOME) {
+            st.wifiPassCursor = 0;
+        } else if (key == KEY_END) {
+            st.wifiPassCursor = (int)st.wifiPassBuffer.size();
+        } else if (key == 0x7F || key == 0x08) {
+            eraseBeforeCursor(st.wifiPassBuffer, st.wifiPassCursor);
+        } else if (key == 0x0A || key == 0x0D) {
+            bool ok = wifiSaveAndTest(st.wifiPendingSsid, st.wifiPassBuffer,
+                                      st.wifiPendingOpen);
+            ui_clear();
+            ui_show_message_centered(ok ? "已保存，连接测试成功" : "连接失败，请检查密码");
+            ui_commit();
+            vTaskDelay(pdMS_TO_TICKS(ok ? 1200 : 1800));
+            if (ok) {
+                wifiDialogClose();
+            } else {
+                // 留在密码框里, 保留已输入内容方便修改
+                drawSettingsBrowse(false);
+                drawWifiPassPopup();
+                ui_draw_status("Enter重试 Esc返回", "");
+                ui_commit();
+                return APP_SETTINGS;
+            }
+        } else if (key >= 0x20 && key <= 0x7E) {
+            // WiFi 密码是 ASCII 口令, 最多 63 字节(WPA2 上限)
+            if (st.wifiPassBuffer.size() < 63) {
+                st.wifiPassBuffer.insert(st.wifiPassCursor, 1, (char)key);
+                st.wifiPassCursor++;
+            }
+        }
+
+        if (st.mode == SETTINGS_WIFI_PASS) {
+            drawSettingsBrowse(false);
+            drawWifiPassPopup();
+            ui_draw_status("Enter连接 Esc返回", "");
+            ui_commit();
+            return APP_SETTINGS;
+        }
+        if (st.mode == SETTINGS_WIFI_LIST) {
+            // Esc → 回到扫描列表(保留已有结果, 不重新扫描)
+            drawSettingsBrowse(false);
+            drawWifiListPopup();
+            ui_draw_status("↑↓选择 Enter连接 R重扫 Esc退出", "");
+            ui_commit();
+        } else {
+            // 连接成功, 浮层已关闭
+            drawSettingsBrowse();
+        }
         return APP_SETTINGS;
     }
 
@@ -1450,6 +1844,14 @@ AppState screen_settings_handle(int key, ScreenContext &ctx) {
                 ctx.nextState = APP_BT_MANAGE;
                 return APP_BT_MANAGE;
             }
+            if (strcmp(f.key, "_wifi_scan") == 0) {
+                wifiDialogOpen();
+                drawSettingsBrowse(false);
+                drawWifiListPopup();
+                ui_draw_status("正在扫描附近WiFi...", "");
+                ui_commit();
+                return APP_SETTINGS;
+            }
             if (strcmp(f.key, "_voice_asr_service") == 0) {
                 g_settings.setString("voice_asr_service",
                     voiceAsrServiceNext(voiceAsrServiceIndex(g_settings.voiceAsrService().c_str())));
@@ -1602,6 +2004,10 @@ static void drawSettingsBrowse(bool doCommit) {
             } else if (strcmp(f.key, "_vertical_ref_line_style") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          VERTICAL_REF_LINE_STYLE_OPTS[verticalRefLineStyleIndex(g_settings.verticalReferenceLineStyle().c_str())].label);
+            } else if (strcmp(f.key, "_wifi_scan") == 0) {
+                std::string ssid = g_settings.wifiSsid();
+                std::string disp = ssid.empty() ? "(未设置)" : fitTextWidth(ssid, 130);
+                snprintf(buf, sizeof(buf), "▶ %s: %s", f.label, disp.c_str());
             } else if (strcmp(f.key, "_input_mode") == 0) {
                 snprintf(buf, sizeof(buf), "▶ %s: %s", f.label,
                          g_settings.inputMode() == "typewriter" ? "打字机模式" : "正常模式");
@@ -1648,6 +2054,23 @@ static void drawSettingsBrowse(bool doCommit) {
 // ── 剪贴板历史菜单粘贴入口 ───────────────────────────────────────────────
 bool screen_settings_paste_text(const std::string &text) {
     if (text.empty()) return false;
+    if (g_settingsState.mode == SETTINGS_WIFI_PASS) {
+        // WPA2 口令是 32..126 的可打印 ASCII; 剪贴板里的中文/控制字符/
+        // 换行都滤掉, 免得手输时进不去、粘贴却能塞进去的怪状态。
+        std::string ins;
+        for (char ch : clipboardFlattenSingleLine(text)) {
+            unsigned char b = (unsigned char)ch;
+            if (b >= 0x20 && b <= 0x7E) ins.push_back(ch);
+        }
+        if (ins.empty()) return false;
+        size_t room = g_settingsState.wifiPassBuffer.size() >= 63
+                          ? 0 : 63 - g_settingsState.wifiPassBuffer.size();
+        if (room == 0) return false;
+        if (ins.size() > room) ins.resize(room);
+        g_settingsState.wifiPassBuffer.insert(g_settingsState.wifiPassCursor, ins);
+        g_settingsState.wifiPassCursor += (int)ins.size();
+        return true;
+    }
     if (g_settingsState.mode == SETTINGS_DICT_LIST && g_settingsState.dictSearching) {
         std::string ins = clipboardFlattenSingleLine(text);
         g_settingsState.dictSearchBuffer.insert(g_settingsState.dictSearchCursor, ins);
