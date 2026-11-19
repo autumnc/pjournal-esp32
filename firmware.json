@@ -1,0 +1,10 @@
+{
+  "version": "5.0.7",
+  "tag": "v5.0.7",
+  "date": "2026-11-19",
+  "file": "firmware/pjournal-5.0.7-merged.bin",
+  "size": 10438704,
+  "flashOffset": 0,
+  "sha256": "29b7a0c395c69d4df6563d7d1df1f132b8b0819d9f03f9801d8581cf5da4783c",
+  "md5": "83733236c55c82a0e1bbeb6c81597b8f"
+}
